@@ -220,6 +220,7 @@ static NSString *_Nullable arrowKeySymbol(NSInteger tag) {
 
 - (void)viewDidAppear:(BOOL)animated {
     [AppDelegate maybePresentStartupMessageOnViewController:self];
+    [AppDelegate maybeOfferRootResetOnViewController:self];
     [super viewDidAppear:animated];
 }
 

@@ -2204,10 +2204,11 @@
 			);
 			outputPaths = (
 				"$(BUILT_PRODUCTS_DIR)/$(CONTENTS_FOLDER_PATH)/root.tar.gz",
+				"$(BUILT_PRODUCTS_DIR)/$(CONTENTS_FOLDER_PATH)/root.version",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "if [ ! -f \"$SRCROOT/$ROOTFS_FILE\" ]; then\n    echo \"error: $ROOTFS_FILE is missing. Build it with: tools/build-rootfs.sh <arm64 meson build dir> $ROOTFS_FILE\" >&2\n    exit 1\nfi\ncp \"$SRCROOT/$ROOTFS_FILE\" \"$BUILT_PRODUCTS_DIR/$CONTENTS_FOLDER_PATH/root.tar.gz\"\n";
+			shellScript = "if [ ! -f \"$SRCROOT/$ROOTFS_FILE\" ]; then\n    echo \"error: $ROOTFS_FILE is missing. Build it with: tools/build-rootfs.sh <arm64 meson build dir> $ROOTFS_FILE\" >&2\n    exit 1\nfi\ncp \"$SRCROOT/$ROOTFS_FILE\" \"$BUILT_PRODUCTS_DIR/$CONTENTS_FOLDER_PATH/root.tar.gz\"\n# The app offers to reset the default filesystem when this changes (Roots.m).\nshasum -a 256 \"$BUILT_PRODUCTS_DIR/$CONTENTS_FOLDER_PATH/root.tar.gz\" | cut -d \" \" -f 1 > \"$BUILT_PRODUCTS_DIR/$CONTENTS_FOLDER_PATH/root.version\"\n";
 			showEnvVarsInLog = 0;
 		};
 		AA000012AF96D90D00FFB7A4 /* Generate APK Repositories File */ = {
@@ -2395,10 +2396,11 @@
 			name = "Download Root";
 			outputPaths = (
 				"$(BUILT_PRODUCTS_DIR)/$(CONTENTS_FOLDER_PATH)/root.tar.gz",
+				"$(BUILT_PRODUCTS_DIR)/$(CONTENTS_FOLDER_PATH)/root.version",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "curl -L \"https://$ROOTFS_URL\" -o \"$BUILT_PRODUCTS_DIR/$CONTENTS_FOLDER_PATH/root.tar.gz\"\n";
+			shellScript = "set -e\ncurl -fL \"https://$ROOTFS_URL\" -o \"$BUILT_PRODUCTS_DIR/$CONTENTS_FOLDER_PATH/root.tar.gz\"\n# The app offers to reset the default filesystem when this changes (Roots.m).\nshasum -a 256 \"$BUILT_PRODUCTS_DIR/$CONTENTS_FOLDER_PATH/root.tar.gz\" | cut -d \" \" -f 1 > \"$BUILT_PRODUCTS_DIR/$CONTENTS_FOLDER_PATH/root.version\"\n";
 			showEnvVarsInLog = 0;
 		};
 		BBEF197A268066D1001225BD /* Generate APK Repositories File */ = {
@@ -2450,10 +2452,11 @@
 			name = "Download Root";
 			outputPaths = (
 				"$(BUILT_PRODUCTS_DIR)/$(CONTENTS_FOLDER_PATH)/root.tar.gz",
+				"$(BUILT_PRODUCTS_DIR)/$(CONTENTS_FOLDER_PATH)/root.version",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "curl -L \"https://$ROOTFS_URL\" -o \"$BUILT_PRODUCTS_DIR/$CONTENTS_FOLDER_PATH/root.tar.gz\"\n";
+			shellScript = "set -e\ncurl -fL \"https://$ROOTFS_URL\" -o \"$BUILT_PRODUCTS_DIR/$CONTENTS_FOLDER_PATH/root.tar.gz\"\n# The app offers to reset the default filesystem when this changes (Roots.m).\nshasum -a 256 \"$BUILT_PRODUCTS_DIR/$CONTENTS_FOLDER_PATH/root.tar.gz\" | cut -d \" \" -f 1 > \"$BUILT_PRODUCTS_DIR/$CONTENTS_FOLDER_PATH/root.version\"\n";
 			showEnvVarsInLog = 0;
 		};
 		BBFB2C572590257E00545EAB /* ShellScript */ = {

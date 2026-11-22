@@ -338,6 +338,49 @@ void SyncHostname(void) {
     [NSUserDefaults.standardUserDefaults setInteger:1 forKey:kSkipStartupMessage];
 }
 
++ (void)maybeOfferRootResetOnViewController:(UIViewController *)vc {
+    static BOOL offered;
+    // Not over another alert, such as the startup message
+    if (offered || vc.presentedViewController != nil || !Roots.instance.defaultRootIsOutdated)
+        return;
+    offered = YES;
+    NSString *message = [NSString stringWithFormat:
+                         @"This version of iSH comes with a new built-in filesystem. Your filesystem \"%@\" was set up from an earlier one, or from somewhere else.\n\n"
+                         @"Resetting replaces it with the new one and deletes everything in it, including your files. iSH then quits; open it again to use the new filesystem.",
+                         Roots.instance.defaultRoot];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"New Built-in Filesystem"
+                                                                   message:message
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Reset and Quit"
+                                              style:UIAlertActionStyleDestructive
+                                            handler:^(UIAlertAction *action) {
+        [self resetDefaultRootAndQuitOnViewController:vc];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Keep Mine"
+                                              style:UIAlertActionStyleDefault
+                                            handler:^(UIAlertAction *action) {
+        [Roots.instance keepOutdatedDefaultRoot];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Not Now"
+                                              style:UIAlertActionStyleCancel
+                                            handler:nil]];
+    [vc presentViewController:alert animated:YES completion:nil];
+}
+
++ (void)resetDefaultRootAndQuitOnViewController:(UIViewController *)vc {
+    NSError *error = nil;
+    if (![Roots.instance resetDefaultRoot:&error]) {
+        NSLog(@"Failed to reset the default filesystem: %@", error);
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Reset Failed"
+                                                                       message:error.localizedDescription
+                                                                preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        [vc presentViewController:alert animated:YES completion:nil];
+        return;
+    }
+    exit(0);
+}
+
 - (BOOL)application:(UIApplication *)application willFinishLaunchingWithOptions:(NSDictionary<UIApplicationLaunchOptionsKey,id> *)launchOptions {
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
     if ([defaults boolForKey:@"hail mary"]) {

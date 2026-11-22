@@ -182,39 +182,7 @@
 }
 
 - (void)performResetRootfs {
-    Roots *roots = Roots.instance;
-    NSString *defaultRoot = roots.defaultRoot;
-
-    // Delete the current default root's data directory
-    NSURL *rootUrl = [roots rootUrl:defaultRoot];
-    NSError *error = nil;
-    [NSFileManager.defaultManager removeItemAtURL:rootUrl error:&error];
-    if (error) {
-        NSLog(@"Failed to remove root: %@", error);
-    }
-
-    // Remove it from the roots list so importRoot won't assert
-    [[roots mutableOrderedSetValueForKey:@"roots"] removeObject:defaultRoot];
-
-    // Re-import from bundle
-    NSURL *archive = [NSBundle.mainBundle URLForResource:@"root" withExtension:@"tar.gz"];
-    if (archive) {
-        NSError *importError = nil;
-        if (![roots importRootFromArchive:archive name:defaultRoot error:&importError progressReporter:nil]) {
-            NSLog(@"Failed to import root: %@", importError);
-            UIAlertController *errAlert = [UIAlertController alertControllerWithTitle:@"Reset Failed"
-                                                                              message:importError.localizedDescription
-                                                                       preferredStyle:UIAlertControllerStyleAlert];
-            [errAlert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-            [self presentViewController:errAlert animated:YES completion:nil];
-            return;
-        }
-    }
-
-    roots.defaultRoot = defaultRoot;
-
-    // Exit the app so it restarts with the fresh rootfs
-    exit(0);
+    [AppDelegate resetDefaultRootAndQuitOnViewController:self];
 }
 
 @end

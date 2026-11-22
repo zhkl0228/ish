@@ -27,6 +27,34 @@ static NSURL *RootsDir(void) {
 
 static NSString *kDefaultRoot = @"Default Root";
 
+// Files in a root's directory, next to data and meta.db: the version of the
+// built-in filesystem the root was set up from, and the one the user chose to
+// keep it over. Roots set up before these were kept have neither.
+static NSString *kRootVersionFile = @"root-version";
+static NSString *kKeptRootVersionFile = @"kept-root-version";
+
+// The version of the built-in filesystem: the SHA-256 of root.tar.gz, which
+// the Copy Root (or Download Root) build phase writes to root.version.
+static NSString *BundledRootVersion(void) {
+    static NSString *version;
+    static dispatch_once_t token;
+    dispatch_once(&token, ^{
+        NSURL *url = [NSBundle.mainBundle URLForResource:@"root" withExtension:@"version"];
+        if (url == nil) {
+            NSLog(@"root.version is missing from the app bundle; not checking the default filesystem against the built-in one");
+            return;
+        }
+        NSError *error = nil;
+        NSString *contents = [NSString stringWithContentsOfURL:url encoding:NSUTF8StringEncoding error:&error];
+        if (contents == nil) {
+            NSLog(@"Failed to read %@: %@; not checking the default filesystem against the built-in one", url.path, error);
+            return;
+        }
+        version = [contents stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    });
+    return version;
+}
+
 @interface Roots ()
 @property NSMutableOrderedSet<NSString *> *roots;
 @property BOOL updatingDomains;
@@ -45,10 +73,7 @@ static NSString *kDefaultRoot = @"Default Root";
         if (!self.roots.count) {
             // import default root
             NSError *error;
-            if (![self importRootFromArchive:[NSBundle.mainBundle URLForResource:@"root" withExtension:@"tar.gz"]
-                                        name:@"default"
-                                       error:&error
-                            progressReporter:nil]) {
+            if (![self importBundledRootNamed:@"default" error:&error]) {
                 NSAssert(NO, @"failed to import default root, error %@", error);
             }
             _wantsVersionFile = YES;
@@ -160,6 +185,56 @@ void root_progress_callback(void *cookie, double progress, const char *message, 
         dispatch_sync(dispatch_get_main_queue(), addRoot);
     else
         addRoot();
+    return YES;
+}
+
+- (BOOL)importBundledRootNamed:(NSString *)name error:(NSError **)error {
+    if (![self importRootFromArchive:[NSBundle.mainBundle URLForResource:@"root" withExtension:@"tar.gz"]
+                                name:name
+                               error:error
+                    progressReporter:nil])
+        return NO;
+    NSString *version = BundledRootVersion();
+    if (version == nil)
+        return YES;
+    return [version writeToURL:[[self rootUrl:name] URLByAppendingPathComponent:kRootVersionFile]
+                    atomically:YES
+                      encoding:NSUTF8StringEncoding
+                         error:error];
+}
+
+// The contents of one of a root's version files, nil if it has none.
+- (nullable NSString *)versionFile:(NSString *)file ofRoot:(NSString *)name {
+    NSURL *url = [[self rootUrl:name] URLByAppendingPathComponent:file];
+    NSString *contents = [NSString stringWithContentsOfURL:url encoding:NSUTF8StringEncoding error:nil];
+    return [contents stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+}
+
+- (BOOL)defaultRootIsOutdated {
+    NSString *bundled = BundledRootVersion();
+    if (bundled == nil)
+        return NO;
+    NSString *name = self.defaultRoot;
+    return ![bundled isEqualToString:[self versionFile:kRootVersionFile ofRoot:name]] &&
+        ![bundled isEqualToString:[self versionFile:kKeptRootVersionFile ofRoot:name]];
+}
+
+- (void)keepOutdatedDefaultRoot {
+    NSURL *url = [[self rootUrl:self.defaultRoot] URLByAppendingPathComponent:kKeptRootVersionFile];
+    NSError *error = nil;
+    if (![BundledRootVersion() writeToURL:url atomically:YES encoding:NSUTF8StringEncoding error:&error])
+        NSLog(@"Failed to write %@: %@", url.path, error);
+}
+
+- (BOOL)resetDefaultRoot:(NSError **)error {
+    NSString *name = self.defaultRoot;
+    if (![NSFileManager.defaultManager removeItemAtURL:[self rootUrl:name] error:error])
+        return NO;
+    // The import asserts that no root of that name exists
+    [[self mutableOrderedSetValueForKey:@"roots"] removeObject:name];
+    if (![self importBundledRootNamed:name error:error])
+        return NO;
+    self.defaultRoot = name;
     return YES;
 }
 
