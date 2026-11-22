@@ -43,6 +43,7 @@ static int proc_show_meminfo(struct proc_entry *UNUSED(entry), struct proc_data 
     struct mem_usage usage = get_mem_usage();
     show_kb(buf, "MemTotal:       ", usage.total);
     show_kb(buf, "MemFree:        ", usage.free);
+    show_kb(buf, "MemAvailable:   ", usage.free + usage.inactive);
     show_kb(buf, "MemShared:      ", usage.free);
     // a bunch of crap busybox top needs to see or else it gets stack garbage
     show_kb(buf, "Shmem:          ", 0);
