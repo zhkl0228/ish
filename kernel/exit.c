@@ -202,8 +202,12 @@ noreturn void do_exit(int status) {
         }
 
         if (parent == NULL) {
-            // init died
+            // init died: the system goes down with it, with init's status
+            // for the command line (exit_hook).
             halt_system();
+            if (exit_hook != NULL)
+                exit_hook(current, status);
+            _exit(0);
         } else {
             leader->zombie = true;
             notify(&parent->group->child_exit);
@@ -477,37 +481,40 @@ noreturn void do_exit_group(int status) {
     do_exit(status);
 }
 
-// always called from init process
+static int halt_count_tasks(void) {
+    int tasks = 0;
+    for (int i = 2; i < MAX_PID; i++)
+        if (pid_get_task(i) != NULL)
+            tasks++;
+    return tasks;
+}
+
+// Called from init's do_exit, with pids_lock held. As when the init of a
+// Linux PID namespace exits, every other process is killed. pids_lock is
+// released while they die: do_exit takes it, so holding it here kept every
+// one of them from exiting (a shell that left a job in the background, or
+// timeout's watchdog, at the moment init exited), and the old last resort, a
+// host SIGTERM to their threads, ended iSH itself with status 143.
 static void halt_system(void) {
-    int max_iterations = 10; // Timeout: wait maximum 10 seconds
-    for (int state = 0; state < 3; state++) {
-        int tasks_found = 0;
-        for (int i = 2; i < MAX_PID; i++) {
-            struct task *task = pid_get_task(i);
-            if (task != NULL) {
-                tasks_found++;
-                switch (state) {
-                case 0:
-                    deliver_signal(task, SIGTERM_, SIGINFO_NIL);
-                    break;
-                case 1:
-                    deliver_signal(task, SIGKILL_, SIGINFO_NIL);
-                    break;
-                case 2:
-                    pthread_kill(task->thread, SIGTERM);
-                }
-            }
-        }
-        if (tasks_found == 0)
+    for (int i = 2; i < MAX_PID; i++) {
+        struct task *task = pid_get_task(i);
+        if (task != NULL)
+            deliver_signal(task, SIGKILL_, SIGINFO_NIL);
+    }
+    // A task blocked in host code that never returns to the guest cannot
+    // act on SIGKILL; after 10 seconds the system goes down without it.
+    for (int waited_ms = 0; ; waited_ms += 10) {
+        int tasks = halt_count_tasks();
+        if (tasks == 0)
             break;
-        if (state != 2) {
-            sleep(1);
-            // Timeout protection: if we've waited too long, force exit
-            if (--max_iterations <= 0) {
-                printk("halt_system: timeout after 10 seconds, %d tasks remaining\n", tasks_found);
-                break;
-            }
+        if (waited_ms >= 10000) {
+            printk("halt_system: %d tasks still running 10 seconds after SIGKILL, exiting anyway\n", tasks);
+            break;
         }
+        unlock(&pids_lock);
+        struct timespec tick = {.tv_nsec = 10 * 1000 * 1000};
+        nanosleep(&tick, NULL);
+        lock(&pids_lock);
     }
 
     // unmount all filesystems
@@ -529,11 +536,8 @@ static void halt_system(void) {
     dump_wx_stats();
 #endif
 
-    // Force exit the entire host process. Orphaned guest threads
-    // (stuck in JIT loops after do_exit_group force cleanup) keep
-    // the host process alive indefinitely. _exit is safe here since
-    // init dying means we're shutting down completely.
-    _exit(0);
+    // The caller exits the host process, which also ends any guest thread
+    // still running (stuck in JIT loops after do_exit_group force cleanup).
 }
 
 dword_t sys_exit(dword_t status) {

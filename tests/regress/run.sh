@@ -267,6 +267,42 @@ else
         status=1
     fi
 
+    # iSH exits with init's status. It used to exit 0 whatever init returned,
+    # and when init exited with a process still running (a background job,
+    # timeout's watchdog) halt_system deadlocked on pids_lock and iSH ended
+    # with a host SIGTERM (143).
+    echo
+    echo "########## exit status of init ##########"
+    exit_passed=0 exit_failed=0
+    check_exit() { # want, then the command to run as init
+        local want=$1
+        shift
+        timeout 20 "$ISH" "$MOUNT_FLAG" "$ROOTFS" "$@" > /dev/null 2>&1
+        local got=$?
+        if [ "$got" = "$want" ]; then
+            exit_passed=$((exit_passed + 1))
+        else
+            exit_failed=$((exit_failed + 1))
+            echo "FAIL $*: iSH exited $got, expected $want"
+        fi
+    }
+    check_exit 3 /bin/sh -c 'exit 3'
+    check_exit 1 /bin/false
+    check_exit 0 /bin/true
+    check_exit 5 /bin/sh -c 'sleep 30 & exit 5'
+    check_exit 9 /bin/sh -c 'trap "exit 9" TERM; kill -TERM $$; sleep 1; exit 1'
+    check_exit 137 /bin/sh -c 'sh -c "kill -9 \$\$"; exit $?'
+    printf 'int main(void) { return *(volatile int *) 0; }\n' > "$GUEST_ROOT/tmp/regress_init_fault.c"
+    if "$CC_GUEST" -static -O0 -o "$GUEST_ROOT/tmp/regress_init_fault" "$GUEST_ROOT/tmp/regress_init_fault.c"; then
+        check_exit 139 /tmp/regress_init_fault
+    else
+        echo "failed to build regress_init_fault" >&2
+        exit_failed=$((exit_failed + 1))
+    fi
+    rm -f "$GUEST_ROOT/tmp/regress_init_fault" "$GUEST_ROOT/tmp/regress_init_fault.c"
+    echo "$exit_passed passed, $exit_failed failed"
+    [ "$exit_failed" = 0 ] || status=1
+
     echo
     echo "########## /proc/net/tcp, udp and socket:[inode] links ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_proc_net" \
