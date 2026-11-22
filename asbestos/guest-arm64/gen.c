@@ -2266,6 +2266,17 @@ static int gen_branch(struct gen_state *state, uint32_t insn) {
     return 0;
 }
 
+// Sign-extend the low 32 bits of general register r in place (r = 31 is XZR).
+static void gen_sxtw_reg(struct gen_state *state, uint32_t r) {
+    if (r == 31)
+        return;
+    gen(state, (unsigned long) gadget_load_reg);
+    gen(state, r);
+    gen(state, (unsigned long) gadget_sxtw);
+    gen(state, (unsigned long) gadget_store_reg);
+    gen(state, r);
+}
+
 /*
  * Loads and Stores
  */
@@ -2823,6 +2834,15 @@ static int gen_ldst(struct gen_state *state, uint32_t insn) {
             return 1;
         }
 
+        // General registers: opc 00 is a 32-bit pair, 10 a 64-bit pair, and
+        // 01 with L is LDPSW, a 32-bit pair sign-extended to 64 bits. 01
+        // without L (STGP, memory tagging) and 11 are something else.
+        if (opc == 3 || (opc == 1 && !L)) {
+            gen_interrupt(state, INT_UNDEFINED);
+            return 0;
+        }
+        bool ldpsw = opc == 1;
+
         // For signed offset mode (010), just calculate address
         // For post-indexed (001), use base first, then update
         // For pre-indexed (011), calculate address first, then use and update
@@ -2856,6 +2876,10 @@ static int gen_ldst(struct gen_state *state, uint32_t insn) {
                                    : (is64 ? gadget_stp64_imm : gadget_stp32_imm);
             gen(state, (unsigned long) gadget);
             gen(state, param);
+            if (ldpsw) {
+                gen_sxtw_reg(state, rt);
+                gen_sxtw_reg(state, rt2);
+            }
             return 1;
         }
 
@@ -2927,6 +2951,10 @@ static int gen_ldst(struct gen_state *state, uint32_t insn) {
             // Pre-indexed: writeback calculated address
             gen(state, (unsigned long) gadget_writeback_addr);
             gen(state, rn);
+        }
+        if (ldpsw) {
+            gen_sxtw_reg(state, rt);
+            gen_sxtw_reg(state, rt2);
         }
 
         return 1;
