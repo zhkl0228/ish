@@ -8,6 +8,11 @@
 #import "TerminalViewController.h"
 #import "AppDelegate.h"
 #import "TerminalView.h"
+#import "TerminalSession.h"
+#import "TabBarView.h"
+#import "MainMenu.h"
+#import "BackgroundKeepAlive.h"
+#import "SceneDelegate.h"
 #import "BarButton.h"
 #import "ArrowBarButton.h"
 #import "UserPreferences.h"
@@ -15,16 +20,25 @@
 #import "CurrentRoot.h"
 #import "NSObject+SaneKVO.h"
 #import "LinuxInterop.h"
+#import "ClipboardStore.h"
+#import "ClipboardShelfView.h"
+#import "ClipboardStackView.h"
+#import "ClipboardSettingsViewController.h"
+#import "ClipboardUI.h"
 #include "kernel/init.h"
 #include "kernel/task.h"
 #include "kernel/calls.h"
+#include "kernel/signal.h"
 #include "fs/devices.h"
 
-@interface TerminalViewController () <UIGestureRecognizerDelegate>
+
+@interface TerminalViewController () <UIGestureRecognizerDelegate, TabBarViewDelegate, ClipboardShelfDelegate>
 
 @property UITapGestureRecognizer *tapRecognizer;
 @property (weak, nonatomic) IBOutlet TerminalView *termView;
 @property (weak, nonatomic) IBOutlet NSLayoutConstraint *bottomConstraint;
+@property (weak, nonatomic) IBOutlet NSLayoutConstraint *termTop;
+@property TabBarView *tabBar;
 
 @property (weak, nonatomic) IBOutlet UIButton *tabKey;
 @property (weak, nonatomic) IBOutlet UIButton *controlKey;
@@ -40,14 +54,19 @@
 @property (weak, nonatomic) IBOutlet NSLayoutConstraint *barTrailing;
 @property (weak, nonatomic) IBOutlet NSLayoutConstraint *barButtonWidth;
 @property (weak, nonatomic) IBOutlet NSLayoutConstraint *barHeight;
-@property (weak, nonatomic) IBOutlet UIView *settingsBadge;
 
-@property (weak, nonatomic) IBOutlet UIButton *infoButton;
 @property (weak, nonatomic) IBOutlet UIButton *pasteButton;
-@property (weak, nonatomic) IBOutlet UIButton *hideKeyboardButton;
 
-@property int sessionPid;
-@property (nonatomic) Terminal *sessionTerminal;
+// Sessions shown in this window, in tab order. All of them are also in the TerminalSessionStore.
+@property NSMutableArray<TerminalSession *> *tabs;
+@property (nonatomic) TerminalSession *selectedSession;
+// The selected tab's terminal (self.terminal differs from this while a console is shown).
+@property (readonly) Terminal *sessionTerminal;
+
+// The clipboard manager, created the first time it is shown.
+@property (nullable) ClipboardShelfView *shelf;
+@property BOOL shelfShown;
+@property (nullable) ClipboardStackView *stackView;
 
 @property BOOL ignoreKeyboardMotion;
 @property (nonatomic) BOOL hasExternalKeyboard;
@@ -71,6 +90,19 @@
     }
 #endif
 
+    self.tabBar = [[TabBarView alloc] initWithFrame:CGRectZero];
+    self.tabBar.delegate = self;
+    self.tabBar.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:self.tabBar];
+    self.termTop.active = NO;
+    [NSLayoutConstraint activateConstraints:@[
+        [self.tabBar.topAnchor constraintEqualToAnchor:self.view.topAnchor],
+        [self.tabBar.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
+        [self.tabBar.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [self.termView.topAnchor constraintEqualToAnchor:self.tabBar.bottomAnchor],
+    ]];
+    [self tabsDidChange];
+
     self.terminal = self.terminal;
     [self.termView becomeFirstResponder];
 
@@ -91,10 +123,9 @@
 
     [self _updateStyleFromPreferences:NO];
     
-    if (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad) {
-        [self.bar removeArrangedSubview:self.hideKeyboardButton];
-        [self.hideKeyboardButton removeFromSuperview];
-    }
+    self.barView.accessibilityCustomActions = @[[[UIAccessibilityCustomAction alloc] initWithName:@"Hide Keyboard" actionHandler:^BOOL(UIAccessibilityCustomAction *action) {
+        return [self.termView resignFirstResponder];
+    }]];
     if (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone) {
         self.barHeight.constant = 36;
     } else {
@@ -103,9 +134,7 @@
     
     // SF Symbols is cool
     if (@available(iOS 13, *)) {
-        [self.infoButton setImage:[UIImage systemImageNamed:@"gear"] forState:UIControlStateNormal];
         [self.pasteButton setImage:[UIImage systemImageNamed:@"doc.on.clipboard"] forState:UIControlStateNormal];
-        [self.hideKeyboardButton setImage:[UIImage systemImageNamed:@"keyboard.chevron.compact.down"] forState:UIControlStateNormal];
         
         [self.tabKey setTitle:nil forState:UIControlStateNormal];
         [self.tabKey setImage:[UIImage systemImageNamed:@"arrow.right.to.line.alt"] forState:UIControlStateNormal];
@@ -127,16 +156,36 @@
         });
     }];
     [self _updateBadge];
+
+    __weak typeof(self) weakSelf = self;
+    self.termView.pasteInterceptor = ^BOOL {
+        return [weakSelf pasteFromStack];
+    };
+    UILongPressGestureRecognizer *holdPaste = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(pasteButtonHeld:)];
+    [self.pasteButton addGestureRecognizer:holdPaste];
+    self.pasteButton.accessibilityCustomActions = @[[[UIAccessibilityCustomAction alloc] initWithName:@"Show Clipboard" actionHandler:^BOOL(UIAccessibilityCustomAction *action) {
+        [weakSelf showClipboard];
+        return YES;
+    }]];
+    [center addObserver:self selector:@selector(pasteStackDidChange:) name:ClipboardStackDidChangeNotification object:nil];
+    [self pasteStackDidChange:nil];
 }
 
 - (void)awakeFromNib {
     [super awakeFromNib];
-#if !ISH_LINUX
+    self.tabs = [NSMutableArray new];
+    // Copies made in iSH are labeled with the tab they came from.
+    ClipboardStore.shared.currentTabTitle = ^NSString *{
+        TerminalViewController *current = currentTerminalViewController;
+        if (current == nil)
+            current = ConnectedTerminalViewControllers().firstObject;
+        return current.selectedSession.displayTitle;
+    };
     [NSNotificationCenter.defaultCenter addObserver:self
-                                           selector:@selector(processExited:)
-                                               name:ProcessExitedNotification
+                                           selector:@selector(sessionDidChange:)
+                                               name:TerminalSessionDidChangeNotification
                                              object:nil];
-#else
+#if ISH_LINUX
     [NSNotificationCenter.defaultCenter addObserver:self
                                            selector:@selector(kernelPanicked:)
                                                name:KernelPanicNotification
@@ -150,107 +199,175 @@
 }
 
 - (void)startNewSession {
-    int err = [self startSession];
-    if (err < 0) {
-        [self showMessage:@"could not start session"
-                 subtitle:[NSString stringWithFormat:@"error code %d", err]];
-    }
+    [self startNewSessionAtIndex:self.tabs.count];
 }
 
-- (void)reconnectSessionFromTerminalUUID:(NSUUID *)uuid {
-    self.sessionTerminal = [Terminal terminalWithUUID:uuid];
-    if (self.sessionTerminal == nil)
+// Opens a shell in a new tab at the given position and selects it. Returns nil (after
+// telling the user) if the shell could not be started.
+- (TerminalSession *)startNewSessionAtIndex:(NSUInteger)index {
+    int err = 0;
+    TerminalSession *session = [TerminalSessionStore.shared startSessionWithError:&err];
+    if (session == nil) {
+        [self showMessage:@"could not start session"
+                 subtitle:[NSString stringWithFormat:@"error code %d", err]];
+        return nil;
+    }
+    [self.tabs insertObject:session atIndex:MIN(index, self.tabs.count)];
+    self.selectedSession = session;
+    return session;
+}
+
+- (void)reconnectSessionsFromTerminalUUIDs:(NSArray<NSUUID *> *)uuids selected:(NSUUID *)selected {
+    TerminalSessionStore *store = TerminalSessionStore.shared;
+    TerminalSession *toSelect = nil;
+    for (NSUUID *uuid in uuids) {
+        TerminalSession *session = [store sessionWithUUID:uuid];
+        if (session == nil || [self.tabs containsObject:session])
+            continue;
+        [self.tabs addObject:session];
+        if ([uuid isEqual:selected])
+            toSelect = session;
+    }
+    if (self.tabs.count == 0) {
         [self startNewSession];
+        return;
+    }
+    self.selectedSession = toSelect ?: self.tabs.firstObject;
+}
+
+- (NSArray<NSUUID *> *)tabTerminalUUIDs {
+    NSMutableArray<NSUUID *> *uuids = [NSMutableArray new];
+    for (TerminalSession *session in self.tabs)
+        [uuids addObject:session.uuid];
+    return uuids;
 }
 
 - (NSUUID *)sessionTerminalUUID {
-    return self.terminal.uuid;
+    return self.selectedSession.uuid;
 }
 
-- (int)startSession {
-    NSArray<NSString *> *command = UserPreferences.shared.launchCommand;
-
-#if !ISH_LINUX
-    int err = become_new_init_child();
-    if (err < 0)
-        return err;
-    struct tty *tty;
-    self.sessionTerminal = nil;
-    Terminal *terminal = [Terminal createPseudoTerminal:&tty];
-    if (terminal == nil) {
-        NSAssert(IS_ERR(tty), @"tty should be error");
-        return (int) PTR_ERR(tty);
-    }
-    self.sessionTerminal = terminal;
-    NSString *stdioFile = [NSString stringWithFormat:@"/dev/pts/%d", tty->num];
-    err = create_stdio(stdioFile.fileSystemRepresentation, TTY_PSEUDO_SLAVE_MAJOR, tty->num);
-    if (err < 0)
-        return err;
-    tty_release(tty);
-
-    char argv[4096];
-    [Terminal convertCommand:command toArgs:argv limitSize:sizeof(argv)];
-    const char *envp = "TERM=xterm-256color\0";
-    err = do_execve(command[0].UTF8String, command.count, argv, envp);
-    if (err < 0)
-        return err;
-    self.sessionPid = current->pid;
-    task_start(current);
-#else
-    const char *argv_arr[command.count + 1];
-    for (NSUInteger i = 0; i < command.count; i++)
-        argv_arr[i] = command[i].UTF8String;
-    argv_arr[command.count] = NULL;
-    const char *envp_arr[] = {
-        "TERM=xterm-256color",
-        NULL,
-    };
-    const char *const *argv = argv_arr;
-    const char *const *envp = envp_arr;
-    __block Terminal *terminal = nil;
-    __block int sessionPid = 0;
-    __block int err = 1;
-    sync_do_in_workqueue(^(void (^done)(void)) {
-        linux_start_session(argv[0], argv, envp, ^(int retval, int pid, nsobj_t term) {
-            err = retval;
-            if (term)
-                terminal = CFBridgingRelease(term);
-            sessionPid = pid;
-            done();
-        });
-    });
-    NSAssert(err <= 0, @"session start did not finish??");
-    if (err < 0)
-        return err;
-    self.sessionTerminal = terminal;
-    self.sessionPid = sessionPid;
-#endif
-    return 0;
+- (Terminal *)sessionTerminal {
+    return self.selectedSession.terminal;
 }
 
-#if !ISH_LINUX
-- (void)processExited:(NSNotification *)notif {
-    int pid = [notif.userInfo[@"pid"] intValue];
-    if (pid != self.sessionPid)
+#pragma mark Tabs
+
+- (void)setSelectedSession:(TerminalSession *)session {
+    NSAssert(session == nil || [self.tabs containsObject:session], @"selecting a session that is not a tab");
+    _selectedSession = session;
+    self.terminal = session.terminal;
+    [self tabsDidChange];
+}
+
+- (void)selectTabAtIndex:(NSUInteger)index {
+    if (index < self.tabs.count)
+        self.selectedSession = self.tabs[index];
+}
+
+- (void)selectNeighborTab:(NSInteger)offset {
+    if (self.tabs.count < 2)
         return;
+    NSInteger index = (NSInteger) [self.tabs indexOfObject:self.selectedSession];
+    NSInteger count = (NSInteger) self.tabs.count;
+    [self selectTabAtIndex:(NSUInteger) (((index + offset) % count + count) % count)];
+}
 
-    [self.sessionTerminal destroy];
-    // On iOS 13, there are multiple windows, so just close this one.
-    if (@available(iOS 13, *)) {
-        // On iPhone, destroying scenes will fail, but the error doesn't actually go to the error handler, which is really stupid. Apple doesn't fix bugs, so I'm forced to just add a check here.
-        if (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad && self.sceneSession != nil) {
-            [UIApplication.sharedApplication requestSceneSessionDestruction:self.sceneSession options:nil errorHandler:^(NSError *error) {
-                NSLog(@"scene destruction error %@", error);
-                self.sceneSession = nil;
-                [self processExited:notif];
-            }];
+- (void)closeTab:(TerminalSession *)session {
+    NSUInteger index = [self.tabs indexOfObject:session];
+    if (index == NSNotFound)
+        return;
+    [self.tabs removeObjectAtIndex:index];
+    [TerminalSessionStore.shared closeSession:session];
+    if (self.tabs.count == 0) {
+        // A window with no shell in it is useless, so start a fresh one in place.
+        [self startNewSession];
+    } else if (session == self.selectedSession) {
+        [self selectTabAtIndex:MIN(index, self.tabs.count - 1)];
+    } else {
+        [self tabsDidChange];
+    }
+}
+
+- (void)sessionDidChange:(NSNotification *)notif {
+    TerminalSession *session = notif.object;
+    if (![self.tabs containsObject:session])
+        return;
+    if (session.state == TerminalSessionStateClosed) {
+        // Closed by someone else (another window, or the app delegate).
+        [self closeTab:session];
+        return;
+    }
+    if (session.state == TerminalSessionStateExited && self.tabs.count == 1) {
+        // The only shell exited: replace it, as the app has always done on iPhone, unless
+        // it died right after starting, which would just loop.
+        if ([NSDate.date timeIntervalSinceDate:session.startDate] > 1) {
+            [self closeTab:session];
             return;
         }
     }
-    current = NULL; // it's been freed
-    [self startNewSession];
+    [self tabsDidChange];
 }
-#endif
+
+// Called whenever the tab list, the selection or a tab's state/title changes.
+- (void)tabsDidChange {
+    NSUInteger selected = self.selectedSession ? [self.tabs indexOfObject:self.selectedSession] : NSNotFound;
+    [self.tabBar setSessions:self.tabs selectedIndex:selected];
+}
+
+- (void)tabBar:(TabBarView *)tabBar didSelectTabAtIndex:(NSUInteger)index {
+    [self selectTabAtIndex:index];
+    [self.termView becomeFirstResponder];
+}
+
+- (void)tabBar:(TabBarView *)tabBar didRequestCloseTabAtIndex:(NSUInteger)index {
+    if (index < self.tabs.count)
+        [self closeTab:self.tabs[index]];
+}
+
+- (void)tabBar:(TabBarView *)tabBar didRequestCloseOtherTabsAtIndex:(NSUInteger)index {
+    if (index >= self.tabs.count)
+        return;
+    TerminalSession *keep = self.tabs[index];
+    self.selectedSession = keep;
+    // Snapshot first: closeTab: mutates tabs.
+    for (TerminalSession *session in [self.tabs copy]) {
+        if (session != keep)
+            [self closeTab:session];
+    }
+    [self.termView becomeFirstResponder];
+}
+
+- (void)tabBarDidRequestNewTab:(TabBarView *)tabBar {
+    [self startNewSession];
+    [self.termView becomeFirstResponder];
+}
+
+- (UIMenu *)commandsMenuForTabBar:(TabBarView *)tabBar {
+    return [MainMenu commandsMenu];
+}
+
+- (void)tabBar:(TabBarView *)tabBar didRequestRenameTabAtIndex:(NSUInteger)index {
+    if (index >= self.tabs.count)
+        return;
+    TerminalSession *session = self.tabs[index];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Rename Tab" message:nil preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
+        textField.text = session.title;
+        textField.placeholder = session.displayTitle;
+        textField.clearButtonMode = UITextFieldViewModeWhileEditing;
+    }];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    __weak UIAlertController *weakAlert = alert;
+    __weak TerminalViewController *weakSelf = self;
+    UIAlertAction *rename = [UIAlertAction actionWithTitle:@"Rename" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        NSString *title = [weakAlert.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+        session.title = title.length > 0 ? title : nil;
+        [weakSelf.termView becomeFirstResponder];
+    }];
+    [alert addAction:rename];
+    alert.preferredAction = rename; // Return in the text field confirms
+    [self presentViewController:alert animated:YES completion:nil];
+}
 
 #if ISH_LINUX
 - (void)kernelPanicked:(NSNotification *)notif {
@@ -283,6 +400,8 @@
     NSTimeInterval duration = animated ? 0.1 : 0;
     [UIView animateWithDuration:duration animations:^{
         self.view.backgroundColor = [[UIColor alloc] ish_initWithHexString:UserPreferences.shared.palette.backgroundColor];
+        [self.tabBar setBackgroundColor:self.view.backgroundColor
+                        foregroundColor:[[UIColor alloc] ish_initWithHexString:UserPreferences.shared.palette.foregroundColor]];
         UIKeyboardAppearance keyAppearance = UserPreferences.shared.keyboardAppearance;
         self.termView.keyboardAppearance = keyAppearance;
         for (BarButton *button in self.barButtons) {
@@ -312,7 +431,7 @@
 }
 
 - (void)_updateBadge {
-    self.settingsBadge.hidden = !FsNeedsRepositoryUpdate();
+    self.tabBar.showsCommandsBadge = FsNeedsRepositoryUpdate();
 }
 
 - (UIStatusBarStyle)preferredStatusBarStyle {
@@ -447,79 +566,624 @@
     
 - (IBAction)pressArrow:(ArrowBarButton *)sender {
     switch (sender.direction) {
-        case ArrowUp: [self pressKey:[self.terminal arrow:'A']]; break;
-        case ArrowDown: [self pressKey:[self.terminal arrow:'B']]; break;
-        case ArrowLeft: [self pressKey:[self.terminal arrow:'D']]; break;
-        case ArrowRight: [self pressKey:[self.terminal arrow:'C']]; break;
+        case ArrowUp: [self pressKey:[self.terminal arrow:'A' modifiers:sender.modifiers]]; break;
+        case ArrowDown: [self pressKey:[self.terminal arrow:'B' modifiers:sender.modifiers]]; break;
+        case ArrowLeft: [self pressKey:[self.terminal arrow:'D' modifiers:sender.modifiers]]; break;
+        case ArrowRight: [self pressKey:[self.terminal arrow:'C' modifiers:sender.modifiers]]; break;
         case ArrowNone: break;
     }
 }
 
-- (void)switchTerminal:(UIKeyCommand *)sender {
-    unsigned i = (unsigned) sender.input.integerValue;
+#pragma mark Commands
+
+static NSString *ShellQuoted(NSString *string) {
+    return [NSString stringWithFormat:@"'%@'", [string stringByReplacingOccurrencesOfString:@"'" withString:@"'\\''"]];
+}
+
+// Reached from the main menu, the tab strip's ⋯ menu and key equivalents (see MainMenu).
+
+- (void)switchTerminal:(UICommand *)sender {
+    int i = [sender.propertyList intValue];
     if (i == 7)
         self.terminal = self.sessionTerminal;
     else
         self.terminal = [Terminal terminalWithType:TTY_CONSOLE_MAJOR number:i];
 }
 
-- (void)increaseFontSize:(UIKeyCommand *)command {
+- (void)increaseFontSize:(id)sender {
     self.termView.overrideFontSize = self.termView.effectiveFontSize + 1;
 }
-- (void)decreaseFontSize:(UIKeyCommand *)command {
+- (void)decreaseFontSize:(id)sender {
     self.termView.overrideFontSize = self.termView.effectiveFontSize - 1;
 }
-- (void)resetFontSize:(UIKeyCommand *)command {
+- (void)resetFontSize:(id)sender {
     self.termView.overrideFontSize = 0;
 }
 
+// Shortcuts that are not menu items: a second binding for Bigger (the unshifted key)
+// and Ctrl+Tab for cycling tabs, as in browsers.
 - (NSArray<UIKeyCommand *> *)keyCommands {
-    static NSMutableArray<UIKeyCommand *> *commands = nil;
+    static NSArray<UIKeyCommand *> *commands = nil;
     if (commands == nil) {
-        commands = [NSMutableArray new];
-        for (unsigned i = 1; i <= 7; i++) {
-            [commands addObject:
-             [UIKeyCommand keyCommandWithInput:[NSString stringWithFormat:@"%d", i]
-                                 modifierFlags:UIKeyModifierCommand|UIKeyModifierAlternate|UIKeyModifierShift
-                                        action:@selector(switchTerminal:)]];
-        }
-        [commands addObject:
-         [UIKeyCommand keyCommandWithInput:@"+"
-                             modifierFlags:UIKeyModifierCommand
-                                    action:@selector(increaseFontSize:)
-                      discoverabilityTitle:@"Increase Font Size"]];
-        [commands addObject:
-         [UIKeyCommand keyCommandWithInput:@"="
-                             modifierFlags:UIKeyModifierCommand
-                                    action:@selector(increaseFontSize:)]];
-        [commands addObject:
-         [UIKeyCommand keyCommandWithInput:@"-"
-                             modifierFlags:UIKeyModifierCommand
-                                    action:@selector(decreaseFontSize:)
-                      discoverabilityTitle:@"Decrease Font Size"]];
-        [commands addObject:
-         [UIKeyCommand keyCommandWithInput:@"0"
-                             modifierFlags:UIKeyModifierCommand
-                                    action:@selector(resetFontSize:)
-                      discoverabilityTitle:@"Reset Font Size"]];
-        [commands addObject:
-         [UIKeyCommand keyCommandWithInput:@","
-                             modifierFlags:UIKeyModifierCommand
-                                    action:@selector(showAbout:)
-                      discoverabilityTitle:@"Settings"]];
+        commands = @[
+            [UIKeyCommand keyCommandWithInput:@"=" modifierFlags:UIKeyModifierCommand action:@selector(increaseFontSize:)],
+            [UIKeyCommand keyCommandWithInput:@"\t" modifierFlags:UIKeyModifierControl action:@selector(nextTab:)],
+            [UIKeyCommand keyCommandWithInput:@"\t" modifierFlags:UIKeyModifierControl | UIKeyModifierShift action:@selector(previousTab:)],
+        ];
+        for (UIKeyCommand *command in commands)
+            command.wantsPriorityOverSystemBehavior = YES;
     }
     return commands;
+}
+
+- (BOOL)canPerformAction:(SEL)action withSender:(id)sender {
+    if (action == @selector(paste:))
+        return UIPasteboard.generalPasteboard.hasStrings;
+    return [super canPerformAction:action withSender:sender];
+}
+
+// Menu state that depends on the tabs, windows and preferences of the moment.
+- (void)validateCommand:(UICommand *)command {
+    SEL action = command.action;
+    NSUInteger count = self.tabs.count;
+    BOOL running = self.selectedSession.state == TerminalSessionStateRunning;
+    UserPreferences *prefs = UserPreferences.shared;
+    if (action == @selector(selectTabByNumber:)) {
+        NSUInteger index = [command.propertyList unsignedIntegerValue];
+        if (index < count) {
+            command.title = self.tabs[index].displayTitle;
+            command.state = self.tabs[index] == self.selectedSession ? UIMenuElementStateOn : UIMenuElementStateOff;
+            command.attributes = 0;
+        } else {
+            command.attributes = UIMenuElementAttributesHidden;
+        }
+    } else if (action == @selector(closeOtherTabs:) || action == @selector(nextTab:) || action == @selector(previousTab:) ||
+               action == @selector(moveTabLeft:) || action == @selector(moveTabRight:)) {
+        command.attributes = count < 2 ? UIMenuElementAttributesDisabled : 0;
+    } else if (action == @selector(newWindow:) || action == @selector(closeWindow:) ||
+               action == @selector(moveTabToNewWindow:) || action == @selector(mergeAllWindows:)) {
+        if (!UIApplication.sharedApplication.supportsMultipleScenes) {
+            command.attributes = UIMenuElementAttributesHidden;
+        } else {
+            BOOL others = ConnectedTerminalViewControllers().count > 1;
+            BOOL enabled = action == @selector(newWindow:) ||
+                (action == @selector(moveTabToNewWindow:) && count > 1) ||
+                (action == @selector(mergeAllWindows:) && others) ||
+                (action == @selector(closeWindow:) && UIApplication.sharedApplication.openSessions.count > 1);
+            command.attributes = enabled ? 0 : UIMenuElementAttributesDisabled;
+        }
+    } else if (action == @selector(duplicateTab:) || action == @selector(copyCurrentDirectory:) ||
+               action == @selector(mountFolder:) || action == @selector(runSavedCommand:)) {
+        command.attributes = running ? 0 : UIMenuElementAttributesDisabled;
+    } else if (action == @selector(selectTheme:)) {
+        command.state = [command.propertyList isEqual:prefs.theme.name] ? UIMenuElementStateOn : UIMenuElementStateOff;
+    } else if (action == @selector(selectColorScheme:)) {
+        command.state = [command.propertyList integerValue] == prefs.colorScheme ? UIMenuElementStateOn : UIMenuElementStateOff;
+    } else if (action == @selector(toggleExtraKeys:)) {
+        command.state = prefs.hideExtraKeysWithExternalKeyboard ? UIMenuElementStateOff : UIMenuElementStateOn;
+    } else if (action == @selector(toggleStatusBar:)) {
+        command.state = prefs.hideStatusBar ? UIMenuElementStateOn : UIMenuElementStateOff;
+    } else if (action == @selector(toggleKeepAlive:)) {
+        BackgroundKeepAlive *keepAlive = BackgroundKeepAlive.shared;
+        command.state = keepAlive.enabled && !keepAlive.denied ? UIMenuElementStateOn : UIMenuElementStateOff;
+    } else if (action == @selector(toggleClipboard:)) {
+        command.state = self.shelfShown ? UIMenuElementStateOn : UIMenuElementStateOff;
+    } else if (action == @selector(togglePasteStack:)) {
+        command.state = ClipboardStore.shared.stackActive ? UIMenuElementStateOn : UIMenuElementStateOff;
+    } else if (action == @selector(toggleClipboardCapture:)) {
+        BOOL paused = ClipboardStore.shared.paused;
+        command.title = paused ? @"Resume Capture" : @"Pause Capture";
+        command.image = [UIImage systemImageNamed:paused ? @"play" : @"pause"];
+    } else if (action == @selector(switchTerminal:)) {
+        int number = [command.propertyList intValue];
+        BOOL current = number == 7 ? self.terminal == self.sessionTerminal
+                                   : self.terminal == [Terminal terminalWithType:TTY_CONSOLE_MAJOR number:number];
+        command.state = current ? UIMenuElementStateOn : UIMenuElementStateOff;
+    }
+}
+
+#pragma mark Shell menu
+
+- (void)newTab:(id)sender {
+    [self startNewSession];
+}
+
+- (void)newWindow:(id)sender {
+    [UIApplication.sharedApplication requestSceneSessionActivation:nil userActivity:nil options:nil errorHandler:nil];
+}
+
+// The new shell logs in at home like any other; it is then told to cd to where the
+// duplicated one was, visibly, since login leaves no other way to pick a directory.
+- (void)duplicateTab:(id)sender {
+    TerminalSession *session = self.selectedSession;
+    if (session == nil)
+        return;
+    NSString *directory = session.currentDirectory;
+    TerminalSession *copy = [self startNewSessionAtIndex:[self.tabs indexOfObject:session] + 1];
+    if (copy != nil && directory != nil)
+        [self typeCommand:[@"cd " stringByAppendingString:ShellQuoted(directory)] intoSession:copy attempts:50];
+}
+
+- (void)renameCurrentTab:(id)sender {
+    NSUInteger index = [self.tabs indexOfObject:self.selectedSession];
+    if (index != NSNotFound)
+        [self tabBar:self.tabBar didRequestRenameTabAtIndex:index];
+}
+
+// A fresh shell in the same tab: same position and name.
+- (void)restartShell:(id)sender {
+    TerminalSession *old = self.selectedSession;
+    NSUInteger index = [self.tabs indexOfObject:old];
+    if (index == NSNotFound)
+        return;
+    int err = 0;
+    TerminalSession *session = [TerminalSessionStore.shared startSessionWithError:&err];
+    if (session == nil) {
+        [self showMessage:@"could not start session" subtitle:[NSString stringWithFormat:@"error code %d", err]];
+        return;
+    }
+    session.title = old.title;
+    [self.tabs replaceObjectAtIndex:index withObject:session];
+    [TerminalSessionStore.shared closeSession:old];
+    self.selectedSession = session;
+}
+
+- (void)resetTerminal:(id)sender {
+    [self.termView resetTerminal];
+}
+
+- (void)sendBytes:(const char *)bytes {
+    [self.terminal sendInput:[NSData dataWithBytes:bytes length:strlen(bytes)]];
+}
+- (void)sendInterrupt:(id)sender {
+    [self sendBytes:"\x03"];
+}
+- (void)sendEndOfFile:(id)sender {
+    [self sendBytes:"\x04"];
+}
+- (void)sendSuspend:(id)sender {
+    [self sendBytes:"\x1a"];
+}
+- (void)killForegroundJob:(id)sender {
+    [self.terminal sendSignalToForegroundJob:SIGKILL_];
+}
+
+- (void)exportScrollback:(id)sender {
+    NSString *name = [self.selectedSession.displayTitle stringByAppendingPathExtension:@"txt"] ?: @"scrollback.txt";
+    [self.termView fetchTextWithCompletion:^(NSString *text) {
+        // hterm pads the screen with empty rows below the cursor; drop them.
+        NSString *trimmed = [text stringByTrimmingCharactersInSet:NSCharacterSet.newlineCharacterSet];
+        NSURL *url = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:name]];
+        NSError *error = nil;
+        if (![[trimmed stringByAppendingString:@"\n"] writeToURL:url atomically:YES encoding:NSUTF8StringEncoding error:&error]) {
+            [self showMessage:@"could not export scrollback" subtitle:error.localizedDescription];
+            return;
+        }
+        UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initForExportingURLs:@[url] asCopy:YES];
+        [self presentViewController:picker animated:YES completion:nil];
+    }];
+}
+
+- (void)closeCurrentTab:(id)sender {
+    if (self.selectedSession != nil)
+        [self closeTab:self.selectedSession];
+}
+
+- (void)closeOtherTabs:(id)sender {
+    NSUInteger index = [self.tabs indexOfObject:self.selectedSession];
+    if (index != NSNotFound)
+        [self tabBar:self.tabBar didRequestCloseOtherTabsAtIndex:index];
+}
+
+- (void)closeWindow:(id)sender {
+    if (self.sceneSession != nil)
+        [UIApplication.sharedApplication requestSceneSessionDestruction:self.sceneSession options:nil errorHandler:nil];
+}
+
+#pragma mark Edit menu
+
+- (void)paste:(id)sender {
+    [self.termView paste:sender];
+}
+- (void)clearScreen:(id)sender {
+    [self.termView clearScreen];
+}
+- (void)clearScrollback:(id)sender {
+    [self.termView clearScrollback];
+}
+
+#pragma mark View menu
+
+- (void)selectTheme:(UICommand *)sender {
+    Theme *theme = [Theme themeForName:sender.propertyList includingDefaultThemes:YES];
+    if (theme != nil)
+        UserPreferences.shared.theme = theme;
+}
+- (void)selectColorScheme:(UICommand *)sender {
+    UserPreferences.shared.colorScheme = [sender.propertyList integerValue];
+}
+- (void)toggleExtraKeys:(id)sender {
+    UserPreferences.shared.hideExtraKeysWithExternalKeyboard = !UserPreferences.shared.hideExtraKeysWithExternalKeyboard;
+}
+- (void)toggleStatusBar:(id)sender {
+    UserPreferences.shared.hideStatusBar = !UserPreferences.shared.hideStatusBar;
+}
+
+- (void)toggleKeepAlive:(id)sender {
+    BackgroundKeepAlive *keepAlive = BackgroundKeepAlive.shared;
+    if (keepAlive.denied) {
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Location Access Needed"
+                                                                       message:@"iSH stays running in the background by receiving coarse location updates. Allow location access for iSH in Settings."
+                                                                preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"Open Settings" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            [UIApplication.sharedApplication openURL:[NSURL URLWithString:UIApplicationOpenSettingsURLString] options:@{} completionHandler:nil];
+        }]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+        [self presentViewController:alert animated:YES completion:nil];
+        keepAlive.enabled = YES;
+        return;
+    }
+    keepAlive.enabled = !keepAlive.enabled;
+}
+
+#pragma mark Tabs menu
+
+- (void)nextTab:(id)sender {
+    [self selectNeighborTab:1];
+}
+- (void)previousTab:(id)sender {
+    [self selectNeighborTab:-1];
+}
+- (void)selectTabByNumber:(UICommand *)sender {
+    [self selectTabAtIndex:[sender.propertyList unsignedIntegerValue]];
+}
+
+- (void)moveSelectedTabBy:(NSInteger)offset {
+    NSInteger index = (NSInteger) [self.tabs indexOfObject:self.selectedSession];
+    NSInteger target = index + offset;
+    if (self.selectedSession == nil || target < 0 || target >= (NSInteger) self.tabs.count)
+        return;
+    [self.tabs exchangeObjectAtIndex:(NSUInteger) index withObjectAtIndex:(NSUInteger) target];
+    [self tabsDidChange];
+}
+- (void)moveTabLeft:(id)sender {
+    [self moveSelectedTabBy:-1];
+}
+- (void)moveTabRight:(id)sender {
+    [self moveSelectedTabBy:1];
+}
+
+// Takes every tab out of this window without closing the shells, for another window to adopt.
+- (NSArray<TerminalSession *> *)detachAllTabs {
+    NSArray<TerminalSession *> *detached = [self.tabs copy];
+    [self.tabs removeAllObjects];
+    self.selectedSession = nil;
+    return detached;
+}
+
+- (void)moveTabToNewWindow:(id)sender {
+    TerminalSession *session = self.selectedSession;
+    NSUInteger index = [self.tabs indexOfObject:session];
+    if (index == NSNotFound || self.tabs.count < 2)
+        return;
+    [self.tabs removeObjectAtIndex:index];
+    [self selectTabAtIndex:MIN(index, self.tabs.count - 1)];
+    NSUserActivity *activity = [[NSUserActivity alloc] initWithActivityType:SceneActivityType];
+    [activity addUserInfoEntriesFromDictionary:@{SceneTerminalUUIDKey: session.uuid.UUIDString,
+                                                 SceneTerminalUUIDsKey: @[session.uuid.UUIDString]}];
+    [UIApplication.sharedApplication requestSceneSessionActivation:nil userActivity:activity options:nil errorHandler:^(NSError *error) {
+        // No new window, so the tab comes back here rather than being lost.
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (session.state != TerminalSessionStateClosed && ![self.tabs containsObject:session]) {
+                [self.tabs addObject:session];
+                self.selectedSession = session;
+            }
+        });
+    }];
+}
+
+- (void)mergeAllWindows:(id)sender {
+    for (TerminalViewController *other in ConnectedTerminalViewControllers()) {
+        if (other == self)
+            continue;
+        [self.tabs addObjectsFromArray:[other detachAllTabs]];
+        [UIApplication.sharedApplication requestSceneSessionDestruction:other.sceneSession options:nil errorHandler:^(NSError *error) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (other.tabs.count == 0)
+                    [other startNewSession];
+            });
+        }];
+    }
+    [self tabsDidChange];
+}
+
+#pragma mark Tools menu
+
+// Types a command line into the selected shell, as if at the keyboard. If something
+// else owns the terminal (a job in the foreground, or a console being shown), offers
+// to run it in a new tab instead of typing into whatever is running.
+- (void)runInShell:(NSString *)command {
+    TerminalSession *session = self.selectedSession;
+    if (session.state == TerminalSessionStateRunning && session.shellIsForeground && self.terminal == session.terminal) {
+        [session.terminal sendInput:[[command stringByAppendingString:@"\n"] dataUsingEncoding:NSUTF8StringEncoding]];
+        return;
+    }
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:[NSString stringWithFormat:@"%@ is busy", session.displayTitle]
+                                                                   message:command
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Run in New Tab" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        [self runInNewTab:command];
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)runInNewTab:(NSString *)command {
+    TerminalSession *session = [self startNewSessionAtIndex:self.tabs.count];
+    if (session != nil)
+        [self typeCommand:command intoSession:session attempts:50];
+}
+
+// The new shell needs a moment to take the terminal; typing before that would be
+// thrown away by login's terminal setup. Once the shell is there, a beat more lets
+// it finish its own setup, so the text lands after its prompt.
+- (void)typeCommand:(NSString *)command intoSession:(TerminalSession *)session attempts:(int)attempts {
+    if (session.state != TerminalSessionStateRunning)
+        return;
+    if (session.shellIsForeground) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t) (0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (session.state == TerminalSessionStateRunning)
+                [session.terminal sendInput:[[command stringByAppendingString:@"\n"] dataUsingEncoding:NSUTF8StringEncoding]];
+        });
+        return;
+    }
+    if (attempts <= 0)
+        return;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t) (0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [self typeCommand:command intoSession:session attempts:attempts - 1];
+    });
+}
+
+- (void)mountFolder:(id)sender {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Mount iOS Folder"
+                                                                   message:@"A folder picker opens once the mount point is set. The mount is remembered across launches; use Unmount to forget it."
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
+        textField.text = @"/mnt/ios";
+        textField.placeholder = @"Mount point";
+        textField.autocapitalizationType = UITextAutocapitalizationTypeNone;
+        textField.autocorrectionType = UITextAutocorrectionTypeNo;
+    }];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    __weak UIAlertController *weakAlert = alert;
+    UIAlertAction *mount = [UIAlertAction actionWithTitle:@"Mount" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        NSString *path = [weakAlert.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+        if (path.length == 0)
+            return;
+        [self runInShell:[NSString stringWithFormat:@"mkdir -p %@ && mount -t ios . %@", ShellQuoted(path), ShellQuoted(path)]];
+    }];
+    [alert addAction:mount];
+    alert.preferredAction = mount;
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)unmountFolder:(UICommand *)sender {
+    NSString *path = sender.propertyList;
+    if ([path isKindOfClass:NSString.class])
+        [self runInShell:[@"umount " stringByAppendingString:ShellQuoted(path)]];
+}
+
+- (void)copyCurrentDirectory:(id)sender {
+    NSString *directory = self.selectedSession.currentDirectory;
+    if (directory != nil)
+        UIPasteboard.generalPasteboard.string = directory;
+}
+
+- (void)runSavedCommand:(UICommand *)sender {
+    if ([sender.propertyList isKindOfClass:NSString.class])
+        [self runInShell:sender.propertyList];
+}
+
+- (void)addSavedCommand:(id)sender {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Add Saved Command" message:nil preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
+        textField.placeholder = @"Name";
+    }];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
+        textField.placeholder = @"Command";
+        textField.autocapitalizationType = UITextAutocapitalizationTypeNone;
+        textField.autocorrectionType = UITextAutocorrectionTypeNo;
+        textField.font = [UIFont monospacedSystemFontOfSize:UIFont.systemFontSize weight:UIFontWeightRegular];
+    }];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    __weak UIAlertController *weakAlert = alert;
+    UIAlertAction *add = [UIAlertAction actionWithTitle:@"Add" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        NSString *name = [weakAlert.textFields[0].text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+        NSString *command = [weakAlert.textFields[1].text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+        if (command.length == 0)
+            return;
+        [SavedCommand addWithName:name.length > 0 ? name : command command:command];
+    }];
+    [alert addAction:add];
+    alert.preferredAction = add;
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)removeSavedCommand:(UICommand *)sender {
+    [SavedCommand removeAtIndex:[sender.propertyList unsignedIntegerValue]];
+}
+
+#pragma mark Clipboard menu
+
+- (void)toggleClipboard:(id)sender {
+    if (self.shelfShown)
+        [self hideClipboard];
+    else
+        [self showClipboard];
+}
+
+- (void)showClipboard {
+    if (self.shelfShown)
+        return;
+    if (self.shelf == nil) {
+        ClipboardShelfView *shelf = [ClipboardShelfView new];
+        shelf.delegate = self;
+        shelf.translatesAutoresizingMaskIntoConstraints = NO;
+        shelf.hidden = YES;
+        [self.view addSubview:shelf];
+        UILayoutGuide *safe = self.view.safeAreaLayoutGuide;
+        [NSLayoutConstraint activateConstraints:@[
+            [shelf.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:10],
+            [shelf.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-10],
+            [shelf.bottomAnchor constraintEqualToAnchor:self.termView.bottomAnchor constant:-10],
+            [shelf.topAnchor constraintGreaterThanOrEqualToAnchor:self.tabBar.bottomAnchor constant:10],
+        ]];
+        self.shelf = shelf;
+    }
+    ClipboardShelfView *shelf = self.shelf;
+    // Anything copied in another app while iSH was in the background shows up now.
+    [ClipboardStore.shared checkPasteboard];
+    shelf.overrideUserInterfaceStyle = UserPreferences.shared.requestingDarkAppearance ? UIUserInterfaceStyleDark : UIUserInterfaceStyleLight;
+    [shelf prepareToShow];
+    self.shelfShown = YES;
+    shelf.hidden = NO;
+    [self.view bringSubviewToFront:shelf];
+    [self.view layoutIfNeeded];
+    shelf.transform = CGAffineTransformMakeTranslation(0, shelf.bounds.size.height / 2);
+    shelf.alpha = 0;
+    [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.85 initialSpringVelocity:0 options:0 animations:^{
+        shelf.transform = CGAffineTransformIdentity;
+        shelf.alpha = 1;
+    } completion:nil];
+    [shelf becomeFirstResponder];
+    UIAccessibilityPostNotification(UIAccessibilityScreenChangedNotification, shelf);
+}
+
+- (void)hideClipboard {
+    if (!self.shelfShown)
+        return;
+    self.shelfShown = NO;
+    ClipboardShelfView *shelf = self.shelf;
+    [UIView animateWithDuration:0.2 animations:^{
+        shelf.transform = CGAffineTransformMakeTranslation(0, shelf.bounds.size.height / 3);
+        shelf.alpha = 0;
+    } completion:^(BOOL finished) {
+        if (!self.shelfShown) {
+            shelf.hidden = YES;
+            shelf.transform = CGAffineTransformIdentity;
+        }
+    }];
+    [self.termView becomeFirstResponder];
+}
+
+- (void)pasteButtonHeld:(UILongPressGestureRecognizer *)recognizer {
+    if (recognizer.state == UIGestureRecognizerStateBegan)
+        [self showClipboard];
+}
+
+- (void)togglePasteStack:(id)sender {
+    ClipboardStore.shared.stackActive = !ClipboardStore.shared.stackActive;
+}
+
+- (void)toggleClipboardCapture:(id)sender {
+    ClipboardStore *store = ClipboardStore.shared;
+    if (store.paused)
+        [store resume];
+    else
+        [store pauseFor:0];
+    ClipShowToast(self.view, store.paused ? @"Clipboard Capture Paused" : @"Clipboard Capture Resumed", store.paused ? @"pause.fill" : @"play.fill");
+}
+
+- (void)newPinboard:(id)sender {
+    [self showClipboard];
+    [self.shelf promptForNewPinboard];
+}
+
+- (void)showClipboardSettings:(id)sender {
+    __weak typeof(self) weakSelf = self;
+    UIViewController *settings = [ClipboardSettingsViewController navigationControllerWithDismissHandler:^{
+        if (weakSelf.shelfShown)
+            [weakSelf.shelf becomeFirstResponder];
+    }];
+    UIViewController *presenter = self;
+    while (presenter.presentedViewController != nil)
+        presenter = presenter.presentedViewController;
+    [presenter presentViewController:settings animated:YES completion:nil];
+}
+
+// The stack panel follows the store, so every window shows it while it is open.
+- (void)pasteStackDidChange:(NSNotification *)notif {
+    BOOL active = ClipboardStore.shared.stackActive;
+    if (active && self.stackView == nil) {
+        ClipboardStackView *stack = [ClipboardStackView new];
+        stack.translatesAutoresizingMaskIntoConstraints = NO;
+        stack.closeHandler = ^{
+            ClipboardStore.shared.stackActive = NO;
+        };
+        [self.view addSubview:stack];
+        [NSLayoutConstraint activateConstraints:@[
+            [stack.topAnchor constraintEqualToAnchor:self.tabBar.bottomAnchor constant:10],
+            [stack.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-12],
+        ]];
+        self.stackView = stack;
+        stack.alpha = 0;
+        [UIView animateWithDuration:0.2 animations:^{
+            stack.alpha = 1;
+        }];
+    } else if (!active && self.stackView != nil) {
+        ClipboardStackView *stack = self.stackView;
+        self.stackView = nil;
+        [UIView animateWithDuration:0.2 animations:^{
+            stack.alpha = 0;
+        } completion:^(BOOL finished) {
+            [stack removeFromSuperview];
+        }];
+    }
+}
+
+// While the Paste Stack is open, paste takes the next item off it.
+- (BOOL)pasteFromStack {
+    ClipboardStore *store = ClipboardStore.shared;
+    if (!store.stackActive)
+        return NO;
+    ClipItem *item = [store popStackItem];
+    if (item == nil)
+        return NO;
+    [store copyItems:@[item] plainText:ClipboardPreferences.shared.alwaysPlainText];
+    NSString *text = [store textForItems:@[item]];
+    if (text == nil) {
+        ClipShowToast(self.view, @"Image Copied", @"photo");
+        return YES;
+    }
+    [self.termView insertText:text];
+    return YES;
+}
+
+#pragma mark ClipboardShelfDelegate
+
+- (void)shelf:(ClipboardShelfView *)shelf pasteText:(NSString *)text {
+    [self.termView insertText:text];
+}
+
+- (void)shelfDidRequestClose:(ClipboardShelfView *)shelf {
+    [self hideClipboard];
+}
+
+- (UIViewController *)presentingViewControllerForShelf:(ClipboardShelfView *)shelf {
+    return self;
+}
+
+- (void)shelfDidRequestSettings:(ClipboardShelfView *)shelf {
+    [self showClipboardSettings:shelf];
+}
+
+- (void)shelfDidRequestPasteStack:(ClipboardShelfView *)shelf {
+    [self togglePasteStack:shelf];
 }
 
 - (void)setTerminal:(Terminal *)terminal {
     _terminal = terminal;
     self.termView.terminal = self.terminal;
-}
-
-- (void)setSessionTerminal:(Terminal *)sessionTerminal {
-    if (_terminal == _sessionTerminal)
-        self.terminal = sessionTerminal;
-    _sessionTerminal = sessionTerminal;
 }
 
 @end

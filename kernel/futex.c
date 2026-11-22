@@ -534,10 +534,11 @@ dword_t sys_futex(addr_t uaddr, dword_t op, dword_t val, addr_t timeout_or_val2,
         if (user_get(timeout_or_val2, timeout_))
             return _EFAULT;
         if (cmd == FUTEX_WAIT_BITSET_) {
-            // FUTEX_WAIT_BITSET uses absolute CLOCK_REALTIME timeout;
-            // convert to relative for our futex_wait implementation.
+            // FUTEX_WAIT_BITSET takes an absolute timeout, on CLOCK_MONOTONIC
+            // unless FUTEX_CLOCK_REALTIME is set; make it relative for
+            // futex_wait.
             struct timespec now;
-            clock_gettime(CLOCK_REALTIME, &now);
+            clock_gettime(op & FUTEX_CLOCK_REALTIME_ ? CLOCK_REALTIME : CLOCK_MONOTONIC, &now);
             timeout.tv_sec = timeout_.sec - now.tv_sec;
             timeout.tv_nsec = timeout_.nsec - now.tv_nsec;
             if (timeout.tv_nsec < 0) {
@@ -553,6 +554,9 @@ dword_t sys_futex(addr_t uaddr, dword_t op, dword_t val, addr_t timeout_or_val2,
             timeout.tv_nsec = timeout_.nsec;
         }
     }
+    // An empty bitset matches no waiter; Linux rejects it.
+    if ((cmd == FUTEX_WAIT_BITSET_ || cmd == FUTEX_WAKE_BITSET_) && val3 == 0)
+        return _EINVAL;
     switch (cmd) {
         case FUTEX_WAIT_:
             STRACE("futex(FUTEX_WAIT, %#x, %d, 0x%x {%ds %dns}) = ...\n", uaddr, val, timeout_or_val2, timeout.tv_sec, timeout.tv_nsec);

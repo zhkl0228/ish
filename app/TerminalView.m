@@ -16,26 +16,14 @@ struct rowcol {
     int col;
 };
 
-@interface WeakScriptMessageHandler : NSObject <WKScriptMessageHandler>
-@property (weak) id <WKScriptMessageHandler> handler;
-@end
-@implementation WeakScriptMessageHandler
-- (instancetype)initWithHandler:(id <WKScriptMessageHandler>)handler {
-    if (self = [super init]) {
-        self.handler = handler;
-    }
-    return self;
-}
-- (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
-    [self.handler userContentController:userContentController didReceiveScriptMessage:message];
-}
-@end
-
-@interface TerminalView ()
+@interface TerminalView () <UIGestureRecognizerDelegate>
 
 @property (nonatomic) NSMutableArray<UIKeyCommand *> *keyCommands;
 @property ScrollbarView *scrollbarView;
 @property (nonatomic) BOOL terminalFocused;
+// While the native scrollbar is being updated from the terminal's own scroll
+// state, its scroll events must not be sent back to the terminal.
+@property BOOL syncingScroll;
 
 @property (nullable) NSString *markedText;
 @property (nullable) NSString *selectedText;
@@ -61,8 +49,21 @@ struct rowcol {
     ScrollbarView *scrollbarView = self.scrollbarView = [[ScrollbarView alloc] initWithFrame:self.bounds];
     scrollbarView.delegate = self;
     scrollbarView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    scrollbarView.bounces = NO;
+    // Dragging the terminal down into the keyboard pulls the keyboard down with
+    // the finger, as in Messages. That needs the drag to start even with nothing
+    // to scroll (no scrollback, or a full-screen program like tmux), which takes
+    // bouncing. The bounce doesn't show: the web view stays pinned in place and
+    // hterm clamps the out-of-range scroll positions it is sent.
+    scrollbarView.alwaysBounceVertical = YES;
+    scrollbarView.keyboardDismissMode = UIScrollViewKeyboardDismissModeInteractive;
     [self addSubview:scrollbarView];
+
+    // Cmd-click opens links. The web view doesn't reliably pass Cmd through to
+    // the page, so the modifier is read here.
+    UITapGestureRecognizer *linkClick = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(linkClicked:)];
+    linkClick.cancelsTouchesInView = NO;
+    linkClick.delegate = self;
+    [self addGestureRecognizer:linkClick];
 
     UserPreferences *prefs = UserPreferences.shared;
     [prefs observe:@[@"capsLockMapping", @"optionMapping", @"backtickMapEscape", @"overrideControlSpace"]
@@ -134,6 +135,16 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollHeight",
 
     self.scrollbarView.contentView = webView;
     [self.scrollbarView addSubview:webView];
+
+    // The scrollbar still holds the previous terminal's metrics. Reset them without
+    // telling the new terminal, then ask it for its own state: anything that happened
+    // while it was detached (output, scrolling, focus changes) was not delivered to us.
+    self.syncingScroll = YES;
+    self.scrollbarView.contentSize = CGSizeZero;
+    self.scrollbarView.contentOffset = CGPointZero;
+    self.syncingScroll = NO;
+    [webView evaluateJavaScript:@"exports.resyncScroll()" completionHandler:nil];
+    self.terminalFocused = self.isFirstResponder;
 }
 
 - (void)uninstallTerminalView {
@@ -256,18 +267,39 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollHeight",
             [self becomeFirstResponder];
         }
     } else if ([message.name isEqualToString:@"newScrollHeight"]) {
+        // Changing the size can clamp the offset, which must not be echoed back as a scroll.
+        self.syncingScroll = YES;
         self.scrollbarView.contentSize = CGSizeMake(0, [message.body doubleValue]);
+        self.syncingScroll = NO;
     } else if ([message.name isEqualToString:@"newScrollTop"]) {
         CGFloat newOffset = [message.body doubleValue];
         if (self.scrollbarView.contentOffset.y == newOffset)
             return;
+        self.syncingScroll = YES;
         [self.scrollbarView setContentOffset:CGPointMake(0, newOffset) animated:NO];
+        self.syncingScroll = NO;
     } else if ([message.name isEqualToString:@"openLink"]) {
         [UIApplication openURL:message.body];
     }
 }
 
+- (void)linkClicked:(UITapGestureRecognizer *)recognizer {
+    if (!(recognizer.modifierFlags & UIKeyModifierCommand))
+        return;
+    WKWebView *webView = self.terminal.webView;
+    if (webView.superview == nil)
+        return;
+    CGPoint point = [recognizer locationInView:webView];
+    [webView evaluateJavaScript:[NSString stringWithFormat:@"exports.openLinkAt(%f, %f)", point.x, point.y] completionHandler:nil];
+}
+
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
+    return YES;
+}
+
 - (void)scrollViewDidScroll:(UIScrollView *)scrollView {
+    if (self.syncingScroll)
+        return;
     [self.terminal.webView evaluateJavaScript:[NSString stringWithFormat:@"exports.newScrollTop(%f)", scrollView.contentOffset.y] completionHandler:nil];
 }
 
@@ -366,6 +398,8 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollHeight",
 #pragma mark Keyboard Actions
 
 - (void)paste:(id)sender {
+    if (self.pasteInterceptor != nil && self.pasteInterceptor())
+        return;
     NSString *string = UIPasteboard.generalPasteboard.string;
     if (string) {
         [self insertText:string];
@@ -376,8 +410,25 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollHeight",
     [self.terminal.webView evaluateJavaScript:@"exports.copy()" completionHandler:nil];
 }
 
-- (void)clearScrollback:(UIKeyCommand *)command {
+- (void)clearScrollback {
     [self.terminal.webView evaluateJavaScript:@"exports.clearScrollback()" completionHandler:nil];
+}
+
+- (void)clearScreen {
+    [self.terminal.webView evaluateJavaScript:@"exports.clearScreen()" completionHandler:nil];
+}
+
+- (void)resetTerminal {
+    // hterm's reset also drops the palette overrides the theme installed.
+    [self.terminal.webView evaluateJavaScript:@"exports.reset()" completionHandler:^(id result, NSError *error) {
+        [self _updateStyle];
+    }];
+}
+
+- (void)fetchTextWithCompletion:(void (^)(NSString *))completion {
+    [self.terminal.webView evaluateJavaScript:@"exports.getText()" completionHandler:^(id result, NSError *error) {
+        completion([result isKindOfClass:NSString.class] ? result : @"");
+    }];
 }
 
 #pragma mark Floating cursor
@@ -450,21 +501,65 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollHeight",
 
 #pragma mark Hardware Keyboard
 
+// Escape sequence for a navigation or function key, following xterm conventions:
+// unmodified keys use the terminal's cursor-key mode (CSI vs SS3); with modifiers
+// the xterm modifier parameter is appended (2=Shift, 3=Alt, 5=Ctrl, 6=Ctrl+Shift, ...).
+// Returns nil if the key is not a navigation/function key.
+- (NSString *)specialKeySequence:(NSString *)key modifiers:(UIKeyModifierFlags)mods {
+    char csiFinal = 0; // keys of the form CSI [1;m] X
+    int tildeCode = 0; // keys of the form CSI n [;m] ~
+    if ([key isEqualToString:UIKeyInputUpArrow])         csiFinal = 'A';
+    else if ([key isEqualToString:UIKeyInputDownArrow])  csiFinal = 'B';
+    else if ([key isEqualToString:UIKeyInputRightArrow]) csiFinal = 'C';
+    else if ([key isEqualToString:UIKeyInputLeftArrow])  csiFinal = 'D';
+    else if ([key isEqualToString:UIKeyInputHome])       csiFinal = 'H';
+    else if ([key isEqualToString:UIKeyInputEnd])        csiFinal = 'F';
+    else if ([key isEqualToString:UIKeyInputF1])         csiFinal = 'P';
+    else if ([key isEqualToString:UIKeyInputF2])         csiFinal = 'Q';
+    else if ([key isEqualToString:UIKeyInputF3])         csiFinal = 'R';
+    else if ([key isEqualToString:UIKeyInputF4])         csiFinal = 'S';
+    else if ([key isEqualToString:UIKeyInputPageUp])     tildeCode = 5;
+    else if ([key isEqualToString:UIKeyInputPageDown])   tildeCode = 6;
+    else if ([key isEqualToString:UIKeyInputF5])         tildeCode = 15;
+    else if ([key isEqualToString:UIKeyInputF6])         tildeCode = 17;
+    else if ([key isEqualToString:UIKeyInputF7])         tildeCode = 18;
+    else if ([key isEqualToString:UIKeyInputF8])         tildeCode = 19;
+    else if ([key isEqualToString:UIKeyInputF9])         tildeCode = 20;
+    else if ([key isEqualToString:UIKeyInputF10])        tildeCode = 21;
+    else if ([key isEqualToString:UIKeyInputF11])        tildeCode = 23;
+    else if ([key isEqualToString:UIKeyInputF12])        tildeCode = 24;
+    else return nil;
+
+    int m = 1;
+    if (mods & UIKeyModifierShift)     m += 1;
+    if (mods & UIKeyModifierAlternate) m += 2;
+    if (mods & UIKeyModifierControl)   m += 4;
+
+    if (tildeCode != 0) {
+        if (m == 1)
+            return [NSString stringWithFormat:@"\x1b[%d~", tildeCode];
+        return [NSString stringWithFormat:@"\x1b[%d;%d~", tildeCode, m];
+    }
+    if (m == 1) {
+        if (csiFinal >= 'P' && csiFinal <= 'S') // F1-F4 are always SS3 when unmodified
+            return [NSString stringWithFormat:@"\x1bO%c", csiFinal];
+        return [self.terminal arrow:csiFinal]; // honours DECCKM (application cursor mode)
+    }
+    return [NSString stringWithFormat:@"\x1b[1;%d%c", m, csiFinal];
+}
+
 - (void)handleKeyCommand:(UIKeyCommand *)command {
     NSString *key = command.input;
+    NSString *special = [self specialKeySequence:key modifiers:command.modifierFlags];
+    if (special != nil) {
+        [self insertText:special];
+        return;
+    }
     if (command.modifierFlags == 0) {
         if ([key isEqualToString:@"`"] && UserPreferences.shared.backtickMapEscape)
             key = UIKeyInputEscape;
         if ([key isEqualToString:UIKeyInputEscape])
             key = @"\x1b";
-        else if ([key isEqualToString:UIKeyInputUpArrow])
-            key = [self.terminal arrow:'A'];
-        else if ([key isEqualToString:UIKeyInputDownArrow])
-            key = [self.terminal arrow:'B'];
-        else if ([key isEqualToString:UIKeyInputLeftArrow])
-            key = [self.terminal arrow:'D'];
-        else if ([key isEqualToString:UIKeyInputRightArrow])
-            key = [self.terminal arrow:'C'];
         [self insertText:key];
     } else if (command.modifierFlags & UIKeyModifierShift) {
         [self insertText:[key uppercaseString]];
@@ -494,9 +589,30 @@ static const char *metaKeys = "abcdefghijklmnopqrstuvwxyz0123456789-=[]\\;',./";
         return _keyCommands;
     _keyCommands = [NSMutableArray new];
     [self addKeys:controlKeys withModifiers:UIKeyModifierControl];
-    for (NSString *specialKey in @[UIKeyInputEscape, UIKeyInputUpArrow, UIKeyInputDownArrow,
-                                   UIKeyInputLeftArrow, UIKeyInputRightArrow, @"\t"]) {
+    for (NSString *specialKey in @[UIKeyInputEscape, @"\t"]) {
         [self addKey:specialKey withModifiers:0];
+    }
+    // Navigation and function keys, with every Shift/Alt/Ctrl combination, so that
+    // (UIKeyInputDelete is deliberately absent: it matches Backspace, which must keep going through deleteBackward.)
+    // e.g. Ctrl+Arrow reaches the terminal as \e[1;5C instead of being eaten by iPadOS.
+    NSArray<NSString *> *navKeys = @[UIKeyInputUpArrow, UIKeyInputDownArrow, UIKeyInputLeftArrow, UIKeyInputRightArrow,
+                                     UIKeyInputHome, UIKeyInputEnd, UIKeyInputPageUp, UIKeyInputPageDown,
+                                     UIKeyInputF1, UIKeyInputF2, UIKeyInputF3, UIKeyInputF4, UIKeyInputF5, UIKeyInputF6,
+                                     UIKeyInputF7, UIKeyInputF8, UIKeyInputF9, UIKeyInputF10, UIKeyInputF11, UIKeyInputF12];
+    UIKeyModifierFlags modifierCombos[] = {
+        0,
+        UIKeyModifierShift,
+        UIKeyModifierAlternate,
+        UIKeyModifierControl,
+        UIKeyModifierShift | UIKeyModifierAlternate,
+        UIKeyModifierShift | UIKeyModifierControl,
+        UIKeyModifierAlternate | UIKeyModifierControl,
+        UIKeyModifierShift | UIKeyModifierAlternate | UIKeyModifierControl,
+    };
+    for (NSString *navKey in navKeys) {
+        for (size_t i = 0; i < sizeof(modifierCombos) / sizeof(modifierCombos[0]); i++) {
+            [self addKey:navKey withModifiers:modifierCombos[i]];
+        }
     }
     if (UserPreferences.shared.capsLockMapping != CapsLockMapNone) {
         if (@available(iOS 13, *)); else {
@@ -512,10 +628,6 @@ static const char *metaKeys = "abcdefghijklmnopqrstuvwxyz0123456789-=[]\\;',./";
     if (UserPreferences.shared.backtickMapEscape) {
         [self addKey:@"`" withModifiers:0];
     }
-    [_keyCommands addObject:[UIKeyCommand keyCommandWithInput:@"k"
-                                                modifierFlags:UIKeyModifierCommand|UIKeyModifierShift
-                                                       action:@selector(clearScrollback:)
-                                         discoverabilityTitle:@"Clear Scrollback"]];
     return _keyCommands;
 }
 

@@ -11,6 +11,9 @@
 #include "LinuxInterop.h"
 #include "fs/devices.h"
 #include "fs/tty.h"
+#if !ISH_LINUX
+#include "kernel/signal.h"
+#endif
 
 extern struct tty_driver ios_pty_driver;
 
@@ -33,6 +36,10 @@ typedef struct linux_tty *tty_t;
 @property (nonatomic) NSMutableData *pendingData;
 // sending output is an asynchronous thing due to javascript, this is used to ensure it doesn't happen twice at once
 @property (nonatomic) BOOL outputInProgress;
+// set by destroy (under dataLock for !linux); output is discarded from then on
+@property (nonatomic) BOOL destroyed;
+// set by hangup; the signals are only sent once
+@property (nonatomic) BOOL hungUp;
 
 @property DelayedUITask *refreshTask;
 @property DelayedUITask *scrollToBottomTask;
@@ -42,6 +49,19 @@ typedef struct linux_tty *tty_t;
 @property NSNumber *terminalsKey;
 @property NSUUID *uuid;
 
+@end
+
+@implementation WeakScriptMessageHandler {
+    __weak id <WKScriptMessageHandler> _handler;
+}
+- (instancetype)initWithHandler:(id <WKScriptMessageHandler>)handler {
+    if (self = [super init])
+        _handler = handler;
+    return self;
+}
+- (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
+    [_handler userContentController:userContentController didReceiveScriptMessage:message];
+}
 @end
 
 @interface CustomWebView : WKWebView
@@ -94,14 +114,14 @@ static NSMapTable<NSUUID *, Terminal *> *terminalsByUUID;
     }
 }
 
+static NSString *const TERMINAL_HANDLERS[] = {@"load", @"log", @"sendInput", @"resize", @"propUpdate"};
+
 - (WKWebView *)webView {
     if (_webView == nil) {
         WKWebViewConfiguration *config = [WKWebViewConfiguration new];
-        [config.userContentController addScriptMessageHandler:self name:@"load"];
-        [config.userContentController addScriptMessageHandler:self name:@"log"];
-        [config.userContentController addScriptMessageHandler:self name:@"sendInput"];
-        [config.userContentController addScriptMessageHandler:self name:@"resize"];
-        [config.userContentController addScriptMessageHandler:self name:@"propUpdate"];
+        id <WKScriptMessageHandler> handler = [[WeakScriptMessageHandler alloc] initWithHandler:self];
+        for (size_t i = 0; i < sizeof(TERMINAL_HANDLERS)/sizeof(TERMINAL_HANDLERS[0]); i++)
+            [config.userContentController addScriptMessageHandler:handler name:TERMINAL_HANDLERS[i]];
         // Make the web view really big so that if a program tries to write to the terminal before it's displayed, the text probably won't wrap too badly.
         CGRect webviewSize = CGRectMake(0, 0, 10000, 10000);
         _webView = [[CustomWebView alloc] initWithFrame:webviewSize configuration:config];
@@ -181,14 +201,21 @@ static NSMapTable<NSUUID *, Terminal *> *terminalsByUUID;
     if (!NSThread.isMainThread) {
         // The main thread is the only one that can unblock this, so sleeping here would be a deadlock.
         // The only reason for this to be called on the main thread is if input is echoed.
-        while (_pendingData.length > BUF_SIZE)
+        while (_pendingData.length > BUF_SIZE && !_destroyed)
             wait_for_ignore_signals(&_dataConsumed, &_dataLock, NULL);
+    }
+    if (_destroyed) {
+        // Nobody will ever render this; pretend it was written so the writer moves on to its EIO.
+        unlock(&_dataLock);
+        return len;
     }
     [_pendingData appendData:[NSData dataWithBytes:buf length:len]];
     [self.refreshTask schedule];
     unlock(&_dataLock);
 #else
     @synchronized (self) {
+        if (_destroyed)
+            return len;
         int room = [self roomForOutput];
         if (len > room)
             len = room;
@@ -232,6 +259,16 @@ static NSMapTable<NSUUID *, Terminal *> *terminalsByUUID;
 
 - (NSString *)arrow:(char)direction {
     return [NSString stringWithFormat:@"\x1b%c%c", self.applicationCursor ? 'O' : '[', direction];
+}
+
+- (NSString *)arrow:(char)direction modifiers:(UIKeyModifierFlags)modifiers {
+    int m = 1;
+    if (modifiers & UIKeyModifierShift)     m += 1;
+    if (modifiers & UIKeyModifierAlternate) m += 2;
+    if (modifiers & UIKeyModifierControl)   m += 4;
+    if (m == 1)
+        return [self arrow:direction];
+    return [NSString stringWithFormat:@"\x1b[1;%d%c", m, direction];
 }
 
 - (void)refresh {
@@ -315,22 +352,126 @@ static NSMapTable<NSUUID *, Terminal *> *terminalsByUUID;
     }
 }
 
-- (void)destroy {
-    tty_t tty = self.tty;
-    if (tty != NULL) {
 #if !ISH_LINUX
-        if (tty != NULL) {
-            lock(&tty->lock);
-            tty_hangup(tty);
-            unlock(&tty->lock);
-        }
+// self.tty is a non-owning pointer that ios_tty_cleanup clears when the tty is
+// freed; cleanup runs under ttys_lock, so take our own reference under it.
+- (struct tty *)retainTty {
+    lock(&ttys_lock);
+    struct tty *tty = self.tty;
+    if (tty != NULL) {
+        lock(&tty->lock);
+        tty->refcount++;
+        unlock(&tty->lock);
+    }
+    unlock(&ttys_lock);
+    return tty;
+}
+
+- (void)releaseTty:(struct tty *)tty {
+    lock(&ttys_lock);
+    tty_release(tty);
+    unlock(&ttys_lock);
+}
+#endif
+
+- (int)foregroundProcessGroup {
+#if !ISH_LINUX
+    struct tty *tty = [self retainTty];
+    if (tty == NULL)
+        return 0;
+    lock(&tty->lock);
+    pid_t_ fg_group = tty->fg_group;
+    unlock(&tty->lock);
+    [self releaseTty:tty];
+    return fg_group;
 #else
+    return 0;
+#endif
+}
+
+- (void)sendSignalToForegroundJob:(int)signal {
+#if !ISH_LINUX
+    int fg_group = self.foregroundProcessGroup;
+    if (fg_group != 0)
+        send_group_signal(fg_group, signal, SIGINFO_NIL);
+#endif
+}
+
+- (void)hangup {
+    @synchronized (self) {
+        if (_hungUp)
+            return;
+        _hungUp = YES;
+    }
+#if !ISH_LINUX
+    struct tty *tty = [self retainTty];
+    if (tty != NULL) {
+        lock(&tty->lock);
+        tty_hangup(tty);
+        pid_t_ fg_group = tty->fg_group;
+        unlock(&tty->lock);
+        // Like Linux, tell the foreground job the terminal went away, or a process
+        // blocked somewhere other than a tty read would never notice. Sent after
+        // dropping tty->lock: send_group_signal takes pids_lock, and tty_open takes
+        // the two in the opposite order.
+        if (fg_group != 0) {
+            send_group_signal(fg_group, SIGHUP_, SIGINFO_NIL);
+            send_group_signal(fg_group, SIGCONT_, SIGINFO_NIL);
+        }
+        [self releaseTty:tty];
+    }
+#else
+    tty_t tty = self.tty;
+    if (tty != NULL)
         tty->ops->hangup(tty);
 #endif
-    }
     @synchronized (Terminal.class) {
-        [terminals removeObjectForKey:self.terminalsKey];
+        if ([terminals objectForKey:self.terminalsKey] == self)
+            [terminals removeObjectForKey:self.terminalsKey];
     }
+}
+
+- (void)destroy {
+    [self hangup];
+    // Drop unrendered output and wake a writer blocked in sendOutput; its next
+    // write fails with EIO now that the tty is hung up.
+#if !ISH_LINUX
+    lock(&_dataLock);
+    _destroyed = YES;
+    _pendingData.length = 0;
+    notify(&_dataConsumed);
+    unlock(&_dataLock);
+#else
+    @synchronized (self) {
+        _destroyed = YES;
+        _pendingData.length = 0;
+    }
+#endif
+}
+
+- (void)dealloc {
+    // The last reference can be dropped from the emulator thread (ios_tty_cleanup),
+    // but WebKit and the timers are main-thread only. Ownership of those objects is
+    // moved out of the ivars and into the block, so their final release happens
+    // wherever the block is destroyed: on the main thread.
+    DelayedUITask *refreshTask = _refreshTask, *scrollToBottomTask = _scrollToBottomTask;
+    WKWebView *webView = _webView;
+    _refreshTask = _scrollToBottomTask = nil;
+    _webView = nil;
+    NSLog(@"Terminal %@ deallocated", self.uuid);
+    dispatch_block_t cleanup = ^{
+        [refreshTask cancel];
+        [scrollToBottomTask cancel];
+        if (webView != nil) {
+            WKUserContentController *controller = webView.configuration.userContentController;
+            for (size_t i = 0; i < sizeof(TERMINAL_HANDLERS)/sizeof(TERMINAL_HANDLERS[0]); i++)
+                [controller removeScriptMessageHandlerForName:TERMINAL_HANDLERS[i]];
+        }
+    };
+    if (NSThread.isMainThread)
+        cleanup();
+    else
+        dispatch_async(dispatch_get_main_queue(), cleanup);
 }
 
 + (void)initialize {

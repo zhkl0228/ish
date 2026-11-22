@@ -29,4 +29,15 @@ enum OverrideAppearance {
 
 @property (nonatomic) Terminal *terminal;
 
+// Consulted by paste: before it pastes the system clipboard; returns YES if it
+// pasted something itself (the clipboard manager's Paste Stack).
+@property (copy, nullable) BOOL (^pasteInterceptor)(void);
+
+// Screen housekeeping, for the menu commands.
+- (void)clearScreen; // screen and scrollback
+- (void)clearScrollback;
+- (void)resetTerminal; // full VT reset, then the theme is reapplied
+// Everything in the scrollback and on screen, as text.
+- (void)fetchTextWithCompletion:(void (^)(NSString *text))completion;
+
 @end

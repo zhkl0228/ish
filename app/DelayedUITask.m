@@ -9,7 +9,7 @@
 
 @interface DelayedUITask ()
 
-@property id target;
+@property (weak) id target;
 @property SEL action;
 @property NSTimer *timer;
 
@@ -26,13 +26,38 @@
 }
 
 - (void)schedule {
-    if (!self.timer.valid) {
-        self.timer = [NSTimer timerWithTimeInterval:1./60 repeats:NO block:^(NSTimer * _Nonnull timer) {
-            self.timer = nil;
-            ((void (*)(id, SEL)) [self.target methodForSelector:self.action])(self.target, self.action);
-        }];
-        [NSRunLoop.mainRunLoop addTimer:self.timer forMode:NSDefaultRunLoopMode];
+    // NSRunLoop is not thread safe, and schedule is called from the emulator thread.
+    if (!NSThread.isMainThread) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self schedule];
+        });
+        return;
     }
+    if (self.timer.valid)
+        return;
+    __weak DelayedUITask *weakSelf = self;
+    self.timer = [NSTimer timerWithTimeInterval:1./60 repeats:NO block:^(NSTimer * _Nonnull timer) {
+        DelayedUITask *self = weakSelf;
+        if (self == nil)
+            return;
+        self.timer = nil;
+        id target = self.target;
+        if (target == nil)
+            return;
+        ((void (*)(id, SEL)) [target methodForSelector:self.action])(target, self.action);
+    }];
+    // Common modes so that output keeps draining while the user is scrolling or dragging.
+    [NSRunLoop.mainRunLoop addTimer:self.timer forMode:NSRunLoopCommonModes];
+}
+
+- (void)cancel {
+    NSAssert(NSThread.isMainThread, @"cancel is main thread only");
+    [self.timer invalidate];
+    self.timer = nil;
+}
+
+- (void)dealloc {
+    [self cancel];
 }
 
 @end
