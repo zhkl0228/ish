@@ -16031,3 +16031,56 @@ make_widening_accum umlsl, umlsl
     fcvtxn2 v1.4s, v0.2d
     str q1, [x14]
     gret
+
+/*
+ * Saturating shift left by immediate: SQSHL, UQSHL, SQSHLU (vector and scalar)
+ * Code stream: [gadget addr][rd | rn<<8 | shift<<16 | esize<<24 | Q<<28 | op<<32 | scalar<<36]
+ * op: 0=SQSHL 1=UQSHL 2=SQSHLU. See sat_shl_imm_helper.
+ */
+.gadget sat_shl_imm
+    ldr x8, [_pc]
+    add _pc, _pc, #8
+
+    and x9, x8, #0x1f       // rd
+    ubfx x10, x8, #8, #5    // rn
+    add x13, _cpu, #CPU_fp
+    add x14, x13, x9, lsl #4    // &Vd
+    add x15, x13, x10, lsl #4   // &Vn
+
+    save_c
+    mov x0, x14
+    mov x1, x15
+    ubfx x2, x8, #32, #2    // op
+    ubfx x3, x8, #16, #8    // shift
+    ubfx x4, x8, #24, #4    // esize
+    ubfx x5, x8, #28, #1    // Q
+    ubfx x6, x8, #36, #1    // scalar
+    bl NAME(sat_shl_imm_helper)
+    restore_c
+    gret
+
+/*
+ * SCVTF/UCVTF (vector, fixed-point)
+ * Code stream: [gadget addr][rd | rn<<8 | fbits<<16 | esize<<24 | Q<<28 | U<<32]
+ * See cvtf_fixpt_vec_helper.
+ */
+.gadget cvtf_fixpt_vec
+    ldr x8, [_pc]
+    add _pc, _pc, #8
+
+    and x9, x8, #0x1f       // rd
+    ubfx x10, x8, #8, #5    // rn
+    add x13, _cpu, #CPU_fp
+    add x14, x13, x9, lsl #4    // &Vd
+    add x15, x13, x10, lsl #4   // &Vn
+
+    save_c
+    mov x0, x14
+    mov x1, x15
+    ubfx x2, x8, #32, #1    // U
+    ubfx x3, x8, #16, #8    // fbits
+    ubfx x4, x8, #24, #4    // esize
+    ubfx x5, x8, #28, #1    // Q
+    bl NAME(cvtf_fixpt_vec_helper)
+    restore_c
+    gret

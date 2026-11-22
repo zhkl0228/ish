@@ -6,6 +6,7 @@
  */
 
 #include <stdint.h>
+#include <math.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1197,6 +1198,74 @@ void sli_imm_helper(uint8_t *rd, uint8_t *rn, int shift, int esize, int Q) {
     // A 64-bit (Q=0) vector write clears bits 127:64 of the destination.
     if (!Q)
         memset(rd + 8, 0, 8);
+}
+
+/*
+ * Saturating shift left by immediate: SQSHL, UQSHL, SQSHLU (vector and scalar).
+ * op: 0 = SQSHL (signed in, signed saturate), 1 = UQSHL (unsigned in,
+ * unsigned saturate), 2 = SQSHLU (signed in, unsigned saturate).
+ * esize: 0=B 1=H 2=S 3=D; shift: 0 .. element bits - 1.
+ * Vector: Q selects 8 or 16 bytes, and Q=0 clears bits 127:64.
+ * Scalar: one element; the rest of the 128-bit register is cleared.
+ * FPSR.QC is not modelled, as for the other saturating instructions.
+ */
+void sat_shl_imm_helper(uint8_t *rd, uint8_t *rn, int op, int shift, int esize, int Q, int scalar) {
+    int bits = 8 << esize;
+    int count = scalar ? 1 : (Q ? 16 : 8) >> esize;
+    __int128 smax = ((__int128) 1 << (bits - 1)) - 1;
+    __int128 smin = -((__int128) 1 << (bits - 1));
+    __int128 umax = ((__int128) 1 << bits) - 1;
+    uint8_t out[16] = {0};
+    for (int i = 0; i < count; i++) {
+        uint64_t raw = 0;
+        memcpy(&raw, rn + i * (bits / 8), bits / 8);
+        __int128 v;
+        if (op == 1) {
+            v = (__int128) raw;
+        } else {
+            // sign-extend the element
+            v = (__int128) (int64_t) (raw << (64 - bits)) >> (64 - bits);
+        }
+        v *= (__int128) 1 << shift;
+        if (op == 0)
+            v = v > smax ? smax : v < smin ? smin : v;
+        else
+            v = v > umax ? umax : v < 0 ? 0 : v;
+        uint64_t res = (uint64_t) v;
+        memcpy(out + i * (bits / 8), &res, bits / 8);
+    }
+    // out starts zeroed, so this also clears what a Q=0 or scalar write must.
+    memcpy(rd, out, 16);
+}
+
+/*
+ * SCVTF/UCVTF (vector, fixed-point): integer elements to FP, divided by
+ * 2^fbits. U: 0 = signed, 1 = unsigned. esize: 2 = S (float), 3 = D (double).
+ * Converting rounds once; the power-of-two division is exact here (the
+ * smallest non-zero result, 2^-64, is a normal number), so this equals the
+ * single correctly rounded fixed-point conversion. Q=0 clears bits 127:64.
+ */
+void cvtf_fixpt_vec_helper(uint8_t *rd, uint8_t *rn, int U, int fbits, int esize, int Q) {
+    uint8_t out[16] = {0};
+    if (esize == 2) {
+        int count = Q ? 4 : 2;
+        for (int i = 0; i < count; i++) {
+            uint32_t raw;
+            memcpy(&raw, rn + i * 4, 4);
+            float f = U ? (float) raw : (float) (int32_t) raw;
+            f = ldexpf(f, -fbits);
+            memcpy(out + i * 4, &f, 4);
+        }
+    } else {
+        for (int i = 0; i < 2; i++) {
+            uint64_t raw;
+            memcpy(&raw, rn + i * 8, 8);
+            double d = U ? (double) raw : (double) (int64_t) raw;
+            d = ldexp(d, -fbits);
+            memcpy(out + i * 8, &d, 8);
+        }
+    }
+    memcpy(rd, out, 16);
 }
 
 /*

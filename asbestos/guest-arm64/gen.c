@@ -374,6 +374,8 @@ extern void gadget_cmge_scalar_i64(void);     // CMGE Dd, Dn, Dm (scalar compare
 extern void gadget_cmeq_scalar_i64(void);     // CMEQ Dd, Dn, Dm (scalar compare equal)
 extern void gadget_sri_imm_vec(void);      // SRI Vd, Vn, #imm (shift right and insert)
 extern void gadget_sli_imm_vec(void);      // SLI Vd, Vn, #imm (shift left and insert)
+extern void gadget_sat_shl_imm(void);      // SQSHL/UQSHL/SQSHLU #imm (vector and scalar)
+extern void gadget_cvtf_fixpt_vec(void);   // SCVTF/UCVTF Vd, Vn, #fbits (vector, fixed-point)
 extern void gadget_cmhi_vec(void);         // CMHI Vd, Vn, Vm (unsigned compare greater)
 extern void gadget_cmhs_vec(void);         // CMHS Vd, Vn, Vm (unsigned compare greater or equal)
 extern void gadget_cmeq_vec(void);         // CMEQ Vd, Vn, Vm (compare equal)
@@ -4587,6 +4589,56 @@ static int gen_simd_fp(struct gen_state *state, uint32_t insn) {
         }
     }
 
+    // SQSHL/UQSHL (vector, immediate): 0 Q U 011110 immh immb 01110 1 Rn Rd
+    // SQSHLU (vector):                  0 Q 1 011110 immh immb 01100 1 Rn Rd
+    // immh=0 is AdvSIMD modified immediate; 2D (immh=1xxx) needs Q=1.
+    if ((insn & 0x9f80fc00) == 0x0f007400 || (insn & 0xbf80fc00) == 0x2f006400) {
+        uint32_t immh = (insn >> 19) & 0xf;
+        if (immh != 0) {
+            uint32_t Q = (insn >> 30) & 1;
+            uint32_t U = (insn >> 29) & 1;
+            uint32_t immhb = (immh << 3) | ((insn >> 16) & 0x7);
+            uint32_t rd = insn & 0x1f;
+            uint32_t rn = (insn >> 5) & 0x1f;
+            uint32_t esize = (immh & 0x8) ? 3 : (immh & 0x4) ? 2 : (immh & 0x2) ? 1 : 0;
+            if (esize == 3 && !Q) {
+                gen_interrupt(state, INT_UNDEFINED);
+                return 0;
+            }
+            uint32_t shift = immhb - (8u << esize);
+            uint64_t op = ((insn >> 11) & 0x1f) == 0x0c ? 2 : U;  // 2=SQSHLU, else 0=SQSHL 1=UQSHL
+            gen(state, (unsigned long) gadget_sat_shl_imm);
+            gen(state, rd | (rn << 8) | ((uint64_t) shift << 16) | ((uint64_t) esize << 24) |
+                       ((uint64_t) Q << 28) | (op << 32));
+            return 1;
+        }
+    }
+
+    // SCVTF/UCVTF (vector, fixed-point): 0 Q U 011110 immh immb 11100 1 Rn Rd
+    // immh=01xx: S, 1xxx: D (Q=1); fbits = 2 * element bits - immh:immb.
+    // immh=001x is the half-precision form (FEAT_FP16, which we do not
+    // advertise) and 0001 is reserved; immh=0 is AdvSIMD modified immediate.
+    if ((insn & 0x9f80fc00) == 0x0f00e400) {
+        uint32_t immh = (insn >> 19) & 0xf;
+        if (immh != 0) {
+            uint32_t Q = (insn >> 30) & 1;
+            uint32_t U = (insn >> 29) & 1;
+            uint32_t immhb = (immh << 3) | ((insn >> 16) & 0x7);
+            uint32_t rd = insn & 0x1f;
+            uint32_t rn = (insn >> 5) & 0x1f;
+            if (!(immh & 0xc) || ((immh & 0x8) && !Q)) {
+                gen_interrupt(state, INT_UNDEFINED);
+                return 0;
+            }
+            uint32_t esize = (immh & 0x8) ? 3 : 2;
+            uint32_t fbits = (16u << esize) - immhb;
+            gen(state, (unsigned long) gadget_cvtf_fixpt_vec);
+            gen(state, rd | (rn << 8) | ((uint64_t) fbits << 16) | ((uint64_t) esize << 24) |
+                       ((uint64_t) Q << 28) | ((uint64_t) U << 32));
+            return 1;
+        }
+    }
+
     // SSHLL/USHLL/SSHLL2/USHLL2 (vector, immediate) - signed/unsigned shift left long
     // Encoding: 0 Q U 011110 immh immb 10100 1 Rn Rd
     // Mask 0x9f80fc00 checks bit31=0,bits[28:23]=011110,opcode=10100,bit10=1.
@@ -6914,6 +6966,13 @@ skip_three_different:
             else if (esize == 1) shift = 32 - immhb;
             else shift = 16 - immhb;
             gadget = gadget_fcvtzu_fixpt_scalar;
+        } else if ((U == 1 && opcode == 0x0c) || opcode == 0x0e) {
+            // SQSHLU / SQSHL / UQSHL (scalar, immediate); shift is the left shift
+            uint64_t op = opcode == 0x0c ? 2 : U;
+            gen(state, (unsigned long) gadget_sat_shl_imm);
+            gen(state, rd | (rn << 8) | ((uint64_t) shift << 16) | ((uint64_t) esize << 24) |
+                       (op << 32) | (1ULL << 36));
+            return 1;
         }
 
         if (gadget) {

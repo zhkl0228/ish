@@ -14,7 +14,10 @@
 //   - FNMSUB with bits[15:10]=101001 was decoded as SSHLL (mask missing bit 28).
 //   - LD1/ST1..ST4 single structure to an H lane took the lane index from
 //     size<0> instead of size<1>, so {Vt.h}[1] went to lane 0 and so on.
-// The last one broke the ML-KEM half of TLS's X25519MLKEM768 key exchange in
+// It also covers instructions that were not implemented at all (SIGILL):
+//   - SQSHL, UQSHL and SQSHLU by immediate, vector and scalar.
+//   - SCVTF and UCVTF (vector, fixed-point), single and double precision.
+// The H-lane decode broke the ML-KEM half of TLS's X25519MLKEM768 key exchange in
 // Bun 1.4.4: every connection to api.anthropic.com failed with
 // DECRYPTION_FAILED_OR_BAD_RECORD_MAC, and `claude -p` retried for minutes and
 // gave up with EPROTO.
