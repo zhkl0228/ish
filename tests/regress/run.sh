@@ -329,6 +329,52 @@ else
     fi
 
     echo
+    echo "########## device nodes from a Darwin import ##########"
+    # A fakefs of its own: a tarball with the test as /init and three device
+    # nodes, imported with fakefsify, two of them then rewritten in meta.db to
+    # Darwin's makedev (major << 24 | minor), as the app stored them on iOS.
+    FAKEFSIFY="$(dirname "$ISH")/tools/fakefsify"
+    devdir=$(mktemp -d)
+    if [ -x "$FAKEFSIFY" ] && "$CC_GUEST" -static -O0 -Wall -o "$devdir/init" \
+            tests/regress/regress_dev_nodes.c &&
+        python3 -I - "$devdir" <<'EOF' &&
+import sys, tarfile
+d = sys.argv[1]
+with tarfile.open(d + '/root.tar.gz', 'w:gz') as t:
+    for name in ('.', './dev', './tmp'):
+        ti = tarfile.TarInfo(name); ti.type = tarfile.DIRTYPE; ti.mode = 0o755; t.addfile(ti)
+    ti = t.gettarinfo(d + '/init', './init'); ti.uid = ti.gid = 0; ti.uname = ti.gname = 'root'
+    with open(d + '/init', 'rb') as f:
+        t.addfile(ti, f)
+    for name, major, minor in (('./dev/null', 1, 3), ('./dev/zero', 1, 5), ('./dev/tty7', 1, 3)):
+        ti = tarfile.TarInfo(name); ti.type = tarfile.CHRTYPE; ti.mode = 0o666
+        ti.devmajor, ti.devminor = major, minor; t.addfile(ti)
+EOF
+        "$FAKEFSIFY" "$devdir/root.tar.gz" "$devdir/fs" &&
+        python3 -I - "$devdir/fs/meta.db" <<'EOF'
+import sqlite3, struct, sys
+db = sqlite3.connect(sys.argv[1])
+darwin = {b'/dev/null': (1 << 24) | 3, b'/dev/zero': (1 << 24) | 5}
+rows = db.execute('select paths.path, paths.inode, stats.stat from paths join stats on paths.inode = stats.inode').fetchall()
+for path, inode, stat in rows:
+    if bytes(path) in darwin:
+        mode, uid, gid, _ = struct.unpack('<4I', stat[:16])
+        db.execute('update stats set stat = ? where inode = ?',
+                   (struct.pack('<4I', mode, uid, gid, darwin[bytes(path)]) + stat[16:], inode))
+assert db.total_changes == 2, db.total_changes
+db.commit()
+EOF
+    then
+        out=$(timeout 20 "$ISH" -f "$devdir/fs" /init 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+    else
+        echo "failed to set up the device node test (needs $FAKEFSIFY and python3)" >&2
+        status=1
+    fi
+    rm -rf "$devdir"
+
+    echo
     echo "########## /proc/net/tcp, udp and socket:[inode] links ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_proc_net" \
             tests/regress/regress_proc_net.c; then

@@ -141,26 +141,43 @@ void set_console_device(int major, int minor) {
     console_minor = minor;
 }
 
+// Creates a character device node unless one is there already. One that a
+// filesystem imported on iOS before fakefs_import stored device numbers in
+// iSH's encoding has the host's: Darwin's makedev, major << 24 | minor, which
+// reads as major 0 and fails to open with ENXIO. The arm64 rootfs comes with
+// every node below, so such a node of exactly the device it should be is
+// replaced; anything else there is left alone.
+static void make_char_device(const char *path, int major, int minor) {
+    struct statbuf stat;
+    if (generic_statat(AT_PWD, path, &stat, false) == 0 && S_ISCHR(stat.mode) &&
+            stat.rdev == ((uint32_t) major << 24 | (uint32_t) minor)) {
+        printk("%s has device number %#llx, %d,%d in Darwin's encoding: recreating it\n",
+                path, (unsigned long long) stat.rdev, major, minor);
+        generic_unlinkat(AT_PWD, path);
+    }
+    generic_mknodat(AT_PWD, path, S_IFCHR|0666, dev_make(major, minor));
+}
+
 void create_some_device_nodes(void) {
     // create some device nodes
     // this will do nothing if they already exist
-    generic_mknodat(AT_PWD, "/dev/tty1", S_IFCHR|0666, dev_make(TTY_CONSOLE_MAJOR, 1));
-    generic_mknodat(AT_PWD, "/dev/tty2", S_IFCHR|0666, dev_make(TTY_CONSOLE_MAJOR, 2));
-    generic_mknodat(AT_PWD, "/dev/tty3", S_IFCHR|0666, dev_make(TTY_CONSOLE_MAJOR, 3));
-    generic_mknodat(AT_PWD, "/dev/tty4", S_IFCHR|0666, dev_make(TTY_CONSOLE_MAJOR, 4));
-    generic_mknodat(AT_PWD, "/dev/tty5", S_IFCHR|0666, dev_make(TTY_CONSOLE_MAJOR, 5));
-    generic_mknodat(AT_PWD, "/dev/tty6", S_IFCHR|0666, dev_make(TTY_CONSOLE_MAJOR, 6));
-    generic_mknodat(AT_PWD, "/dev/tty7", S_IFCHR|0666, dev_make(TTY_CONSOLE_MAJOR, 7));
+    make_char_device("/dev/tty1", TTY_CONSOLE_MAJOR, 1);
+    make_char_device("/dev/tty2", TTY_CONSOLE_MAJOR, 2);
+    make_char_device("/dev/tty3", TTY_CONSOLE_MAJOR, 3);
+    make_char_device("/dev/tty4", TTY_CONSOLE_MAJOR, 4);
+    make_char_device("/dev/tty5", TTY_CONSOLE_MAJOR, 5);
+    make_char_device("/dev/tty6", TTY_CONSOLE_MAJOR, 6);
+    make_char_device("/dev/tty7", TTY_CONSOLE_MAJOR, 7);
 
-    generic_mknodat(AT_PWD, "/dev/tty", S_IFCHR|0666, dev_make(TTY_ALTERNATE_MAJOR, DEV_TTY_MINOR));
-    generic_mknodat(AT_PWD, "/dev/console", S_IFCHR|0666, dev_make(TTY_ALTERNATE_MAJOR, DEV_CONSOLE_MINOR));
-    generic_mknodat(AT_PWD, "/dev/ptmx", S_IFCHR|0666, dev_make(TTY_ALTERNATE_MAJOR, DEV_PTMX_MINOR));
+    make_char_device("/dev/tty", TTY_ALTERNATE_MAJOR, DEV_TTY_MINOR);
+    make_char_device("/dev/console", TTY_ALTERNATE_MAJOR, DEV_CONSOLE_MINOR);
+    make_char_device("/dev/ptmx", TTY_ALTERNATE_MAJOR, DEV_PTMX_MINOR);
 
-    generic_mknodat(AT_PWD, "/dev/null", S_IFCHR|0666, dev_make(MEM_MAJOR, DEV_NULL_MINOR));
-    generic_mknodat(AT_PWD, "/dev/zero", S_IFCHR|0666, dev_make(MEM_MAJOR, DEV_ZERO_MINOR));
-    generic_mknodat(AT_PWD, "/dev/full", S_IFCHR|0666, dev_make(MEM_MAJOR, DEV_FULL_MINOR));
-    generic_mknodat(AT_PWD, "/dev/random", S_IFCHR|0666, dev_make(MEM_MAJOR, DEV_RANDOM_MINOR));
-    generic_mknodat(AT_PWD, "/dev/urandom", S_IFCHR|0666, dev_make(MEM_MAJOR, DEV_URANDOM_MINOR));
+    make_char_device("/dev/null", MEM_MAJOR, DEV_NULL_MINOR);
+    make_char_device("/dev/zero", MEM_MAJOR, DEV_ZERO_MINOR);
+    make_char_device("/dev/full", MEM_MAJOR, DEV_FULL_MINOR);
+    make_char_device("/dev/random", MEM_MAJOR, DEV_RANDOM_MINOR);
+    make_char_device("/dev/urandom", MEM_MAJOR, DEV_URANDOM_MINOR);
 
     generic_mkdirat(AT_PWD, "/dev/pts", 0755);
 }
