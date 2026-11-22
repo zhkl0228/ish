@@ -111,15 +111,25 @@ bool mount_param_flag(const char *info, const char *flag);
 #define O_TRUNC_ (1 << 9)
 #define O_APPEND_ (1 << 10)
 #define O_NONBLOCK_ (1 << 11)
-/* arm64 overrides the asm-generic values for the three flags below
- * (arch/arm64/include/uapi/asm/fcntl.h, for AArch32 compat). O_DIRECTORY_ used
- * to carry the x86 value 1<<16, which no aarch64 guest ever sets — so the
- * generic_openat() ENOTDIR check never fired — while 1<<16 is arm64's O_DIRECT,
- * making O_DIRECT opens look like O_DIRECTORY ones. */
+/* arm64 overrides the asm-generic values of these four
+ * (arch/arm64/include/uapi/asm/fcntl.h, for AArch32 compat); x86 uses them.
+ * Each guest needs its own: with the x86 value 1<<16 for O_DIRECTORY_, which
+ * no aarch64 guest sets, generic_openat()'s ENOTDIR check never fired on
+ * arm64 and O_DIRECT (1<<16 there) looked like O_DIRECTORY. With the arm64
+ * values on x86, musl's O_LARGEFILE (1<<15) read as O_NOFOLLOW, so the
+ * dynamic loader could not open a library through a symlink ("Error loading
+ * shared library libz.so.1: Symbolic link loop") and apk did not run. */
+#ifdef GUEST_ARM64
 #define O_DIRECTORY_ (1 << 14)
 #define O_NOFOLLOW_ (1 << 15)
 #define O_DIRECT_ (1 << 16)
 #define O_LARGEFILE_ (1 << 17)
+#else
+#define O_DIRECT_ (1 << 14)
+#define O_LARGEFILE_ (1 << 15)
+#define O_DIRECTORY_ (1 << 16)
+#define O_NOFOLLOW_ (1 << 17)
+#endif
 #define O_NOATIME_ (1 << 18)
 #define O_CLOEXEC_ (1 << 19)
 #define O_PATH_ (1 << 21)
