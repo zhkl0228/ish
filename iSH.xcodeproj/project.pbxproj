@@ -1644,7 +1644,7 @@
 				AA000300AF96D90D00FFB7A4 /* Build Meson (ARM64) */,
 				AA0000081F96D90D00FFB7A4 /* Sources */,
 				AA0000091F96D90D00FFB7A4 /* Frameworks */,
-				AA000011AF96D90D00FFB7A4 /* Download Root */,
+				AA000011AF96D90D00FFB7A4 /* Copy Root */,
 				AA000012AF96D90D00FFB7A4 /* Generate APK Repositories File */,
 				AA000013AF96D90D00FFB7A4 /* Compile JavaScript */,
 				AA000010AF96D90D00FFB7A4 /* Resources */,
@@ -1669,7 +1669,7 @@
 				AA000300AF96D90D00FFB7A4 /* Build Meson (ARM64) */,
 				AA0000081F96D90D00FFB7A4 /* Sources */,
 				AA0000091F96D90D00FFB7A4 /* Frameworks */,
-				AA000011AF96D90D00FFB7A4 /* Download Root */,
+				AA000011AF96D90D00FFB7A4 /* Copy Root */,
 				AA000012AF96D90D00FFB7A4 /* Generate APK Repositories File */,
 				AA000013AF96D90D00FFB7A4 /* Compile JavaScript */,
 				AA000010AF96D90D00FFB7A4 /* Resources */,
@@ -2189,7 +2189,7 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
-		AA000011AF96D90D00FFB7A4 /* Download Root */ = {
+		AA000011AF96D90D00FFB7A4 /* Copy Root */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -2197,8 +2197,9 @@
 			inputFileListPaths = (
 			);
 			inputPaths = (
+				"$(SRCROOT)/$(ROOTFS_FILE)",
 			);
-			name = "Download Root";
+			name = "Copy Root";
 			outputFileListPaths = (
 			);
 			outputPaths = (
@@ -2206,7 +2207,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "curl -L \"https://$ROOTFS_URL\" -o \"$BUILT_PRODUCTS_DIR/$CONTENTS_FOLDER_PATH/root.tar.gz\"\n";
+			shellScript = "if [ ! -f \"$SRCROOT/$ROOTFS_FILE\" ]; then\n    echo \"error: $ROOTFS_FILE is missing. Build it with: tools/build-rootfs.sh <arm64 meson build dir> $ROOTFS_FILE\" >&2\n    exit 1\nfi\ncp \"$SRCROOT/$ROOTFS_FILE\" \"$BUILT_PRODUCTS_DIR/$CONTENTS_FOLDER_PATH/root.tar.gz\"\n";
 			showEnvVarsInLog = 0;
 		};
 		AA000012AF96D90D00FFB7A4 /* Generate APK Repositories File */ = {

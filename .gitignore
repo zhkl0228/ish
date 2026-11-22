@@ -4,6 +4,8 @@ xcuserdata/
 
 cross-*.txt
 root.tar.gz
+# Built by tools/build-rootfs.sh for the ARM64 app targets
+/deps/rootfs/
 
 node_modules
 app/xtermjs/xterm-dist

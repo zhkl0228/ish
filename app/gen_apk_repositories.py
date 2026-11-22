@@ -11,11 +11,17 @@ APK_REPOSITORIES = [
 ]
 GUEST_ARCH = os.environ.get('GUEST_ARCH', 'x86')
 
+# The ARM64 root is built from this Alpine release (tools/build-rootfs.sh).
+ARM64_APK_REPOSITORIES = [
+    ('v3.24', 'main'),
+    ('v3.24', 'community'),
+]
+
 repos_file = []
 if GUEST_ARCH == 'arm64':
     # ARM64 guest: use official Alpine Linux CDN for aarch64 packages.
     # apk.ish.app only hosts x86 packages.
-    for version, repo in APK_REPOSITORIES:
+    for version, repo in ARM64_APK_REPOSITORIES:
         repos_file.append(f'https://dl-cdn.alpinelinux.org/alpine/{version}/{repo}')
 else:
     # x86 guest: use iSH's custom APK mirror with pinned indexes

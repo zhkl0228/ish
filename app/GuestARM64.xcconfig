@@ -28,5 +28,6 @@ MESON_GUEST_OPTION = -Dguest_arch=arm64
 ISH_ENABLE_JIT = YES
 ISH_JIT_EMIT = NO
 
-// ARM64 rootfs URL (Alpine 3.21 aarch64 minirootfs)
-ROOTFS_URL = dl-cdn.alpinelinux.org/alpine/v3.21/releases/aarch64/alpine-minirootfs-3.21.0-aarch64.tar.gz
+// ARM64 root filesystem, relative to the repository: Alpine 3.24 aarch64 with
+// the preinstalled packages, built by tools/build-rootfs.sh (not in git).
+ROOTFS_FILE = deps/rootfs/arm64-root.tar.gz
