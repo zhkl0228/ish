@@ -523,7 +523,9 @@ check_highbits_alert:
  *
  * The crash_handler has already:
  *   1. Written segfault_addr and segfault_was_write to cpu_state via _cpu (x1)
- *   2. Restored cpu->pc to the block start PC (from jit_saved_pc TLS)
+ *   2. Left cpu->pc at the current block's start and x28 (_pc) at the
+ *      fault's code-stream position (cleared for a fault in native code);
+ *      fiber_exit records it and the run loop retries from that instruction
  *   3. Restored SP from frame->jit_exit_sp so fiber_exit can pop correctly
  *   4. Set x0 to a crash marker value
  *

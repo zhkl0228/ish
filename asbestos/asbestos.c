@@ -1121,6 +1121,23 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
             tlb->block_cache_gen = asbestos->invalidate_gen;
             memset(frame->ret_cache, 0, sizeof(frame->ret_cache));
             frame->last_block = NULL;
+#ifdef GUEST_ARM64
+            // Retry from the faulting instruction. Everything before it in
+            // the block has run, and running it again repeats its side
+            // effects: HotSpot's deoptimization faulted after an
+            // `ldp x29, x30, [sp], #32`, and each retry from the block start
+            // popped another frame until it returned to garbage. cpu->pc is
+            // the current block's start (chained branches keep it), and
+            // fiber_exit stored the code-stream position of the fault. Without
+            // a position (a fault in native code), fall back to the block the
+            // run loop entered.
+            fiber_fix_fault_pc(asbestos, frame, tlb);
+            if (frame->cpu.segfault_precise_pc != 0)
+                frame->cpu.pc = frame->cpu.segfault_precise_pc;
+            else
+                frame->cpu.pc = jit_saved_pc;
+            frame->cpu.segfault_precise_pc = 0;
+#endif
 
             crash_retry_count++;
             if (crash_retry_count >= 16) {

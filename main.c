@@ -21,7 +21,6 @@
 
 // Thread-local JIT recovery state (defined in asbestos.c)
 extern __thread volatile sig_atomic_t in_jit;
-extern __thread volatile uint64_t jit_saved_pc;
 
 // Diagnostic: JIT crash info (defined in calls.c)
 extern __thread volatile uint64_t jit_last_host_fault;
@@ -112,7 +111,12 @@ static void crash_handler(int sig, siginfo_t *info, void *ctx) {
         ucontext_t *uc = (ucontext_t *)ctx;
 #ifdef ISH_JIT
         // Pinned guest registers live only in host registers inside native code.
-        jit_crash_sync(uc);
+        // There x28 is the code-stream position only at exits, so clear it:
+        // fiber_exit records it as the fault's position, and the run loop then
+        // retries from the block it entered rather than from a wrong
+        // instruction.
+        if (jit_crash_sync(uc))
+            UC_X(uc, 28) = 0;
 #endif
 
         // _cpu is in x1 — pointer to cpu_state within fiber_frame
@@ -142,8 +146,9 @@ static void crash_handler(int sig, siginfo_t *info, void *ctx) {
         // field, so 1 byte is the correct width on both sides.
         *(addr_t *)(cpu_ptr + CRASH_CPU_segfault_addr) = guest_addr;
         *(bool *)(cpu_ptr + CRASH_CPU_segfault_was_write) = (bool)was_write;
-        // Restore guest PC to block start for re-execution
-        *(uint64_t *)(cpu_ptr + CRASH_CPU_pc) = (uint64_t)jit_saved_pc;
+        // cpu->pc stays the current block's start. x28 (_pc) is left as the
+        // code-stream position of the fault, which fiber_exit records, so the
+        // run loop retries from the faulting instruction.
 
         // Restore SP to the value saved by fiber_enter, so fiber_exit
         // can correctly pop the callee-saved register frame.
