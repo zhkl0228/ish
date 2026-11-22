@@ -9,6 +9,7 @@
 #include <archive_entry.h>
 
 #define ISH_INTERNAL
+#include "fs/dev.h"
 #include "fs/fake-db.h"
 #include "fs/sqlutil.h"
 #include "tools/fakefs.h"
@@ -230,7 +231,12 @@ bool fakefs_import(const char *archive_path, const char *fs, struct fakefsify_er
             .mode = (uint32_t) archive_entry_mode(entry),
             .uid = (uint32_t) archive_entry_uid(entry),
             .gid = (uint32_t) archive_entry_gid(entry),
-            .rdev = (uint32_t) archive_entry_rdev(entry),
+            // meta.db holds device numbers in iSH's encoding (dev_make), not
+            // the host's: archive_entry_rdev is the host's makedev, which on
+            // Darwin is (major << 24 | minor) and read back as major 0, so
+            // every device node in an archive imported on iOS failed to open
+            // with ENXIO ("Couldn't open /dev/null: No such device or address").
+            .rdev = dev_make(archive_entry_rdevmajor(entry), archive_entry_rdevminor(entry)),
         };
         sqlite3_bind_blob64(insert_stat, 1, &stat, sizeof(stat), SQLITE_TRANSIENT);
         STEP_RESET(insert_stat);
@@ -316,7 +322,8 @@ bool fakefs_export(const char *fs, const char *archive_path, struct fakefsify_er
         archive_entry_set_mode(entry, stat.mode);
         archive_entry_set_uid(entry, stat.uid);
         archive_entry_set_gid(entry, stat.gid);
-        archive_entry_set_rdev(entry, stat.rdev);
+        archive_entry_set_rdevmajor(entry, dev_major(stat.rdev));
+        archive_entry_set_rdevminor(entry, dev_minor(stat.rdev));
 
         struct stat real_stat;
         if (fstatat(root_fd, path, &real_stat, 0) < 0) {
