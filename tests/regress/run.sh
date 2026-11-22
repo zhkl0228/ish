@@ -202,6 +202,19 @@ else
         status=1
     fi
 
+    echo
+    echo "########## SIGSEGV on unmapped reads and writes near 0 ##########"
+    if "$CC_GUEST" -static -O1 -Wall -o "$GUEST_ROOT/tmp/regress_null_fault" \
+            tests/regress/regress_null_fault.c; then
+        out=$("$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_null_fault 2>&1)
+        echo "$out" | tail -5
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_null_fault"
+    else
+        echo "failed to build regress_null_fault" >&2
+        status=1
+    fi
+
     # AF_NETLINK stub: no read blocks without bound; links and addresses are
     # the host's; everything else is refused at once. The second run pins
     # the ISH_NETLINK_ROUTE=empty switch (read from the host environment).

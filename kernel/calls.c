@@ -297,47 +297,11 @@ void handle_interrupt(int interrupt) {
             }
         }
 #endif
-#ifdef GUEST_ARM64
-        // Rate-limit per-task: repeated GPF at the same PC with same
-        // fault address AND same read/write direction means the guest
-        // is stuck on an un-recoverable fault. Legitimate recovery
-        // cycles (stack growsdown, V8 heap demand-map) change the
-        // fault address each iteration so the counter resets.
-        static _Thread_local uint64_t last_stuck_pc_task = 0;
-        static _Thread_local uint64_t last_stuck_pc = 0;
-        static _Thread_local uint64_t last_stuck_fault = 0;
-        static _Thread_local int last_stuck_write = 0;
-        static _Thread_local int stuck_pc_count = 0;
-        if (last_stuck_pc == cpu->pc &&
-            last_stuck_pc_task == (uint64_t)current->pid &&
-            last_stuck_fault == cpu->segfault_addr &&
-            last_stuck_write == cpu->segfault_was_write) {
-            stuck_pc_count++;
-        } else {
-            last_stuck_pc = cpu->pc;
-            last_stuck_pc_task = current->pid;
-            last_stuck_fault = cpu->segfault_addr;
-            last_stuck_write = cpu->segfault_was_write;
-            stuck_pc_count = 1;
-        }
-        // Lower threshold for PC < 0x1000 (NULL-BR territory) since
-        // normal recovery never loops there.
-        int stuck_limit = (cpu->pc < 0x1000ULL) ? 16 : 256;
-        if (stuck_pc_count > stuck_limit) {
-            if (ish_exec_trace()) {
-                fprintf(stderr, "FORCE_EXIT_STUCK_PC: pid=%d exits 139 after %d GPFs at pc=0x%llx fault=0x%llx\n",
-                        current->pid, stuck_pc_count,
-                        (unsigned long long)cpu->pc,
-                        (unsigned long long)cpu->segfault_addr);
-                fprintf(stderr, "  x30=0x%llx sp=0x%llx x29=0x%llx\n",
-                        (unsigned long long)cpu->regs[30],
-                        (unsigned long long)cpu->sp,
-                        (unsigned long long)cpu->regs[29]);
-            }
-            do_exit_group(SIGSEGV_);
-            return;
-        }
-#endif
+        // No limit on faults at one instruction: a program whose SIGSEGV
+        // handler resumes elsewhere faults there legitimately, as often as
+        // it runs the code. HotSpot's implicit null checks do, and a count
+        // that killed the process after 256 of them took down any JVM that
+        // threw NullPointerException in a loop.
         read_wrlock(&current->mem->lock);
         void *ptr = mem_ptr(current->mem, cpu->segfault_addr, cpu->segfault_was_write ? MEM_WRITE : MEM_READ);
         read_wrunlock(&current->mem->lock);
@@ -1001,101 +965,12 @@ void handle_interrupt(int interrupt) {
                 }
             }
 #endif
-            // Read-fault recovery: if a load instruction reads from unmapped
-            // memory, set destination register to 0 and advance PC.
-            // This handles cases where guest code makes out-of-bounds reads
-            // that work on native Linux (because adjacent heap pages are always
-            // mapped) but crash in iSH (because we have unmapped gaps).
-            // Rate-limited to prevent infinite loops on true null-pointer derefs.
-#ifdef GUEST_ARM64
-            if (!cpu->segfault_was_write) {
-                static _Thread_local int read_recovery_count = 0;
-                static _Thread_local addr_t last_recovery_addr = 0;
-                // Reset counter when faulting address changes (scanner moving through memory)
-                // Only rate-limit when stuck at the exact same PC AND address (true infinite loop)
-                if (cpu->segfault_addr != last_recovery_addr) {
-                    read_recovery_count = 0;
-                    last_recovery_addr = cpu->segfault_addr;
-                }
-                if (read_recovery_count < 8) {
-                    read_recovery_count++;
-                    // The JIT reports cpu->pc as the block start, not the faulting
-                    // insn. Scan forward up to 8 insns to find the first load —
-                    // intermediate non-memory ops (SUB/ADD/MOV) can't fault, so
-                    // the first load is the culprit.
-                    for (int scan = 0; scan < 8; scan++) {
-                        addr_t insn_pc = cpu->pc + scan * 4;
-                        uint32_t insn = 0;
-                        bool insn_ok = true;
-                        for (int j = 0; j < 4; j++) {
-                            uint8_t b;
-                            if (user_get(insn_pc + j, b)) { insn_ok = false; break; }
-                            insn |= (uint32_t)b << (j * 8);
-                        }
-                        if (!insn_ok) break;
-                        // Stop at branches — we can't assume fallthrough past them
-                        if ((insn & 0xfc000000) == 0x14000000 || // B
-                            (insn & 0xfc000000) == 0x94000000 || // BL
-                            (insn & 0xfffffc1f) == 0xd61f0000 || // BR
-                            (insn & 0xfffffc1f) == 0xd63f0000 || // BLR
-                            insn == 0xd65f03c0 ||                // RET
-                            (insn & 0xff000010) == 0x54000000 || // B.cond
-                            (insn & 0x7e000000) == 0x34000000 || // CBZ/CBNZ
-                            (insn & 0x7e000000) == 0x36000000)   // TBZ/TBNZ
-                            break;
-                        // Check if instruction is a load (LDR/LDRSB/LDRSH/LDRSW/LDRB/LDRH)
-                        uint32_t rt = insn & 0x1f;
-                        bool is_load = false;
-                        bool is_32bit = false;
-                        uint32_t rn = (insn >> 5) & 0x1f;
-                        int has_writeback = 0;
-                        if ((insn & 0x3b200c00) == 0x38000400 || // post-indexed
-                            (insn & 0x3b200c00) == 0x38000c00 || // pre-indexed
-                            (insn & 0x3b200c00) == 0x38000000) { // unscaled
-                            uint32_t opc = (insn >> 22) & 3;
-                            is_load = (opc != 0); // opc=0 is store, 1/2/3 are loads
-                            is_32bit = ((insn >> 22) & 1) == 0 && opc >= 2;
-                            uint32_t idx_type = (insn >> 10) & 3;
-                            if (idx_type == 1 || idx_type == 3) // post=01, pre=11
-                                has_writeback = 1;
-                        }
-                        // LDR/LDRB/LDRH unsigned offset
-                        if ((insn & 0x3b400000) == 0x39400000) {
-                            is_load = true;
-                        }
-                        // LDR register offset
-                        if ((insn & 0x3b200c00) == 0x38200800) {
-                            uint32_t opc = (insn >> 22) & 3;
-                            is_load = (opc != 0);
-                        }
-                        // LDP (load pair)
-                        uint32_t ldp_rt2 = 0;
-                        bool is_ldp = false;
-                        if ((insn & 0x7fc00000) == 0xa9400000 || // LDP x
-                            (insn & 0x7fc00000) == 0x29400000) { // LDP w
-                            is_load = true;
-                            is_ldp = true;
-                            rn = (insn >> 5) & 0x1f;
-                            ldp_rt2 = (insn >> 10) & 0x1f;
-                        }
-                        if (is_load && rt < 31) {
-                            cpu->regs[rt] = 0;
-                            if (is_ldp && ldp_rt2 < 31)
-                                cpu->regs[ldp_rt2] = 0;
-                            (void)is_32bit;
-                            // Handle writeback for pre/post-indexed loads
-                            if (has_writeback && rn < 31) {
-                                int32_t imm9 = (int32_t)((insn >> 12) & 0x1ff);
-                                if (imm9 & 0x100) imm9 |= ~0x1ff; // sign-extend
-                                cpu->regs[rn] = (cpu->regs[rn] + imm9) & 0xffffffffffffULL;
-                            }
-                            cpu->pc = insn_pc + 4;
-                            goto gpf_handled;
-                        }
-                    }
-                }
-            }
-#endif
+            // A read of unmapped memory is a SIGSEGV, as on Linux. Programs
+            // rely on it: HotSpot's implicit null checks and Go's nil checks
+            // read near address 0 and expect the fault. A recovery here used
+            // to make such reads return 0 and step over the load, so the JVM
+            // went on with a null klass and jumped into the bytes of its own
+            // code.
 
             struct siginfo_ info = {
                 .code = mem_segv_reason(current->mem, cpu->segfault_addr),
