@@ -266,6 +266,19 @@ int_t sys_sched_getaffinity(pid_t_ pid, dword_t cpusetsize, addr_t cpuset_addr) 
     // return the number of bytes written
     return sizeof(cpuset);
 }
+// Every task reports CPU 0 on NUMA node 0. Tasks are host threads that iSH does
+// not pin, so any answer may be stale by the time it is read, as on Linux.
+// HotSpot refuses to start without this call.
+int_t sys_getcpu(addr_t cpu_addr, addr_t node_addr, addr_t UNUSED(tcache_addr)) {
+    STRACE("getcpu(%#x, %#x)", cpu_addr, node_addr);
+    uint32_t zero = 0;
+    if (cpu_addr != 0 && user_put(cpu_addr, zero))
+        return _EFAULT;
+    if (node_addr != 0 && user_put(node_addr, zero))
+        return _EFAULT;
+    return 0;
+}
+
 int_t sys_sched_setaffinity(pid_t_ UNUSED(pid), dword_t UNUSED(cpusetsize), addr_t UNUSED(cpuset_addr)) {
     // meh
     return 0;
