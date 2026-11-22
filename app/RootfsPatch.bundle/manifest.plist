@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>version</key>
-    <integer>6</integer>
+    <integer>7</integer>
     <key>files</key>
     <array>
         <dict>
@@ -17,6 +17,18 @@
             <string>files/lib/fetch-polyfill.js</string>
             <key>dst</key>
             <string>/lib/fetch-polyfill.js</string>
+        </dict>
+        <dict>
+            <key>src</key>
+            <string>files/etc/motd</string>
+            <key>dst</key>
+            <string>/etc/motd</string>
+        </dict>
+        <dict>
+            <key>src</key>
+            <string>files/etc/profile.d/ish-aliases.sh</string>
+            <key>dst</key>
+            <string>/etc/profile.d/ish-aliases.sh</string>
         </dict>
     </array>
 </dict>

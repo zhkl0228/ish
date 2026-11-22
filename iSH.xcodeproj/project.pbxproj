@@ -138,6 +138,7 @@
 		AA000041AF96D90D00FFB7A4 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BB792B5C1F96D90D00FFB7A4 /* Assets.xcassets */; };
 		AA000042AF96D90D00FFB7A4 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = BB792B5E1F96D90D00FFB7A4 /* LaunchScreen.storyboard */; };
 		AA000043AF96D90D00FFB7A4 /* Settings.bundle in Resources */ = {isa = PBXBuildFile; fileRef = BBBF7B5B2415CDBB00EC4C14 /* Settings.bundle */; };
+		AA000401AF96D90D00FFB7A4 /* RootfsPatch.bundle in Resources */ = {isa = PBXBuildFile; fileRef = AA000400AF96D90D00FFB7A4 /* RootfsPatch.bundle */; };
 		AA000044AF96D90D00FFB7A4 /* Icons.plist in Resources */ = {isa = PBXBuildFile; fileRef = BB0F552D239F8A790032A2A1 /* Icons.plist */; };
 		AA000045AF96D90D00FFB7A4 /* About.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = BBBCE7E521D2F02200CA00B3 /* About.storyboard */; };
 		AA000046AF96D90D00FFB7A4 /* Roots.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = BB10E5CF248DC21D009C7A74 /* Roots.storyboard */; };
@@ -886,6 +887,7 @@
 		BBBDDF902CE00F8D0071F1F3 /* StaticLibLinuxUser.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = StaticLibLinuxUser.xcconfig; sourceTree = "<group>"; };
 		BBBDDF912CE0122F0071F1F3 /* emu_asbestos.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; name = emu_asbestos.c; path = linux/emu_asbestos.c; sourceTree = SOURCE_ROOT; };
 		BBBF7B5B2415CDBB00EC4C14 /* Settings.bundle */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.plug-in"; path = Settings.bundle; sourceTree = "<group>"; };
+		AA000400AF96D90D00FFB7A4 /* RootfsPatch.bundle */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.plug-in"; path = RootfsPatch.bundle; sourceTree = "<group>"; };
 		BBBF9CBB27C217A6002A30F7 /* PasteboardDeviceLinux.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = PasteboardDeviceLinux.c; sourceTree = "<group>"; };
 		BBBF9CC027C441C0002A30F7 /* fix_path.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = fix_path.h; sourceTree = "<group>"; };
 		BBBF9CC127C441C0002A30F7 /* fake-db.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "fake-db.h"; sourceTree = "<group>"; };
@@ -1282,6 +1284,7 @@
 				BB10E5C1248DB961009C7A74 /* Roots */,
 				BBFB557221586C6600DFE6DE /* Utilities */,
 				BBBF7B5B2415CDBB00EC4C14 /* Settings.bundle */,
+				AA000400AF96D90D00FFB7A4 /* RootfsPatch.bundle */,
 				BB792B5C1F96D90D00FFB7A4 /* Assets.xcassets */,
 				BB1B9A4123A5E92A00414052 /* Icons */,
 				BB792B5E1F96D90D00FFB7A4 /* LaunchScreen.storyboard */,
@@ -2032,6 +2035,7 @@
 				AA000041AF96D90D00FFB7A4 /* Assets.xcassets in Resources */,
 				AA000042AF96D90D00FFB7A4 /* LaunchScreen.storyboard in Resources */,
 				AA000043AF96D90D00FFB7A4 /* Settings.bundle in Resources */,
+				AA000401AF96D90D00FFB7A4 /* RootfsPatch.bundle in Resources */,
 				AA000044AF96D90D00FFB7A4 /* Icons.plist in Resources */,
 				AA000045AF96D90D00FFB7A4 /* About.storyboard in Resources */,
 				AA000046AF96D90D00FFB7A4 /* Roots.storyboard in Resources */,
