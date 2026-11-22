@@ -1,9 +1,17 @@
 #include <errno.h>
 #include <limits.h>
+#include <stdlib.h>
 #include "kernel/task.h"
 #include "util/sync.h"
 #include "debug.h"
 #include "kernel/errno.h"
+
+#if LOCK_SLOW_TRACE
+int g_lock_slow_trace = 0;
+__attribute__((constructor)) static void init_lock_slow_trace(void) {
+    g_lock_slow_trace = getenv("ISH_LOCK_TRACE") ? 1 : 0;
+}
+#endif
 
 void cond_init(cond_t *cond) {
     pthread_condattr_t attr;
