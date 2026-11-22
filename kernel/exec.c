@@ -317,8 +317,13 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
     // STACK TIME!
 
 #ifdef GUEST_ARM64
-    // ARM64: stack near top of 48-bit address space
-    if ((err = pt_map_nothing(current->mem, STACK_INIT_PAGE, 1, P_WRITE | P_GROWSDOWN)) < 0)
+    // ARM64: stack near top of 48-bit address space. Linux maps 128 KB of
+    // stack below the arguments at exec (setup_arg_pages' stack_expand), and
+    // musl's pthread_getattr_np measures the main thread's stack by probing
+    // that mapping, so mapping one page made it report a 4 KB stack to
+    // programs that size their stack checks by it.
+    if ((err = pt_map_nothing(current->mem, STACK_INIT_PAGE - (STACK_INIT_PAGES - 1), STACK_INIT_PAGES,
+                    P_WRITE | P_GROWSDOWN)) < 0)
         goto beyond_hope;
     if ((err = pt_map_nothing(current->mem, STACK_TOP_PAGE, 1, P_READ)) < 0)
         goto beyond_hope;

@@ -61,7 +61,8 @@ struct mem {
 // index 0 and stay hot in cache). The 48-bit infrastructure remains available
 // for explicit high-address mmap hints (e.g., V8 CodeRange).
 #define STACK_TOP_PAGE    0xffffeULL        // guard page at 0xffffe000
-#define STACK_INIT_PAGE   0xffffdULL        // initial stack page (growsdown)
+#define STACK_INIT_PAGE   0xffffdULL        // top page of the initial stack (growsdown)
+#define STACK_INIT_PAGES  32                // initial stack: 128 KB, as Linux maps at exec
 #define STACK_TOP_ADDR    0xffffe000ULL     // SP starts here
 #define MMAP_HOLE_START   0xefffdULL        // mmap search starts here (same as x86)
 #define MMAP_HOLE_END     0x100ULL          // mmap search ends here (above guard pages)
