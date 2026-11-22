@@ -65,9 +65,11 @@ noreturn void do_exit(int status) {
         dump_pc_hist();
         if (current->pid == 1) dump_pc_trace();
     }
+#ifdef GUEST_ARM64
     { extern void dump_wx_stats(void);
       static int wx_dumped = 0;
       if (!wx_dumped && current && current->pid == 1) { wx_dumped = 1; dump_wx_stats(); } }
+#endif
     // If this thread was already marked as leaked by the safety valve,
     // the group leader has finished exiting and the group struct may be
     // freed. Don't touch any shared state — just kill the host thread.
@@ -522,8 +524,10 @@ static void halt_system(void) {
     restore_termios();
     extern void dump_pc_hist(void);
     dump_pc_hist();
+#ifdef GUEST_ARM64
     extern void dump_wx_stats(void);
     dump_wx_stats();
+#endif
 
     // Force exit the entire host process. Orphaned guest threads
     // (stuck in JIT loops after do_exit_group force cleanup) keep

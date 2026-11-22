@@ -153,6 +153,13 @@ static int netlink_stub_reply(struct fd *fd, const void *req, size_t req_len) {
     return (int) req_len;
 }
 
+// A guest iovec: 64-bit base and length on arm64, 32-bit on i386.
+#ifdef GUEST_ARM64
+typedef struct iovec64_ guest_iovec_t;
+#else
+typedef struct iovec_ guest_iovec_t;
+#endif
+
 static int netlink_stub_sendmsg(struct fd *sock, addr_t msghdr_addr) {
     addr_t iov_addr; uint64_t iovlen;
 #ifdef GUEST_ARM64
@@ -166,7 +173,7 @@ static int netlink_stub_sendmsg(struct fd *sock, addr_t msghdr_addr) {
 #endif
     char req[4096]; size_t total = 0;
     for (uint64_t i = 0; i < iovlen && total < sizeof(req); i++) {
-        struct iovec64_ iv;
+        guest_iovec_t iv;
         if (user_get(iov_addr + i * sizeof(iv), iv)) return _EFAULT;
         size_t n = (size_t) iv.len;
         if (n > sizeof(req) - total) n = sizeof(req) - total;
@@ -261,7 +268,7 @@ static int netlink_stub_recvmsg(struct fd *sock, addr_t msghdr_addr, int flags) 
 
     size_t off = 0;
     for (uint64_t i = 0; i < iovlen && off < have_total; i++) {
-        struct iovec64_ iv;
+        guest_iovec_t iv;
         if (user_get(iov_addr + i * sizeof(iv), iv)) return _EFAULT;
         size_t want = (size_t) iv.len, have = have_total - off;
         if (want > have) want = have;

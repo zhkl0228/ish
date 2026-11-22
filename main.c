@@ -53,6 +53,7 @@ extern void jit_crash_trampoline(void);
 #ifdef ISH_JIT
 #include "asbestos/guest-arm64/jit.h"
 #endif
+#ifdef GUEST_ARM64
 #define CRASH_CPU_pc                offsetof(struct cpu_state, pc)
 #define CRASH_CPU_segfault_addr     offsetof(struct cpu_state, segfault_addr)
 #define CRASH_CPU_segfault_was_write offsetof(struct cpu_state, segfault_was_write)
@@ -67,6 +68,7 @@ static_assert(CRASH_CPU_pc                 == CPU_pc,                 "cpu-offse
 static_assert(CRASH_CPU_segfault_addr      == CPU_segfault_addr,      "cpu-offsets drift: segfault_addr");
 static_assert(CRASH_CPU_segfault_was_write == CPU_segfault_was_write, "cpu-offsets drift: segfault_was_write");
 static_assert(CRASH_LOCAL_jit_exit_sp      == LOCAL_jit_exit_sp,      "cpu-offsets drift: jit_exit_sp");
+#endif
 
 #ifdef __aarch64__
 // Host register access in a signal ucontext: Darwin keeps a pointer to the
@@ -440,7 +442,9 @@ static void ish_cli_memory_governor_start(void) {
 int main(int argc, char *const argv[]) {
     ish_signpost_init();
     atexit(dump_pc_hist);
+#ifdef GUEST_ARM64
     { extern void dump_wx_stats(void); atexit(dump_wx_stats); }
+#endif
     // Write watchpoint (diagnostic): ISH_WATCH_PAGE=<hex page addr> arms the
     // per-store page check in the write gadgets; ISH_WATCH_LO/HI narrow which
     // hits get recorded.
