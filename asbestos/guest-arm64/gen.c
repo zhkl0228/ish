@@ -279,6 +279,7 @@ extern void gadget_dup_elem_scalar(void);  // DUP <V>d, Vn.<T>[idx] (element to 
 extern void gadget_ins_elem_vec(void);     // INS Vd.<T>[idx1], Vn.<T>[idx2] (element to element)
 extern void gadget_mov_v_to_gpr(void);     // MOV Xd, Vn.D[0]
 extern void gadget_umov_vec_to_gpr(void);  // UMOV/MOV Wd, Vn.<T>[idx]
+extern void gadget_smov_vec_to_gpr(void);  // SMOV Wd/Xd, Vn.<T>[idx]
 extern void gadget_ins_gpr_to_vec_s(void); // MOV Vd.S[idx], Wn (INS from GPR)
 extern void gadget_ins_gpr_to_vec_d(void); // MOV Vd.D[idx], Xn (INS from GPR)
 extern void gadget_ins_gpr_to_vec_b(void); // MOV Vd.B[idx], Wn (INS from GPR, byte)
@@ -4822,6 +4823,34 @@ static int gen_simd_fp(struct gen_state *state, uint32_t insn) {
         gen(state, (unsigned long) gadget_umov_vec_to_gpr);
         // Pack: rd | rn<<8 | elem_size<<16 | index<<20
         gen(state, rd | (rn << 8) | (elem_size << 16) | (index << 20));
+        return 1;
+    }
+
+    // SMOV (to general) - extract vector element to GPR, sign-extended
+    // Matches: 0Q001110 000 imm5 0 0101 1 Rn Rd
+    // Q=0: Wd from B or H. Q=1: Xd from B, H or S.
+    if ((insn & 0xbfe0fc00) == 0x0e002c00) {
+        uint32_t q = (insn >> 30) & 1;
+        uint32_t imm5 = (insn >> 16) & 0x1f;
+        uint32_t rn = (insn >> 5) & 0x1f;
+        uint32_t rd = insn & 0x1f;
+
+        int elem_size;
+        if (imm5 & 0x1)
+            elem_size = 0;  // B
+        else if (imm5 & 0x2)
+            elem_size = 1;  // H
+        else if ((imm5 & 0x4) && q)
+            elem_size = 2;  // S, only to Xd
+        else {
+            gen_interrupt(state, INT_UNDEFINED);
+            return 0;
+        }
+        uint32_t index = imm5 >> (elem_size + 1);
+
+        gen(state, (unsigned long) gadget_smov_vec_to_gpr);
+        // Pack: rd | rn<<8 | elem_size<<16 | index<<20 | q<<24
+        gen(state, rd | (rn << 8) | (elem_size << 16) | (index << 20) | (q << 24));
         return 1;
     }
 

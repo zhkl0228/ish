@@ -4428,6 +4428,52 @@ msub_store:
     gret
 
 /*
+ * SMOV - Move vector element to GPR (sign-extend)
+ * Code stream: [gadget addr][rd | rn<<8 | elem_size<<16 | index<<20 | q<<24]
+ *
+ * elem_size: 0=B, 1=H, 2=S
+ * q: 0 = Wd (bits 63:32 cleared), 1 = Xd
+ */
+.gadget smov_vec_to_gpr
+    ldr x8, [_pc]
+    add _pc, _pc, #8
+
+    and x9, x8, #0x1f       // rd
+    ubfx x10, x8, #8, #5    // rn
+    ubfx x11, x8, #16, #2   // elem_size
+    ubfx x12, x8, #20, #4   // index
+    ubfx x13, x8, #24, #1   // q
+
+    // &Vn + (index << elem_size): the element's byte offset
+    add x14, _cpu, #CPU_fp
+    add x14, x14, x10, lsl #4
+    lsl x15, x12, x11
+    add x14, x14, x15
+
+    cmp x11, #1
+    b.lt .Lsmov_b
+    b.eq .Lsmov_h
+    ldrsw x3, [x14]
+    b .Lsmov_width
+.Lsmov_b:
+    ldrsb x3, [x14]
+    b .Lsmov_width
+.Lsmov_h:
+    ldrsh x3, [x14]
+
+.Lsmov_width:
+    cbnz x13, .Lsmov_store
+    mov w3, w3              // Wd: clear bits 63:32
+
+.Lsmov_store:
+    cmp x9, #31
+    b.eq .Lsmov_done
+    add x14, _cpu, #CPU_x0
+    str x3, [x14, x9, lsl #3]
+.Lsmov_done:
+    gret
+
+/*
  * MOV/INS - Insert GPR into vector element (S size)
  * Code stream: [gadget addr][rd | rn<<8 | index<<16]
  *
