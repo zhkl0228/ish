@@ -193,7 +193,11 @@ noreturn void do_exit(int status) {
 
         // notify parent that we died
         struct task *parent = leader->parent;
-        if (parent == NULL && current->pid != 1) {
+        // Whether this is init goes by the leader: the last thread out of a
+        // process need not be its first. Going by current, init whose last
+        // thread was another one (Java's, after exit_group) took itself for
+        // an orphan, became its own parent and a zombie, and never halted.
+        if (parent == NULL && leader->pid != 1) {
             // Non-init process with no parent - try to find one
             // This can happen during reparenting or if parent exited first
             parent = pid_get_task(1); // Reparent to init
@@ -206,7 +210,7 @@ noreturn void do_exit(int status) {
             // for the command line (exit_hook).
             halt_system();
             if (exit_hook != NULL)
-                exit_hook(current, status);
+                exit_hook(leader, status);
             _exit(0);
         } else {
             leader->zombie = true;
@@ -226,7 +230,7 @@ noreturn void do_exit(int status) {
         }
 
         if (exit_hook != NULL)
-            exit_hook(current, status);
+            exit_hook(leader, status);
     skip_zombie_notify: ;
     }
 
@@ -481,11 +485,15 @@ noreturn void do_exit_group(int status) {
     do_exit(status);
 }
 
+// Tasks of processes other than init. The thread halting the system is init's
+// last, and need not be pid 1.
 static int halt_count_tasks(void) {
     int tasks = 0;
-    for (int i = 2; i < MAX_PID; i++)
-        if (pid_get_task(i) != NULL)
+    for (int i = 2; i < MAX_PID; i++) {
+        struct task *task = pid_get_task(i);
+        if (task != NULL && task->group != current->group)
             tasks++;
+    }
     return tasks;
 }
 
@@ -498,7 +506,7 @@ static int halt_count_tasks(void) {
 static void halt_system(void) {
     for (int i = 2; i < MAX_PID; i++) {
         struct task *task = pid_get_task(i);
-        if (task != NULL)
+        if (task != NULL && task->group != current->group)
             deliver_signal(task, SIGKILL_, SIGINFO_NIL);
     }
     // A task blocked in host code that never returns to the guest cannot

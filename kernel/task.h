@@ -307,6 +307,7 @@ __attribute__((warn_unused_result))
 int task_start(struct task *task);
 void task_run_current(void);
 
+// Called when a process exits, with its leader (whose pid is the process id).
 extern void (*exit_hook)(struct task *task, int code);
 
 typedef int (*ish_timer_tick_hook_t)(void);

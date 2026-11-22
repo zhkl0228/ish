@@ -303,6 +303,15 @@ else
         exit_failed=$((exit_failed + 1))
     fi
     rm -f "$GUEST_ROOT/tmp/regress_init_fault" "$GUEST_ROOT/tmp/regress_init_fault.c"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_init_thread_exit" \
+            tests/regress/regress_init_thread_exit.c; then
+        check_exit 5 /tmp/regress_init_thread_exit exit
+        check_exit 0 /tmp/regress_init_thread_exit return
+    else
+        echo "failed to build regress_init_thread_exit" >&2
+        exit_failed=$((exit_failed + 1))
+    fi
+    rm -f "$GUEST_ROOT/tmp/regress_init_thread_exit"
     echo "$exit_passed passed, $exit_failed failed"
     [ "$exit_failed" = 0 ] || status=1
 
