@@ -107,7 +107,7 @@
     if (cell == self.sendFeedback) {
         [UIApplication openURL:@"mailto:tblodt@icloud.com?subject=Feedback%20for%20iSH"];
     } else if (cell == self.openGithub) {
-        [UIApplication openURL:@"https://github.com/ish-app/ish"];
+        [UIApplication openURL:@"https://github.com/zhkl0228/ish"];
     } else if (cell == self.openFediverse) {
         [UIApplication openURL:@"https://publ.ish.app/ish"];
     } else if (cell == self.openDiscord) {

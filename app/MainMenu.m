@@ -234,8 +234,8 @@ static UIMenu *ClipboardMenu(void) {
 static NSArray<UIMenuElement *> *HelpItems(void) {
     return @[
         Link(@"iSH Wiki", @"book", @"https://github.com/ish-app/ish/wiki"),
-        Link(@"Fork on GitHub", @"chevron.left.forwardslash.chevron.right", @"https://github.com/nicscl/ish"),
-        Link(@"Report an Issue", @"exclamationmark.bubble", @"https://github.com/nicscl/ish/issues/new"),
+        Link(@"Fork on GitHub", @"chevron.left.forwardslash.chevron.right", @"https://github.com/zhkl0228/ish"),
+        Link(@"Report an Issue", @"exclamationmark.bubble", @"https://github.com/zhkl0228/ish/issues/new"),
     ];
 }
 
