@@ -330,4 +330,18 @@ struct tcp_info_ {
     uint32_t total_retrans;
 };
 
+// One open IPv4 or IPv6 socket, for /proc/net/tcp, tcp6, udp and udp6.
+struct sock_inet_entry {
+    uint8_t local[16], remote[16]; // network byte order; IPv4 uses the first 4
+    uint16_t local_port, remote_port;
+    int state; // Linux's TCP_* number: 1 ESTABLISHED ... 10 LISTEN, 11 CLOSING
+    unsigned tx_queue, rx_queue;
+    uid_t_ uid; // effective uid of a process that has it open
+    unsigned long inode;
+};
+// The open sockets of family (AF_INET_, AF_INET6_) and type (SOCK_STREAM_,
+// SOCK_DGRAM_), each once however many descriptors share it. Returns how many
+// (free() *entries) or a negative errno.
+int sock_inet_list(int family, int type, struct sock_inet_entry **entries);
+
 #endif

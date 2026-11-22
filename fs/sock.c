@@ -1,5 +1,8 @@
+#include <arpa/inet.h>
 #include <fcntl.h>
 #include <netinet/tcp.h>
+#include <stdatomic.h>
+#include <sys/ioctl.h>
 #include <poll.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -293,6 +296,16 @@ static int netlink_stub_recvmsg(struct fd *sock, addr_t msghdr_addr, int flags) 
     return (flags & MSG_TRUNC_) ? (int) n : (int) off;
 }
 
+// Sockets get inode numbers of their own, as from Linux's sockfs: fstat
+// reports one, /proc/<pid>/fd shows socket:[inode], and /proc/net/tcp and udp
+// list it, which is how netstat -p and ss -p find a socket's process. They
+// start at 10000, as Linux's are never short: net-tools' netstat ignores a
+// link shorter than "socket:[NN]".
+static _Atomic unsigned long sock_last_inode = 9999;
+static unsigned long sock_new_inode(void) {
+    return atomic_fetch_add(&sock_last_inode, 1) + 1;
+}
+
 static fd_t netlink_stub_socket(dword_t type, dword_t protocol) {
     int sv[2];
     if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) < 0)
@@ -304,6 +317,7 @@ static fd_t netlink_stub_socket(dword_t type, dword_t protocol) {
         return _ENOMEM;
     }
     fd->stat.mode = S_IFSOCK | 0666;
+    fd->stat.inode = sock_new_inode();
     fd->real_fd = sv[0];
     fd->socket.domain = AF_NETLINK_;
     fd->socket.type = type & SOCKET_TYPE_MASK;
@@ -344,6 +358,7 @@ static fd_t sock_fd_create(int sock_fd, int domain, int type, int protocol) {
         return _ENOMEM;
     }
     fd->stat.mode = S_IFSOCK | 0666;
+    fd->stat.inode = sock_new_inode();
     fd->real_fd = sock_fd;
     fd->socket.domain = domain;
     fd->socket.type = type & SOCKET_TYPE_MASK;
@@ -1327,6 +1342,27 @@ int_t sys_setsockopt(fd_t sock_fd, dword_t level, dword_t option, addr_t value_a
     return 0;
 }
 
+#if defined(__APPLE__)
+// Darwin's TCPS_* connection states as Linux's TCP_*. They are listed in
+// netinet/tcp_fsm.h, which only macOS has, not iOS. -1 for anything else.
+static int tcp_state_from_darwin(unsigned state) {
+    switch (state) {
+        case 0: return 7;   // CLOSED -> CLOSE
+        case 1: return 10;  // LISTEN
+        case 2: return 2;   // SYN_SENT
+        case 3: return 3;   // SYN_RECEIVED -> SYN_RECV
+        case 4: return 1;   // ESTABLISHED
+        case 5: return 8;   // CLOSE_WAIT
+        case 6: return 4;   // FIN_WAIT_1 -> FIN_WAIT1
+        case 7: return 11;  // CLOSING
+        case 8: return 9;   // LAST_ACK
+        case 9: return 5;   // FIN_WAIT_2 -> FIN_WAIT2
+        case 10: return 6;  // TIME_WAIT
+    }
+    return -1;
+}
+#endif
+
 int_t sys_getsockopt(fd_t sock_fd, dword_t level, dword_t option, addr_t value_addr, addr_t len_addr) {
     STRACE("getsockopt(%d, %d, %d, %#x, %#x)", sock_fd, level, option, value_addr, len_addr);
     struct fd *sock = sock_getfd(sock_fd);
@@ -1384,23 +1420,13 @@ int_t sys_getsockopt(fd_t sock_fd, dword_t level, dword_t option, addr_t value_a
         if (err < 0)
             return errno_map();
 
-        // The possible keys for this table are in netinet/tcp_fsm.h, but that
-        // header isn't available on iOS, only macOS.
-        static const uint8_t tcp_state_table[] = {
-            7, // TCPS_CLOSED
-            10, // TCPS_LISTEN
-            2, // TCPS_SYN_SENT
-            3, // TCPS_SYN_RECEIVED
-            1, // TCPS_ESTABLISHED
-            8, // TCPS_CLOSE_WAIT
-            4, // TCPS_FIN_WAIT_1
-            11, // TCPS_CLOSING
-            9, // TCPS_LAST_ACK
-            5, // TCPS_FIN_WAIT_2
-            6, // TCPS_TIME_WAIT
-        };
+        int state = tcp_state_from_darwin(conn_info.tcpi_state);
+        if (state < 0) {
+            printk("getsockopt(TCP_INFO): host reports unknown TCP state %u\n", conn_info.tcpi_state);
+            return _EIO;
+        }
         struct tcp_info_ info = {
-            .state = tcp_state_table[conn_info.tcpi_state],
+            .state = state,
             .options = conn_info.tcpi_options,
             .snd_wscale = conn_info.tcpi_snd_wscale,
             .rcv_wscale = conn_info.tcpi_rcv_wscale,
@@ -2041,6 +2067,177 @@ static int sock_close(struct fd *fd) {
         unlock(&fd->lock);
     }
     return realfs_close(fd);
+}
+
+// ===== /proc/net/tcp, tcp6, udp, udp6 =====
+
+// The host's TCP state of a socket that is not listening, as Linux's TCP_*
+// number. -1 if the host cannot say (the socket went away meanwhile), -2 if it
+// says something not in that list (logged with the socket's inode).
+static int sock_tcp_state(struct fd *sock) {
+    unsigned host_state;
+#if defined(__APPLE__)
+    struct tcp_connection_info info;
+    socklen_t len = sizeof(info);
+    if (getsockopt(sock->real_fd, IPPROTO_TCP, TCP_CONNECTION_INFO, &info, &len) < 0)
+        return -1;
+    host_state = info.tcpi_state;
+    int state = tcp_state_from_darwin(host_state);
+#else
+    struct tcp_info info;
+    socklen_t len = sizeof(info);
+    if (getsockopt(sock->real_fd, IPPROTO_TCP, TCP_INFO, &info, &len) < 0)
+        return -1;
+    host_state = info.tcpi_state;
+    int state = host_state >= 1 && host_state <= 11 ? (int) host_state : -1;
+#endif
+    if (state < 0) {
+        printk("/proc/net: skipping socket %lu, host TCP state %u is unknown\n", sock->stat.inode, host_state);
+        return -2;
+    }
+    return state;
+}
+
+// Bytes waiting to be sent.
+static unsigned sock_tx_queue(int real_fd) {
+    int bytes = 0;
+#if defined(__APPLE__)
+    socklen_t len = sizeof(bytes);
+    if (getsockopt(real_fd, SOL_SOCKET, SO_NWRITE, &bytes, &len) < 0)
+        return 0;
+#else
+    if (ioctl(real_fd, TIOCOUTQ, &bytes) < 0)
+        return 0;
+#endif
+    return bytes;
+}
+
+static void sockaddr_to_entry(const struct sockaddr_storage *addr, uint8_t ip[16], uint16_t *port) {
+    memset(ip, 0, 16);
+    *port = 0;
+    if (addr->ss_family == AF_INET) {
+        const struct sockaddr_in *in = (const struct sockaddr_in *) addr;
+        memcpy(ip, &in->sin_addr, 4);
+        *port = ntohs(in->sin_port);
+    } else if (addr->ss_family == AF_INET6) {
+        const struct sockaddr_in6 *in6 = (const struct sockaddr_in6 *) addr;
+        memcpy(ip, &in6->sin6_addr, 16);
+        *port = ntohs(in6->sin6_port);
+    }
+}
+
+// Fills everything but uid and inode. Returns false when the host cannot tell
+// (the socket was closed meanwhile, or an unknown TCP state, which
+// sock_tcp_state logs).
+static bool sock_inet_query(struct fd *sock, struct sock_inet_entry *e) {
+    struct sockaddr_storage addr;
+    socklen_t len = sizeof(addr);
+    if (getsockname(sock->real_fd, (struct sockaddr *) &addr, &len) < 0)
+        return false;
+    sockaddr_to_entry(&addr, e->local, &e->local_port);
+    len = sizeof(addr);
+    bool connected = getpeername(sock->real_fd, (struct sockaddr *) &addr, &len) == 0;
+    if (connected)
+        sockaddr_to_entry(&addr, e->remote, &e->remote_port);
+    else
+        sockaddr_to_entry(&(struct sockaddr_storage) {}, e->remote, &e->remote_port);
+
+    int listening = 0;
+    len = sizeof(listening);
+    if (sock->socket.type == SOCK_STREAM_ &&
+            getsockopt(sock->real_fd, SOL_SOCKET, SO_ACCEPTCONN, &listening, &len) == 0 && listening) {
+        e->state = 10; // LISTEN
+        e->tx_queue = e->rx_queue = 0;
+        return true;
+    }
+    if (sock->socket.type == SOCK_STREAM_) {
+        e->state = sock_tcp_state(sock);
+        if (e->state < 0)
+            return false;
+    } else {
+        e->state = connected ? 1 : 7; // ESTABLISHED : CLOSE, as Linux shows UDP
+    }
+    int bytes = 0;
+    e->rx_queue = ioctl(sock->real_fd, FIONREAD, &bytes) == 0 ? (unsigned) bytes : 0;
+    e->tx_queue = sock_tx_queue(sock->real_fd);
+    return true;
+}
+
+int sock_inet_list(int family, int type, struct sock_inet_entry **entries) {
+    // Collect the descriptor tables under pids_lock, then look into each with
+    // only its own lock held: other paths take a table's lock before
+    // pids_lock (see proc_pid_fd_readdir).
+    struct table { struct fdtable *files; uid_t_ uid; } *tables = NULL;
+    size_t n_tables = 0;
+    int err = 0;
+    lock(&pids_lock);
+    for (pid_t_ pid = 1; pid < MAX_PID; pid++) {
+        struct task *task = pid_get_task(pid);
+        if (task == NULL || task->files == NULL)
+            continue;
+        bool seen = false;
+        for (size_t i = 0; i < n_tables && !seen; i++)
+            seen = tables[i].files == task->files;
+        if (seen)
+            continue;
+        struct table *grown = realloc(tables, (n_tables + 1) * sizeof(*tables));
+        if (grown == NULL) {
+            err = _ENOMEM;
+            break;
+        }
+        tables = grown;
+        task->files->refcount++;
+        tables[n_tables++] = (struct table) {task->files, task->euid};
+    }
+    unlock(&pids_lock);
+
+    struct sock_open { struct fd *fd; uid_t_ uid; } *socks = NULL;
+    size_t n_socks = 0;
+    for (size_t t = 0; t < n_tables; t++) {
+        struct fdtable *files = tables[t].files;
+        lock(&files->lock);
+        for (unsigned f = 0; f < files->size && err == 0; f++) {
+            struct fd *fd = files->files[f];
+            if (fd == NULL || fd->ops != &socket_fdops ||
+                    fd->socket.domain != family || fd->socket.type != type)
+                continue;
+            bool seen = false;
+            for (size_t i = 0; i < n_socks && !seen; i++)
+                seen = socks[i].fd == fd;
+            if (seen)
+                continue;
+            struct sock_open *grown = realloc(socks, (n_socks + 1) * sizeof(*socks));
+            if (grown == NULL) {
+                err = _ENOMEM;
+                break;
+            }
+            socks = grown;
+            socks[n_socks++] = (struct sock_open) {fd_retain(fd), tables[t].uid};
+        }
+        unlock(&files->lock);
+        fdtable_release(files);
+    }
+    free(tables);
+
+    struct sock_inet_entry *list = err == 0 && n_socks > 0 ? calloc(n_socks, sizeof(*list)) : NULL;
+    if (err == 0 && n_socks > 0 && list == NULL)
+        err = _ENOMEM;
+    size_t n = 0;
+    for (size_t i = 0; i < n_socks; i++) {
+        if (err == 0 && sock_inet_query(socks[i].fd, &list[n])) {
+            list[n].uid = socks[i].uid;
+            list[n].inode = socks[i].fd->stat.inode;
+            n++;
+        }
+        fd_close(socks[i].fd);
+    }
+    free(socks);
+    if (err < 0) {
+        free(list);
+        return err;
+    }
+    *entries = list;
+    return (int) n;
 }
 
 const struct fd_ops socket_fdops = {

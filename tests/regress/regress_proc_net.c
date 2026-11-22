@@ -1,0 +1,115 @@
+// Regression test for /proc/net/tcp and udp and socket links in /proc/self/fd.
+//
+// iSH had no /proc/net/tcp, udp, tcp6 or udp6, so netstat (net-tools and
+// busybox) printed "no support for `AF INET (tcp)' on this system" and ss
+// listed nothing, and /proc/<pid>/fd showed sockets as anon_inode:[unknown],
+// so nothing could tell which process owned a socket.
+//
+// Opens a listening TCP socket, a connected pair with unread data and a bound
+// UDP socket, then finds each by its inode (fstat) in /proc/net/tcp or udp and
+// checks its addresses, state and receive queue, and that /proc/self/fd links
+// to socket:[inode]. Running natively passes.
+//
+// Build: aarch64-linux-musl-gcc -static -O0 -o regress_proc_net regress_proc_net.c
+// Run:   ish -r <rootfs> /tmp/regress_proc_net
+
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+static int passed, failed;
+
+static void check(const char *name, int ok) {
+    if (ok) {
+        passed++;
+    } else {
+        failed++;
+        printf("FAIL %s\n", name);
+    }
+}
+
+struct row {
+    unsigned local_ip, local_port, remote_ip, remote_port, state, tx, rx;
+    unsigned long inode;
+};
+
+// The row of file for the socket with inode, or 0 if there is none.
+static int find_row(const char *file, unsigned long inode, struct row *r) {
+    FILE *f = fopen(file, "r");
+    if (f == NULL)
+        return 0;
+    char line[512];
+    int found = 0;
+    fgets(line, sizeof(line), f); // header
+    while (!found && fgets(line, sizeof(line), f) != NULL) {
+        int n = sscanf(line, " %*d: %X:%X %X:%X %X %X:%X %*X:%*X %*X %*u %*u %lu",
+                       &r->local_ip, &r->local_port, &r->remote_ip, &r->remote_port,
+                       &r->state, &r->tx, &r->rx, &r->inode);
+        found = n == 8 && r->inode == inode;
+    }
+    fclose(f);
+    return found;
+}
+
+static unsigned long inode_of(int fd) {
+    struct stat st;
+    fstat(fd, &st);
+    return st.st_ino;
+}
+
+static int links_to_socket(int fd) {
+    char path[64], target[64], expected[64];
+    snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
+    ssize_t n = readlink(path, target, sizeof(target) - 1);
+    if (n < 0)
+        return 0;
+    target[n] = '\0';
+    snprintf(expected, sizeof(expected), "socket:[%lu]", inode_of(fd));
+    if (strcmp(target, expected) != 0)
+        printf("  %s links to %s, expected %s\n", path, target, expected);
+    return strcmp(target, expected) == 0;
+}
+
+int main(void) {
+    unsigned loopback = htonl(INADDR_LOOPBACK);
+    struct sockaddr_in addr = {.sin_family = AF_INET, .sin_addr.s_addr = loopback};
+    socklen_t len = sizeof(addr);
+
+    int listener = socket(AF_INET, SOCK_STREAM, 0);
+    bind(listener, (struct sockaddr *) &addr, sizeof(addr));
+    listen(listener, 4);
+    getsockname(listener, (struct sockaddr *) &addr, &len);
+    unsigned port = ntohs(addr.sin_port);
+
+    int client = socket(AF_INET, SOCK_STREAM, 0);
+    connect(client, (struct sockaddr *) &addr, sizeof(addr));
+    int server = accept(listener, NULL, NULL);
+    send(client, "hello", 5, 0);
+    usleep(200 * 1000);
+
+    int udp = socket(AF_INET, SOCK_DGRAM, 0);
+    struct sockaddr_in uaddr = {.sin_family = AF_INET, .sin_addr.s_addr = loopback};
+    bind(udp, (struct sockaddr *) &uaddr, sizeof(uaddr));
+    len = sizeof(uaddr);
+    getsockname(udp, (struct sockaddr *) &uaddr, &len);
+
+    struct row r;
+    // Addresses are words in network byte order read as host integers, as
+    // Linux prints them; loopback reads back as loopback.
+    check("listener in tcp", find_row("/proc/net/tcp", inode_of(listener), &r) &&
+          r.local_ip == loopback && r.local_port == port && r.state == 0x0A);
+    check("accepted connection in tcp", find_row("/proc/net/tcp", inode_of(server), &r) &&
+          r.local_port == port && r.remote_ip == loopback && r.state == 0x01 && r.rx == 5);
+    check("client connection in tcp", find_row("/proc/net/tcp", inode_of(client), &r) &&
+          r.remote_port == port && r.state == 0x01);
+    check("udp socket in udp", find_row("/proc/net/udp", inode_of(udp), &r) &&
+          r.local_port == ntohs(uaddr.sin_port) && r.state == 0x07);
+    check("fd links to socket:[inode]", links_to_socket(listener) && links_to_socket(udp));
+
+    printf("%d passed, %d failed\n", passed, failed);
+    return failed != 0;
+}

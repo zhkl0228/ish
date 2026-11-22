@@ -39,8 +39,14 @@ static int adhoc_fsetattr(struct fd *fd, struct attr attr) {
     return 0;
 }
 
+// What /proc/<pid>/fd links to: socket:[inode] and pipe:[inode] as on Linux,
+// which netstat -p and lsof match against /proc/net and each other.
 static int adhoc_getpath(struct fd *fd, char *buf) {
     const char *type = "unknown"; // TODO allow this to be customized
+    if (S_ISSOCK(fd->stat.mode))
+        type = "socket";
+    else if (S_ISFIFO(fd->stat.mode))
+        type = "pipe";
     if (fd->stat.inode == 0)
         sprintf(buf, "anon_inode:[%s]", type);
     else
