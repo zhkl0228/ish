@@ -772,8 +772,18 @@ static int real_poll_wait(struct real_poll *real, struct real_poll_event *events
 
 static int real_poll_update(struct real_poll *real, int fd, int types, void *data) {
     types &= ~EPOLLONESHOT;
-    if (types == 0)
-        return epoll_ctl(real->fd, EPOLL_CTL_DEL, fd, NULL);
+    if (types == 0) {
+        // Nothing registered is nothing to delete: poll_real_refresh asks for
+        // 0 types for a regular file, which is never registered, and failing
+        // dropped the file from the poll, so it never read as ready (GHC's
+        // shellcheck waited forever on its script). epoll refuses regular
+        // files even here (EPERM), and a fd it never had is ENOENT. kqueue's
+        // EV_RECEIPT reports the same per filter without failing the call.
+        int err = epoll_ctl(real->fd, EPOLL_CTL_DEL, fd, NULL);
+        if (err < 0 && (errno == ENOENT || errno == EPERM))
+            err = 0;
+        return err;
+    }
     struct epoll_event epevent = {.events = types, .data.ptr = data};
     int err = epoll_ctl(real->fd, EPOLL_CTL_MOD, fd, &epevent);
     if (err < 0 && errno == ENOENT)
