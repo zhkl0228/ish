@@ -29,6 +29,29 @@
 #define ISH_INTERNAL
 #include "fs/fake.h"
 
+// Host stat timestamps are st_Xtimespec on Darwin and st_Xtim on Linux.
+#if __APPLE__
+#define HOST_TIMESPEC(x) st_##x##timespec
+#elif __linux__
+#define HOST_TIMESPEC(x) st_##x##tim
+#endif
+
+// Host path of an open fd: F_GETPATH on Darwin, /proc/self/fd on Linux.
+// Returns 0 on success and -1 on failure, like fcntl(F_GETPATH).
+static int host_fd_path(int fd, char buf[PATH_MAX]) {
+#if __APPLE__
+    return fcntl(fd, F_GETPATH, buf);
+#elif __linux__
+    char proc_fd[32];
+    snprintf(proc_fd, sizeof(proc_fd), "/proc/self/fd/%d", fd);
+    ssize_t size = readlink(proc_fd, buf, PATH_MAX - 1);
+    if (size < 0)
+        return -1;
+    buf[size] = '\0';
+    return 0;
+#endif
+}
+
 // TODO document database
 
 /* ===== Bind Mount Support =====
@@ -783,12 +806,12 @@ static int fakefs_stat(struct mount *mount, const char *path, struct statbuf *fa
         fake_stat->gid = 0;
         fake_stat->size = host_stat.st_size;
         fake_stat->blocks = host_stat.st_blocks;
-        fake_stat->mtime = host_stat.st_mtimespec.tv_sec;
-        fake_stat->mtime_nsec = host_stat.st_mtimespec.tv_nsec;
-        fake_stat->atime = host_stat.st_atimespec.tv_sec;
-        fake_stat->atime_nsec = host_stat.st_atimespec.tv_nsec;
-        fake_stat->ctime = host_stat.st_ctimespec.tv_sec;
-        fake_stat->ctime_nsec = host_stat.st_ctimespec.tv_nsec;
+        fake_stat->mtime = host_stat.HOST_TIMESPEC(m).tv_sec;
+        fake_stat->mtime_nsec = host_stat.HOST_TIMESPEC(m).tv_nsec;
+        fake_stat->atime = host_stat.HOST_TIMESPEC(a).tv_sec;
+        fake_stat->atime_nsec = host_stat.HOST_TIMESPEC(a).tv_nsec;
+        fake_stat->ctime = host_stat.HOST_TIMESPEC(c).tv_sec;
+        fake_stat->ctime_nsec = host_stat.HOST_TIMESPEC(c).tv_nsec;
         ISH_SIGNPOST_SCOPE_END(fs, "fakefs_stat", _fs_spid);
         return 0;
     }
@@ -831,9 +854,9 @@ static int fakefs_stat(struct mount *mount, const char *path, struct statbuf *fa
         /* Copy basic fields from real stat */
         fake_stat->size = real_stat.st_size;
         fake_stat->nlink = real_stat.st_nlink;
-        fake_stat->atime = real_stat.st_atimespec.tv_sec;
-        fake_stat->mtime = real_stat.st_mtimespec.tv_sec;
-        fake_stat->ctime = real_stat.st_ctimespec.tv_sec;
+        fake_stat->atime = real_stat.HOST_TIMESPEC(a).tv_sec;
+        fake_stat->mtime = real_stat.HOST_TIMESPEC(m).tv_sec;
+        fake_stat->ctime = real_stat.HOST_TIMESPEC(c).tv_sec;
         err = 0;
     } else {
         err = realfs.stat(mount, path, fake_stat);
@@ -1145,7 +1168,7 @@ static int create_relative_symlink(int root_fd, const char *host_link,
     /* Get the absolute path of root_fd (F_GETPATH resolves symlinks,
      * e.g. /var -> /private/var on iOS) */
     char root_abs[PATH_MAX];
-    if (fcntl(root_fd, F_GETPATH, root_abs) != 0) {
+    if (host_fd_path(root_fd, root_abs) != 0) {
         fprintf(stderr, "create_relative_symlink: F_GETPATH failed\n");
         /* Fall back to absolute symlink */
         return symlinkat(host_path, root_fd, host_link);
@@ -1221,7 +1244,7 @@ int fakefs_bind_mount(const char *linux_path, const char *host_path, bool read_o
     /* Log root_fd info for context */
     {
         char fd_path[PATH_MAX];
-        if (fcntl(g_fakefs_mount->root_fd, F_GETPATH, fd_path) == 0) {
+        if (host_fd_path(g_fakefs_mount->root_fd, fd_path) == 0) {
             fprintf(stderr, "fakefs_bind_mount: root_fd=%d path=\"%s\"\n",
                     g_fakefs_mount->root_fd, fd_path);
         } else {

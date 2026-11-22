@@ -6,9 +6,11 @@
 #include "util/signpost.h"
 #include <termios.h>
 #include <unistd.h>
-#include <mach/mach.h>
 #include <pthread.h>
+#if __APPLE__
+#include <mach/mach.h>
 #include <sys/sysctl.h>   // [T-ish-cli-memory-governor] hw.memsize
+#endif
 #include "kernel/calls.h"
 #include "kernel/init.h"
 #include "kernel/mm.h"    // [T-ish-cli-memory-governor] ish_set_memory_status
@@ -66,6 +68,39 @@ static_assert(CRASH_CPU_segfault_addr      == CPU_segfault_addr,      "cpu-offse
 static_assert(CRASH_CPU_segfault_was_write == CPU_segfault_was_write, "cpu-offsets drift: segfault_was_write");
 static_assert(CRASH_LOCAL_jit_exit_sp      == LOCAL_jit_exit_sp,      "cpu-offsets drift: jit_exit_sp");
 
+#ifdef __aarch64__
+// Host register access in a signal ucontext: Darwin keeps a pointer to the
+// thread state, Linux embeds the registers in uc_mcontext.
+#if __APPLE__
+#define UC_X(uc, n) ((uc)->uc_mcontext->__ss.__x[n])
+#define UC_SP(uc) ((uc)->uc_mcontext->__ss.__sp)
+#define UC_PC(uc) ((uc)->uc_mcontext->__ss.__pc)
+#define UC_LR(uc) ((uc)->uc_mcontext->__ss.__lr)
+static uint64_t uc_esr(ucontext_t *uc) {
+    return uc->uc_mcontext->__es.__esr;
+}
+#elif __linux__
+#include <asm/sigcontext.h>
+#define UC_X(uc, n) ((uc)->uc_mcontext.regs[n])
+#define UC_SP(uc) ((uc)->uc_mcontext.sp)
+#define UC_PC(uc) ((uc)->uc_mcontext.pc)
+#define UC_LR(uc) ((uc)->uc_mcontext.regs[30])
+// The kernel puts the ESR of a data abort in an esr_context record in the
+// __reserved area, which is a list of records ending with a zero magic.
+static uint64_t uc_esr(ucontext_t *uc) {
+    struct _aarch64_ctx *head = (struct _aarch64_ctx *) (void *) uc->uc_mcontext.__reserved;
+    while (head->magic != 0) {
+        if (head->magic == ESR_MAGIC)
+            return ((struct esr_context *) head)->esr;
+        head = (struct _aarch64_ctx *) (void *) ((char *) head + head->size);
+    }
+    static const char msg[] = "crash_handler: no esr_context in the signal frame\n";
+    write(STDERR_FILENO, msg, sizeof(msg) - 1);
+    _exit(139);
+}
+#endif
+#endif
+
 static void crash_handler(int sig, siginfo_t *info, void *ctx) {
 #if defined(__aarch64__) && defined(GUEST_ARM64)
     // If we're inside JIT code and got SIGSEGV/SIGBUS, recover by redirecting
@@ -79,13 +114,13 @@ static void crash_handler(int sig, siginfo_t *info, void *ctx) {
 #endif
 
         // _cpu is in x1 — pointer to cpu_state within fiber_frame
-        uint64_t cpu_ptr = uc->uc_mcontext->__ss.__x[1];
+        uint64_t cpu_ptr = UC_X(uc, 1);
 
         // Reconstruct guest segfault_addr from registers.
         // x7 = _addr (host pointer = data_minus_addr + guest_addr)
         // x10 may hold data_minus_addr from TLB lookup (but only on TLB HIT path)
-        uint64_t x7 = uc->uc_mcontext->__ss.__x[7];
-        uint64_t x10 = uc->uc_mcontext->__ss.__x[10];
+        uint64_t x7 = UC_X(uc, 7);
+        uint64_t x10 = UC_X(uc, 10);
         uint64_t guest_addr = (x7 - x10) & 0xffffffffffffULL;
 
         // Store diagnostic info for handle_interrupt to read
@@ -95,7 +130,7 @@ static void crash_handler(int sig, siginfo_t *info, void *ctx) {
         jit_crash_count++;
 
         // Determine read/write from host ESR. Bit 6 (WnR): 0=read, 1=write.
-        uint64_t esr = uc->uc_mcontext->__es.__esr;
+        uint64_t esr = uc_esr(uc);
         int was_write = (esr & 0x40) != 0;
 
         // Write crash info directly to cpu_state via _cpu pointer.
@@ -111,10 +146,10 @@ static void crash_handler(int sig, siginfo_t *info, void *ctx) {
         // Restore SP to the value saved by fiber_enter, so fiber_exit
         // can correctly pop the callee-saved register frame.
         uint64_t exit_sp = *(uint64_t *)(cpu_ptr + CRASH_LOCAL_jit_exit_sp);
-        uc->uc_mcontext->__ss.__sp = exit_sp;
+        UC_SP(uc) = exit_sp;
 
         // Redirect execution to crash trampoline (returns INT_JIT_CRASH)
-        uc->uc_mcontext->__ss.__pc = (uint64_t)jit_crash_trampoline;
+        UC_PC(uc) = (uint64_t)jit_crash_trampoline;
 
         // Unblock signal so it can fire again on next crash
         sigset_t unblock;
@@ -138,11 +173,11 @@ static void crash_handler(int sig, siginfo_t *info, void *ctx) {
         "pc:  0x%llx\nlr:  0x%llx\nsp:  0x%llx\n"
         "x0:  0x%llx\nx1:  0x%llx\nx2:  0x%llx\n"
         "x7:  0x%llx\nx28: 0x%llx\n",
-        uc->uc_mcontext->__ss.__pc, uc->uc_mcontext->__ss.__lr,
-        uc->uc_mcontext->__ss.__sp,
-        uc->uc_mcontext->__ss.__x[0], uc->uc_mcontext->__ss.__x[1],
-        uc->uc_mcontext->__ss.__x[2],
-        uc->uc_mcontext->__ss.__x[7], uc->uc_mcontext->__ss.__x[28]);
+        UC_PC(uc), UC_LR(uc),
+        UC_SP(uc),
+        UC_X(uc, 0), UC_X(uc, 1),
+        UC_X(uc, 2),
+        UC_X(uc, 7), UC_X(uc, 28));
     write(STDERR_FILENO, buf, len);
 #endif
     void *bt[20];
@@ -333,21 +368,41 @@ void *poll_fn(void *arg) {
 //     otherwise need it, so this is a plain detached pthread on the same
 //     cadence. The kernel's >2s staleness rule still fails closed if it dies.
 static uint64_t ish_cli_phys_footprint(void) {
+#if __APPLE__
     task_vm_info_data_t info;
     mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
     if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&info, &count) != KERN_SUCCESS)
         return 0;
     return (uint64_t) info.phys_footprint;
+#elif __linux__
+    // Resident set size: the second field of /proc/self/statm, in pages.
+    FILE *f = fopen("/proc/self/statm", "r");
+    if (f == NULL)
+        return 0;
+    unsigned long size, resident;
+    int n = fscanf(f, "%lu %lu", &size, &resident);
+    fclose(f);
+    if (n != 2)
+        return 0;
+    return (uint64_t) resident * (uint64_t) sysconf(_SC_PAGESIZE);
+#endif
 }
 
 static uint64_t ish_cli_host_ram(void) {
     // hw.memsize is the machine's physical RAM; on a CLI host that is the only
     // honest ceiling available (no per-process allowance exists).
+#if __APPLE__
     uint64_t bytes = 0;
     size_t len = sizeof(bytes);
     if (sysctlbyname("hw.memsize", &bytes, &len, NULL, 0) != 0)
         return 0;
     return bytes;
+#elif __linux__
+    long pages = sysconf(_SC_PHYS_PAGES);
+    if (pages < 0)
+        return 0;
+    return (uint64_t) pages * (uint64_t) sysconf(_SC_PAGESIZE);
+#endif
 }
 
 static void ish_cli_memory_governor_tick(void) {

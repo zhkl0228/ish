@@ -81,14 +81,14 @@ _addr   .req x7    // Changed from x3/x4 to x7 to avoid conflict with guest low 
     // Profile: append next-gadget pointer to a ring buffer indexed by g_profile_idx.
     // Single-threaded JIT path, no atomic needed. Caller must ensure x9-x12 free
     // (gret runs in callee-saved frame state at gadget boundary).
-    adrp x9, NAME(g_profile_idx)@PAGE
-    ldr  x10, [x9, NAME(g_profile_idx)@PAGEOFF]
-    adrp x11, NAME(g_profile_buf)@PAGE
-    add  x11, x11, NAME(g_profile_buf)@PAGEOFF
+    adrp x9, PAGE(NAME(g_profile_idx))
+    ldr  x10, [x9, PAGEOFF(NAME(g_profile_idx))]
+    adrp x11, PAGE(NAME(g_profile_buf))
+    add  x11, x11, PAGEOFF(NAME(g_profile_buf))
     and  x12, x10, #0xffff           // ring index = idx & 65535
     str  x8, [x11, x12, lsl #3]
     add  x10, x10, #1
-    str  x10, [x9, NAME(g_profile_idx)@PAGEOFF]
+    str  x10, [x9, PAGEOFF(NAME(g_profile_idx))]
 #endif
     br x8
 .endm
@@ -106,8 +106,8 @@ _addr   .req x7    // Changed from x3/x4 to x7 to avoid conflict with guest low 
     // Write watchpoint: compare guest page against watched page
     // x7 = guest address at this point (before TLB translation)
     // g_watch_page_val is loaded from a nearby literal pool
-    adrp x8, NAME(g_watch_pages)@PAGE
-    add x8, x8, NAME(g_watch_pages)@PAGEOFF
+    adrp x8, PAGE(NAME(g_watch_pages))
+    add x8, x8, PAGEOFF(NAME(g_watch_pages))
     ldp x8, x9, [x8]                  // watched pages 1 and 2
     cbz x8, 9f                        // skip if no watchpoint set
     and x10, x7, #0xfffffffffffff000  // guest page

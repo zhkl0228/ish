@@ -7,8 +7,14 @@
 #include <errno.h>
 #include <ifaddrs.h>
 #include <net/if.h>
+#if __APPLE__
 #include <net/if_dl.h>
 #include <net/if_types.h>
+#elif __linux__
+#include <linux/if_link.h>
+#include <linux/if_packet.h>
+#include <net/if_arp.h>
+#endif
 #include <netinet/in.h>
 #include <stdlib.h>
 #include <string.h>
@@ -231,6 +237,7 @@ int netlink_host_snapshot(struct netlink_host_link **links, size_t *n_links,
         struct netlink_host_link *l = link_for(links, n_links, ifa->ifa_name, ifa->ifa_flags);
         if (l == NULL || ifa->ifa_addr == NULL)
             continue;
+#if __APPLE__
         if (ifa->ifa_addr->sa_family == AF_LINK) {
             const struct sockaddr_dl *dl = (const struct sockaddr_dl *) (void *) ifa->ifa_addr;
             if (dl->sdl_type == IFT_ETHER)
@@ -260,6 +267,32 @@ int netlink_host_snapshot(struct netlink_host_link **links, size_t *n_links,
             }
             continue;
         }
+#elif __linux__
+        if (ifa->ifa_addr->sa_family == AF_PACKET) {
+            const struct sockaddr_ll *ll = (const struct sockaddr_ll *) (void *) ifa->ifa_addr;
+            if (ll->sll_hatype == ARPHRD_ETHER)
+                l->arphrd = ARPHRD_ETHER_L;
+            else if (ll->sll_hatype == ARPHRD_LOOPBACK)
+                l->arphrd = ARPHRD_LOOPBACK_L;
+            if (ll->sll_halen == 6) {
+                memcpy(l->lladdr, ll->sll_addr, 6);
+                l->has_lladdr = true;
+            }
+            if (ifa->ifa_data != NULL) {
+                const struct rtnl_link_stats *d = ifa->ifa_data;
+                l->rx_bytes = d->rx_bytes;
+                l->rx_packets = d->rx_packets;
+                l->rx_errs = d->rx_errors;
+                l->rx_drop = d->rx_dropped;
+                l->rx_multicast = d->multicast;
+                l->tx_bytes = d->tx_bytes;
+                l->tx_packets = d->tx_packets;
+                l->tx_errs = d->tx_errors;
+                l->collisions = d->collisions;
+            }
+            continue;
+        }
+#endif
         int fam = ifa->ifa_addr->sa_family;
         if (fam != AF_INET && fam != AF_INET6)
             continue;
@@ -305,10 +338,12 @@ int netlink_host_snapshot(struct netlink_host_link **links, size_t *n_links,
             if (ifa->ifa_netmask != NULL) {
                 const struct sockaddr_in6 *m = (const struct sockaddr_in6 *) (void *) ifa->ifa_netmask;
                 size_t have = 16;
+#if __APPLE__
                 // A netmask sockaddr may be shorter than a full one.
                 size_t off = offsetof(struct sockaddr_in6, sin6_addr);
                 if (m->sin6_len < off + 16)
                     have = m->sin6_len > off ? m->sin6_len - off : 0;
+#endif
                 a->prefixlen = prefix_len((const uint8_t *) &m->sin6_addr, have);
             }
             static const uint8_t v6_loopback[16] = {[15] = 1};
