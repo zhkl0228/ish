@@ -412,6 +412,18 @@
     [self waitForTerminalText:@"ctrl-42" timeout:10];
 }
 
+// Settings > Appearance shows a preview terminal, whose pty is created on the main
+// thread; that has no current task once the shells run on their own threads.
+- (void)testAppearanceOpens {
+    [self waitForTerminalText:@":~#" timeout:30];
+    [self chooseCommand:@[@"Settings…"]];
+    XCUIElement *appearance = self.app.tables.staticTexts[@"Appearance"];
+    XCTAssert([appearance waitForExistenceWithTimeout:5]);
+    [appearance tap];
+    XCTAssert([self.app.navigationBars[@"Appearance"] waitForExistenceWithTimeout:5]);
+    XCTAssertEqual(self.app.state, XCUIApplicationStateRunningForeground);
+}
+
 - (void)testShellRunsCommands {
     [self waitForTerminalText:@":~#" timeout:30];
     [self.app typeText:@"echo smoke-$((6*7)); uname -m\n"];

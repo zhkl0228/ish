@@ -11,6 +11,7 @@
 #import "ThemesViewController.h"
 #import "UserPreferences.h"
 #import "NSObject+SaneKVO.h"
+#include "kernel/task.h"
 
 @interface AboutAppearanceViewController ()
 @property (strong, nonatomic) IBOutlet UISwitch *blinkCursor;
@@ -79,7 +80,15 @@ char *previewString = "# cat /proc/ish/colors\r\n"
     
 #if !ISH_LINUX
     if (![NSUserDefaults.standardUserDefaults boolForKey:@"recovery"]) {
+        // pty_open_fake makes current the owner of the pty, and the main thread has
+        // no current task once the shells run on their own threads. Make the
+        // preview init's, as UpgradeRootViewController does.
+        struct task *saved_current = current;
+        lock(&pids_lock);
+        current = pid_get_task(1);
+        unlock(&pids_lock);
         _terminal = [Terminal createPseudoTerminal:&_tty];
+        current = saved_current;
         [_terminal sendOutput:previewString length:(int)strlen(previewString)];
     }
 #endif
