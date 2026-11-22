@@ -90,8 +90,9 @@ static int proc_show_uptime(struct proc_entry *UNUSED(entry), struct proc_data *
     return 0;
 }
 
+// /proc/self names the process (thread group), not the calling thread.
 static int proc_readlink_self(struct proc_entry *UNUSED(entry), char *buf) {
-    sprintf(buf, "%d/", current->pid);
+    sprintf(buf, "%d", current->tgid);
     return 0;
 }
 

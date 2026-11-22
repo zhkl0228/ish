@@ -37,6 +37,16 @@ check "$(cat $D/nx/f)" B "symlink created under a previously-missing intermediat
 ln -s $D/b $D/s1; ln $D/s1 $D/s2; rm $D/s1
 check "$(cat $D/s2/f)" B "hardlinked symlink still resolves after original removed"
 
+# /proc/self and /proc/<pid>/exe resolve differently for every process. A
+# resolution cached by one process must not be served to the next one: back
+# to back, within the cache TTL, each child has to see its own pid, and
+# /proc/self/exe must not point at a pid that has already exited (ENOENT).
+for i in 1 2 3; do
+    out=$(sh -c 'echo $$; exec readlink /proc/self' | tr '\n' ' ')
+    check "${out% }" "${out%% *} ${out%% *}" "/proc/self is the reading process (run $i)"
+    check "$(sh -c 'exec readlink /proc/self/exe' 2>/dev/null || echo ENOENT)" /bin/busybox "/proc/self/exe in a new process (run $i)"
+done
+
 rm -rf $D
 echo "path_cache: $pass passed, $fail failed"
 [ $fail -eq 0 ]

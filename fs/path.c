@@ -131,7 +131,10 @@ static void path_cache_set(const char *full_path, int flags, const char *normali
     unlock(&path_cache_lock);
 }
 
-static int __path_normalize(const char *at_path, const char *path, char *out, int flags, int levels) {
+// `*uncacheable` is set when the walk followed a procfs symlink. Those name
+// the calling process or a pid that comes and goes (/proc/self,
+// /proc/<pid>/exe, /proc/<pid>/fd/N), so the result must not be cached.
+static int __path_normalize(const char *at_path, const char *path, char *out, int flags, int levels, bool *uncacheable) {
     // you must choose one
     if (flags & N_SYMLINK_FOLLOW)
         assert(!(flags & N_SYMLINK_NOFOLLOW));
@@ -226,6 +229,8 @@ static int __path_normalize(const char *at_path, const char *path, char *out, in
             if (mount->fs->readlink)
                 res = mount->fs->readlink(mount, possible_symlink, c, MAX_PATH - (c - out));
             if (res >= 0) {
+                if (mount->fs == &procfs)
+                    *uncacheable = true;
                 mount_release(mount);
                 if (levels >= 5)
                     return _ELOOP;
@@ -240,7 +245,7 @@ static int __path_normalize(const char *at_path, const char *path, char *out, in
                     strcat(expanded_path, "/");
                     strcat(expanded_path, p);
                 }
-                return __path_normalize(NULL, expanded_path, out, flags, levels + 1);
+                return __path_normalize(NULL, expanded_path, out, flags, levels + 1, uncacheable);
             }
 
             // if there's a slash after this component, ensure that if it
@@ -305,10 +310,11 @@ int path_normalize(struct fd *at, const char *path, char *out, int flags) {
     if (path_cache_get(full_input, flags, out, gen) == 0)
         return 0;
 
-    int result = __path_normalize(at != NULL ? at_path : NULL, path, out, flags, 0);
+    bool uncacheable = false;
+    int result = __path_normalize(at != NULL ? at_path : NULL, path, out, flags, 0, &uncacheable);
 
     // Only successful results are cached; an error must be re-derived.
-    if (result == 0)
+    if (result == 0 && !uncacheable)
         path_cache_set(full_input, flags, out, gen);
 
     return result;
