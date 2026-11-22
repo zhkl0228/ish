@@ -1106,6 +1106,9 @@ int_t sys_recvfrom(fd_t sock_fd, addr_t buffer_addr, dword_t len, dword_t flags,
     struct fd *sock = sock_getfd(sock_fd);
     if (sock == NULL)
         return _EBADF;
+    // The error queue is always empty (see IP_RECVERR in setsockopt).
+    if (flags & MSG_ERRQUEUE_)
+        return _EAGAIN;
     int real_flags = sock_flags_to_real(flags);
     if (real_flags < 0)
         return _EINVAL;
@@ -1271,6 +1274,15 @@ int_t sys_setsockopt(fd_t sock_fd, dword_t level, dword_t option, addr_t value_a
         return 0;
     // IP_MTU_DISCOVER has no equivalent on Darwin
     if (level == IPPROTO_IP && option == IP_MTU_DISCOVER_)
+        return 0;
+    // Nor do IP_RECVERR / IPV6_RECVERR (the extended error queue). libuv sets
+    // them on every UDP socket and gives up on the socket when they fail, so
+    // bind 9.20's dig, host and nslookup could not send a query. Accepted,
+    // the error queue stays empty (recv with MSG_ERRQUEUE says EAGAIN), and
+    // an ICMP error on a connected socket still shows on its next send or
+    // recv, as without the option.
+    if ((level == IPPROTO_IP && option == IP_RECVERR_) ||
+            (level == IPPROTO_IPV6 && option == IPV6_RECVERR_))
         return 0;
     // [STAGE-0 PROBE] SO_BINDTODEVICE: bind this socket to a named interface.
     // iSH has no interface model at all (/proc/net/dev is hardcoded dummy
@@ -1621,6 +1633,9 @@ int_t sys_recvmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
     struct fd *sock = sock_getfd(sock_fd);
     if (sock == NULL)
         return _EBADF;
+    // The error queue is always empty (see IP_RECVERR in setsockopt).
+    if (flags & MSG_ERRQUEUE_)
+        return _EAGAIN;
     if (fd_is_netlink_stub(sock))
         return netlink_stub_recvmsg(sock, msghdr_addr, flags);
 
@@ -1837,6 +1852,9 @@ struct mmsghdr64_ {
 
 int_t sys_recvmmsg(fd_t sock_fd, addr_t msg_vec, uint_t vec_len, int_t flags, addr_t timeout_addr) {
     STRACE("recvmmsg(%d, %#x, %d, %d)", sock_fd, msg_vec, vec_len, flags);
+    // The error queue is always empty (see IP_RECVERR in setsockopt).
+    if (flags & MSG_ERRQUEUE_)
+        return _EAGAIN;
     int num_recv = 0;
 #ifdef GUEST_ARM64
     size_t mmsghdr_size = sizeof(struct mmsghdr64_);
