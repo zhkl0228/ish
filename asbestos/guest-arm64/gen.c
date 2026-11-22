@@ -3466,7 +3466,8 @@ static int gen_ldst(struct gen_state *state, uint32_t insn) {
             lane = (Q << 3) | (S << 2) | size;
         } else if (base_opcode == 2) {
             elem_size = 2;
-            lane = (Q << 2) | (S << 1) | (size & 1);
+            // H: index is Q:S:size<1>; size<0> is 0
+            lane = (Q << 2) | (S << 1) | ((size >> 1) & 1);
         } else if (base_opcode == 4 && size == 0) {
             elem_size = 4;
             lane = (Q << 1) | S;
@@ -3573,7 +3574,8 @@ static int gen_ldst(struct gen_state *state, uint32_t insn) {
             lane = (Q << 3) | (S << 2) | size;
         } else if (base_opcode == 2) {
             elem_size = 2;
-            lane = (Q << 2) | (S << 1) | (size & 1);
+            // H: index is Q:S:size<1>; size<0> is 0
+            lane = (Q << 2) | (S << 1) | ((size >> 1) & 1);
         } else if (base_opcode == 4 && size == 0) {
             elem_size = 4;
             lane = (Q << 1) | S;
@@ -4587,11 +4589,13 @@ static int gen_simd_fp(struct gen_state *state, uint32_t insn) {
 
     // SSHLL/USHLL/SSHLL2/USHLL2 (vector, immediate) - signed/unsigned shift left long
     // Encoding: 0 Q U 011110 immh immb 10100 1 Rn Rd
-    // Mask 0x8f80fc00 checks bit31=0,bits[28:23]=011110,opcode=10100,bit10=1
+    // Mask 0x9f80fc00 checks bit31=0,bits[28:23]=011110,opcode=10100,bit10=1.
+    // Bit 28 must be in the mask: without it FP data-processing (3 source)
+    // words such as FNMSUB with bits[15:10]=101001 decoded as SSHLL.
     // Q at bit 30: 0=lower half (SSHLL/USHLL), 1=upper half (SSHLL2/USHLL2)
     // U at bit 29 distinguishes signed/unsigned
     // immh determines size: 0001=B->H, 001x=H->S, 01xx=S->D
-    if ((insn & 0x8f80fc00) == 0x0f00a400) {
+    if ((insn & 0x9f80fc00) == 0x0f00a400) {
         uint32_t Q = (insn >> 30) & 1;
         uint32_t U = (insn >> 29) & 1;
         uint32_t immh = (insn >> 19) & 0xf;
@@ -6155,10 +6159,10 @@ skip_three_different:
     // Floating-point data-processing (3 source) - FMADD/FMSUB/FNMADD/FNMSUB
     // Pattern: M=0 S=0 1 1 1 1 1 ftype o1 Rm o0 Ra Rn Rd
     // ftype: 00=single, 01=double
-    // o1:o0 = 00: FMADD  (Fd = Fn * Fm + Fa)
-    //       = 01: FMSUB  (Fd = Fn * Fm - Fa)
-    //       = 10: FNMADD (Fd = -(Fn * Fm) - Fa)
-    //       = 11: FNMSUB (Fd = -(Fn * Fm) + Fa)
+    // o1:o0 = 00: FMADD  (Fd = Fa + Fn * Fm)
+    //       = 01: FMSUB  (Fd = Fa - Fn * Fm)
+    //       = 10: FNMADD (Fd = -Fa - Fn * Fm)
+    //       = 11: FNMSUB (Fd = -Fa + Fn * Fm)
     if ((insn & 0x5f000000) == 0x1f000000) {
         uint32_t M = (insn >> 31) & 1;
         uint32_t S = (insn >> 29) & 1;

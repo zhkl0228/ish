@@ -746,10 +746,13 @@ static __uint128_t pmull64_full(uint64_t a, uint64_t b) {
 
 void pmull_helper(uint8_t *rd, uint8_t *rn, uint8_t *rm, uint32_t Q, uint32_t size) {
     if (size == 0) {
-        // 8-bit polynomial multiply: 8 pairs of bytes -> 8 halfwords
+        // 8-bit polynomial multiply: 8 pairs of bytes -> 8 halfwords.
+        // Copy the sources first: rd may be rn or rm, and each 16-bit result
+        // would overwrite source bytes not read yet.
         uint16_t *dst = (uint16_t *)rd;
-        uint8_t *src_n = Q ? &rn[8] : rn;
-        uint8_t *src_m = Q ? &rm[8] : rm;
+        uint8_t src_n[8], src_m[8];
+        memcpy(src_n, Q ? &rn[8] : rn, 8);
+        memcpy(src_m, Q ? &rm[8] : rm, 8);
 
         for (int i = 0; i < 8; i++) {
             uint16_t a = src_n[i];
@@ -1032,6 +1035,9 @@ void usra_imm_helper(uint8_t *rd, uint8_t *rn, int shift, int esize, int Q) {
             dst[i] = dst[i] + (src[i] >> shift);
         }
     }
+    // A 64-bit (Q=0) vector write clears bits 127:64 of the destination.
+    if (!Q)
+        memset(rd + 8, 0, 8);
 }
 
 /*
@@ -1072,6 +1078,9 @@ void ssra_imm_helper(uint8_t *rd, uint8_t *rn, int shift, int esize, int Q) {
             dst[i] = dst[i] + (src[i] >> shift);
         }
     }
+    // A 64-bit (Q=0) vector write clears bits 127:64 of the destination.
+    if (!Q)
+        memset(rd + 8, 0, 8);
 }
 
 /*
@@ -1134,6 +1143,9 @@ void sri_imm_helper(uint8_t *rd, uint8_t *rn, int shift, int esize, int Q) {
             dst[i] = (dst[i] & ~mask) | (shifted & mask);
         }
     }
+    // A 64-bit (Q=0) vector write clears bits 127:64 of the destination.
+    if (!Q)
+        memset(rd + 8, 0, 8);
 }
 
 /*
@@ -1182,6 +1194,9 @@ void sli_imm_helper(uint8_t *rd, uint8_t *rn, int shift, int esize, int Q) {
             dst[i] = (dst[i] & ~mask) | (shifted & mask);
         }
     }
+    // A 64-bit (Q=0) vector write clears bits 127:64 of the destination.
+    if (!Q)
+        memset(rd + 8, 0, 8);
 }
 
 /*

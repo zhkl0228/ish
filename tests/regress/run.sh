@@ -131,6 +131,17 @@ else
     fi
 
     echo
+    echo "########## SIMD/FP instruction semantics ##########"
+    if "$CC_GUEST" -static -O1 -Wall -o "$GUEST_ROOT/tmp/regress_simd_insns" \
+            tests/regress/regress_simd_insns.c tests/regress/regress_simd_insns.S; then
+        "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_simd_insns || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_simd_insns"
+    else
+        echo "failed to build regress_simd_insns" >&2
+        status=1
+    fi
+
+    echo
     echo "########## per-thread sigaltstack ##########"
     if "$CC_GUEST" -static -O0 -Wall -pthread -o "$GUEST_ROOT/tmp/regress_sigaltstack" \
             tests/regress/regress_sigaltstack.c; then
