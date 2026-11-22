@@ -1431,6 +1431,32 @@ atomic_cas_segfault:
     gret
 
 /*
+ * DC ZVA, Xt: zero the block containing Xt. The block is 64 bytes, as DCZID_EL0
+ * reports, and aligned, so it never crosses a page. Xt = 31 is XZR.
+ * Code stream: [gadget addr][rt]
+ */
+.gadget dc_zva
+    ldr x8, [_pc]
+    add _pc, _pc, #8
+    and x9, x8, #0x1f
+    cmp x9, #31
+    b.eq 1f
+    add x10, _cpu, #CPU_x0
+    ldr _addr, [x10, x9, lsl #3]
+    b 2f
+1:  mov _addr, #0
+2:
+    and _addr, _addr, #0xffffffffffffffc0
+    write_prep 512, dc_zva_1
+    stp xzr, xzr, [_addr]
+    stp xzr, xzr, [_addr, #16]
+    stp xzr, xzr, [_addr, #32]
+    stp xzr, xzr, [_addr, #48]
+    write_done 512, dc_zva_1
+    gret
+    write_bullshit 512, dc_zva_1
+
+/*
  * Base register update gadget for post/pre-indexed addressing
  * Code stream: [gadget addr][rn | offset<<8]
  * Updates: Rn = Rn + offset

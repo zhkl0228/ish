@@ -829,6 +829,7 @@ extern void gadget_atomic_casp32(void);
 
 // Memory barrier (DMB ISH) for acquire/release semantics
 extern void gadget_dmb(void);
+extern void gadget_dc_zva(void);          // DC ZVA: zero a 64-byte block
 extern void gadget_ic_ivau(void);          // IC IVAU: invalidate translated code for a page (SMC)
 
 // Load/store pair gadgets
@@ -2098,6 +2099,13 @@ static int gen_branch(struct gen_state *state, uint32_t insn) {
             uint32_t rt = insn & 0x1f;
             gen(state, (unsigned long) gadget_ic_ivau);
             gen(state, rt);
+            return 1;
+        }
+
+        // DC ZVA (Zero by VA): d50b742x
+        if ((insn & 0xffffffe0) == 0xd50b7420) {
+            gen(state, (unsigned long) gadget_dc_zva);
+            gen(state, insn & 0x1f);
             return 1;
         }
 

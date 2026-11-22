@@ -3709,8 +3709,10 @@ msub_store:
     b .Lmrs_store
 
 .Lmrs_dczid_el0:
-    // DC ZVA is prohibited (DZP bit 4 = 1), block size = 4 (64 bytes)
-    mov x10, #0x14
+    // DC ZVA is allowed (DZP bit 4 = 0) with 64-byte blocks (BS = 4), as on
+    // real cores. HotSpot cannot start when DZP is set: it then takes the ZVA
+    // block size to be 0 and fails generating its block zeroing stub.
+    mov x10, #0x4
     b .Lmrs_store
 
 .Lmrs_fpcr:

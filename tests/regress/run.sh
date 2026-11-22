@@ -174,6 +174,21 @@ else
         status=1
     fi
 
+    # The guest dying on an undecoded instruction still leaves iSH exiting 0,
+    # so this checks the summary line rather than the exit status.
+    echo
+    echo "########## DC ZVA and DCZID_EL0 ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_dc_zva" \
+            tests/regress/regress_dc_zva.c; then
+        out=$("$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_dc_zva 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_dc_zva"
+    else
+        echo "failed to build regress_dc_zva" >&2
+        status=1
+    fi
+
     # AF_NETLINK stub: no read blocks without bound; links and addresses are
     # the host's; everything else is refused at once. The second run pins
     # the ISH_NETLINK_ROUTE=empty switch (read from the host environment).
