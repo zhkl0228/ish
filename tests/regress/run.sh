@@ -130,6 +130,17 @@ else
         status=1
     fi
 
+    echo
+    echo "########## per-thread sigaltstack ##########"
+    if "$CC_GUEST" -static -O0 -Wall -pthread -o "$GUEST_ROOT/tmp/regress_sigaltstack" \
+            tests/regress/regress_sigaltstack.c; then
+        "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_sigaltstack || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_sigaltstack"
+    else
+        echo "failed to build regress_sigaltstack" >&2
+        status=1
+    fi
+
     # AF_NETLINK stub: no read blocks without bound; links and addresses are
     # the host's; everything else is refused at once. The second run pins
     # the ISH_NETLINK_ROUTE=empty switch (read from the host environment).

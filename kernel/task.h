@@ -42,6 +42,10 @@ struct task {
     sigset_t_ blocked;
     sigset_t_ pending;
     sigset_t_ waiting; // if nonzero, an ongoing call to sigtimedwait is waiting on these
+    // Alternate signal stack (sigaltstack). Per thread, as on Linux: only the
+    // task itself reads or writes it, so it needs no lock.
+    addr_t altstack;
+    dword_t altstack_size;
     struct list queue;
     cond_t pause; // please don't signal this
     // private

@@ -17,8 +17,8 @@
 int xsave_extra = 0;
 int fxsave_extra = 0;
 static void sigmask_set(sigset_t_ set);
-static void altstack_to_user(struct sighand *sighand, struct stack_t_ *user_stack);
-static bool is_on_altstack(addr_t sp, struct sighand *sighand);
+static void altstack_to_user(struct stack_t_ *user_stack);
+static bool is_on_altstack(addr_t sp);
 
 static int signal_is_blockable(int sig) {
     return sig != SIGKILL_ && sig != SIGSTOP_;
@@ -352,7 +352,7 @@ static void setup_rt_sigframe(struct siginfo_ *info, struct rt_sigframe_ *frame)
     frame->info = *info;
     frame->uc.flags = 0;
     frame->uc.link = 0;
-    altstack_to_user(current->sighand, &frame->uc.stack);
+    altstack_to_user(&frame->uc.stack);
     setup_sigcontext(&frame->uc.mcontext, &current->cpu);
     frame->uc.sigmask = current->blocked;
 
@@ -531,9 +531,9 @@ static void receive_signal(struct sighand *sighand, struct siginfo_ *info) {
     // on the altstack made sp fall outside those bounds, so the handler took
     // the bail path and never parked — the GC suspender then re-signalled
     // forever (the claude-cli startup deadlock).
-    if ((action->flags & SA_ONSTACK_) && sighand->altstack &&
-            !is_on_altstack(sp, sighand)) {
-        sp = sighand->altstack + sighand->altstack_size;
+    if ((action->flags & SA_ONSTACK_) && current->altstack &&
+            !is_on_altstack(sp)) {
+        sp = current->altstack + current->altstack_size;
     }
     if (xsave_extra) {
         // do as the kernel does
@@ -739,10 +739,10 @@ int64_t sys_rt_sigreturn(void) {
 
     lock(&current->sighand->lock);
     // FIXME this duplicates logic from sys_sigaltstack
-    if (!is_on_altstack(sp, current->sighand) &&
+    if (!is_on_altstack(sp) &&
             frame.uc.stack.size >= MINSIGSTKSZ_) {
-        current->sighand->altstack = frame.uc.stack.stack;
-        current->sighand->altstack_size = frame.uc.stack.size;
+        current->altstack = frame.uc.stack.stack;
+        current->altstack_size = frame.uc.stack.size;
     }
     sigmask_set(frame.uc.sigmask);
     unlock(&current->sighand->lock);
@@ -942,62 +942,52 @@ int_t sys_rt_sigpending(addr_t set_addr, dword_t size) {
     return user_put_sigset(set_addr, size, pending);
 }
 
-static bool is_on_altstack(addr_t sp, struct sighand *sighand) {
-    return sp > sighand->altstack && sp <= sighand->altstack + sighand->altstack_size;
+static addr_t current_sp(void) {
+#if defined(GUEST_ARM64)
+    return current->cpu.sp;
+#else
+    return current->cpu.esp;
+#endif
 }
 
-static void altstack_to_user(struct sighand *sighand, struct stack_t_ *user_stack) {
-    user_stack->stack = sighand->altstack;
-    user_stack->size = sighand->altstack_size;
+static bool is_on_altstack(addr_t sp) {
+    return sp > current->altstack && sp <= current->altstack + current->altstack_size;
+}
+
+static void altstack_to_user(struct stack_t_ *user_stack) {
+    user_stack->stack = current->altstack;
+    user_stack->size = current->altstack_size;
     user_stack->flags = 0;
-    if (sighand->altstack == 0)
+    if (current->altstack == 0)
         user_stack->flags |= SS_DISABLE_;
-#if defined(GUEST_ARM64)
-    if (is_on_altstack(current->cpu.sp, sighand))
-#else
-    if (is_on_altstack(current->cpu.esp, sighand))
-#endif
+    if (is_on_altstack(current_sp()))
         user_stack->flags |= SS_ONSTACK_;
 }
 
 dword_t sys_sigaltstack(addr_t ss_addr, addr_t old_ss_addr) {
     STRACE("sigaltstack(0x%x, 0x%x)", ss_addr, old_ss_addr);
-    struct sighand *sighand = current->sighand;
-    lock(&sighand->lock);
     if (old_ss_addr != 0) {
         struct stack_t_ old_ss;
-        altstack_to_user(sighand, &old_ss);
-        if (user_put(old_ss_addr, old_ss)) {
-            unlock(&sighand->lock);
+        altstack_to_user(&old_ss);
+        if (user_put(old_ss_addr, old_ss))
             return _EFAULT;
-        }
     }
     if (ss_addr != 0) {
-#if defined(GUEST_ARM64)
-        if (is_on_altstack(current->cpu.sp, sighand)) {
-#else
-        if (is_on_altstack(current->cpu.esp, sighand)) {
-#endif
-            unlock(&sighand->lock);
+        if (is_on_altstack(current_sp()))
             return _EPERM;
-        }
         struct stack_t_ ss;
-        if (user_get(ss_addr, ss)) {
-            unlock(&sighand->lock);
+        if (user_get(ss_addr, ss))
             return _EFAULT;
-        }
         if (ss.flags & SS_DISABLE_) {
-            sighand->altstack = 0;
+            current->altstack = 0;
+            current->altstack_size = 0;
         } else {
-            if (ss.size < MINSIGSTKSZ_) {
-                unlock(&sighand->lock);
+            if (ss.size < MINSIGSTKSZ_)
                 return _ENOMEM;
-            }
-            sighand->altstack = ss.stack;
-            sighand->altstack_size = ss.size;
+            current->altstack = ss.stack;
+            current->altstack_size = ss.size;
         }
     }
-    unlock(&sighand->lock);
     return 0;
 }
 

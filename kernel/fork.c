@@ -203,6 +203,13 @@ static int copy_task(struct task *task, dword_t flags, addr_t stack, addr_t ptid
         CPU_SP(task->cpu) = stack;
 
     int err;
+    // The task copied the parent's alternate signal stack. A thread sharing
+    // the address space must not run handlers on it, so clear it unless the
+    // parent is suspended for vfork (Linux: copy_process -> sas_ss_reset).
+    if ((flags & (CLONE_VM_ | CLONE_VFORK_)) == CLONE_VM_) {
+        task->altstack = 0;
+        task->altstack_size = 0;
+    }
     struct mm *mm = task->mm;
     if (flags & CLONE_VM_) {
         mm_retain(mm);

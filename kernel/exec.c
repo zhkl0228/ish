@@ -729,8 +729,10 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
         if (action->handler != SIG_IGN_)
             action->handler = SIG_DFL_;
     }
-    current->sighand->altstack = 0;
     unlock(&current->sighand->lock);
+    // execve removes the calling thread's alternate signal stack.
+    current->altstack = 0;
+    current->altstack_size = 0;
 
     current->did_exec = true;
     current->undumpable = false;
