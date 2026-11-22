@@ -26,7 +26,6 @@
 #import "Roots.h"
 #import "TerminalViewController.h"
 #import "UserPreferences.h"
-#import "UIApplication+OpenURL.h"
 #include "kernel/init.h"
 #include "kernel/calls.h"
 #include "kernel/mm.h"     // [T-ish-footprint-brake] memory governor feed
@@ -81,7 +80,6 @@ void ReportPanic(const char *message) {
 #endif
 
 static int bootError;
-static NSString *const kSkipStartupMessage = @"Skip Startup Message";
 
 // [T-ish-footprint-brake] Feed the kernel's memory governor the two numbers
 // jetsam actually operates on: the app's physical footprint and its remaining
@@ -318,29 +316,9 @@ void SyncHostname(void) {
     return bootError;
 }
 
-+ (void)maybePresentStartupMessageOnViewController:(UIViewController *)vc {
-    if ([NSUserDefaults.standardUserDefaults integerForKey:kSkipStartupMessage] >= 1)
-        return;
-    if (!FsIsManaged()) {
-        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Install iSH’s built-in APK?"
-                                                                       message:@"iSH now includes the APK package manager, but it must be manually activated."
-                                                                preferredStyle:UIAlertControllerStyleAlert];
-        [alert addAction:[UIAlertAction actionWithTitle:@"Show me how"
-                                                  style:UIAlertActionStyleDefault
-                                                handler:^(UIAlertAction * _Nonnull action) {
-            [UIApplication openURL:@"https://go.ish.app/get-apk"];
-        }]];
-        [alert addAction:[UIAlertAction actionWithTitle:@"Don't show again"
-                                                  style:UIAlertActionStyleDefault
-                                                handler:nil]];
-        [vc presentViewController:alert animated:YES completion:nil];
-    }
-    [NSUserDefaults.standardUserDefaults setInteger:1 forKey:kSkipStartupMessage];
-}
-
 + (void)maybeOfferRootResetOnViewController:(UIViewController *)vc {
     static BOOL offered;
-    // Not over another alert, such as the startup message
+    // Not over another alert
     if (offered || vc.presentedViewController != nil || !Roots.instance.defaultRootIsOutdated)
         return;
     offered = YES;

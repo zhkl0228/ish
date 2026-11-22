@@ -132,8 +132,11 @@
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     if (section == 1) { // filesystems / upgrade
+        // Only upstream's roots (with /ish/version) have their repositories
+        // kept by iSH; the built-in arm64 filesystem has its own, so there is
+        // nothing to say about one that isn't.
         if (!FsIsManaged()) {
-            return @"The current filesystem is not managed by iSH.";
+            return nil;
         } else if (!FsNeedsRepositoryUpdate()) {
             return [NSString stringWithFormat:@"The current filesystem is using %s, which is the latest version.", CURRENT_APK_VERSION_STRING];
         } else {
