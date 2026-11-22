@@ -122,8 +122,15 @@ static NSString *const TERMINAL_HANDLERS[] = {@"load", @"log", @"sendInput", @"r
         id <WKScriptMessageHandler> handler = [[WeakScriptMessageHandler alloc] initWithHandler:self];
         for (size_t i = 0; i < sizeof(TERMINAL_HANDLERS)/sizeof(TERMINAL_HANDLERS[0]); i++)
             [config.userContentController addScriptMessageHandler:handler name:TERMINAL_HANDLERS[i]];
-        // Make the web view really big so that if a program tries to write to the terminal before it's displayed, the text probably won't wrap too badly.
-        CGRect webviewSize = CGRectMake(0, 0, 10000, 10000);
+        // Start at the size of the screen, so that output written before the
+        // terminal is shown wraps about where it will. Not much bigger: WebKit
+        // gives a tiled layer whose tiles would take over 156 MB a reduced
+        // contents scale, and keeps that scale when the layer shrinks back to
+        // an untiled one (GraphicsLayerCA's contentsScaleLimitingFactor is only
+        // recomputed while tiled). This used to be 10000x10000; when a
+        // compositing pass ran at that size, as it now and then did for the
+        // first terminal at launch, its text stayed blurry until it closed.
+        CGRect webviewSize = {CGPointZero, UIScreen.mainScreen.bounds.size};
         _webView = [[CustomWebView alloc] initWithFrame:webviewSize configuration:config];
         if (@available(macOS 13.3, iOS 16.4, tvOS 16.4, *))
             _webView.inspectable = YES;
