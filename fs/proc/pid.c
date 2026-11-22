@@ -217,7 +217,68 @@ static int proc_pid_mem_show(struct proc_entry *entry, struct proc_data *buf) {
     return 0;
 }
 
-void proc_maps_dump(struct task *task, struct proc_data *buf) {
+// The /proc/pid/smaps fields iSH can tell from its page table, in pages. A
+// page is shared while it is copy-on-write after a fork or mapped MAP_SHARED,
+// and private otherwise. Anonymous memory has no backing to be clean against,
+// so its pages count as dirty and file pages as clean.
+struct smaps_counts {
+    unsigned long shared_clean, shared_dirty, private_clean, private_dirty, anonymous;
+};
+
+static void smaps_count_page(struct smaps_counts *counts, unsigned flags) {
+    bool anonymous = flags & P_ANONYMOUS;
+    if (flags & (P_COW | P_SHARED)) {
+        if (anonymous)
+            counts->shared_dirty++;
+        else
+            counts->shared_clean++;
+    } else {
+        if (anonymous)
+            counts->private_dirty++;
+        else
+            counts->private_clean++;
+    }
+    if (anonymous)
+        counts->anonymous++;
+}
+
+static void smaps_print(struct proc_data *buf, page_t pages, const struct smaps_counts *c, unsigned flags) {
+    unsigned long kb = PAGE_SIZE / 1024;
+    unsigned long shared = c->shared_clean + c->shared_dirty;
+    unsigned long private = c->private_clean + c->private_dirty;
+    // A shared page is split between the two sides of the fork that shared it;
+    // iSH does not count how many processes still map it.
+    unsigned long pss = (private * kb) + (shared * kb) / 2;
+    proc_printf(buf, "%-16s%8lu kB\n", "Size:", (unsigned long) pages * kb);
+    proc_printf(buf, "%-16s%8lu kB\n", "KernelPageSize:", kb);
+    proc_printf(buf, "%-16s%8lu kB\n", "MMUPageSize:", kb);
+    proc_printf(buf, "%-16s%8lu kB\n", "Rss:", (unsigned long) pages * kb);
+    proc_printf(buf, "%-16s%8lu kB\n", "Pss:", pss);
+    proc_printf(buf, "%-16s%8lu kB\n", "Shared_Clean:", c->shared_clean * kb);
+    proc_printf(buf, "%-16s%8lu kB\n", "Shared_Dirty:", c->shared_dirty * kb);
+    proc_printf(buf, "%-16s%8lu kB\n", "Private_Clean:", c->private_clean * kb);
+    proc_printf(buf, "%-16s%8lu kB\n", "Private_Dirty:", c->private_dirty * kb);
+    proc_printf(buf, "%-16s%8lu kB\n", "Referenced:", (unsigned long) pages * kb);
+    proc_printf(buf, "%-16s%8lu kB\n", "Anonymous:", c->anonymous * kb);
+    proc_printf(buf, "%-16s%8lu kB\n", "LazyFree:", 0ul);
+    proc_printf(buf, "%-16s%8lu kB\n", "AnonHugePages:", 0ul);
+    proc_printf(buf, "%-16s%8lu kB\n", "ShmemPmdMapped:", 0ul);
+    proc_printf(buf, "%-16s%8lu kB\n", "FilePmdMapped:", 0ul);
+    proc_printf(buf, "%-16s%8lu kB\n", "Shared_Hugetlb:", 0ul);
+    proc_printf(buf, "%-16s%8lu kB\n", "Private_Hugetlb:", 0ul);
+    proc_printf(buf, "%-16s%8lu kB\n", "Swap:", 0ul);
+    proc_printf(buf, "%-16s%8lu kB\n", "SwapPss:", 0ul);
+    proc_printf(buf, "%-16s%8lu kB\n", "Locked:", 0ul);
+    proc_printf(buf, "VmFlags:%s%s%s%s%s\n",
+            flags & P_READ ? " rd" : "",
+            flags & P_WRITE ? " wr" : "",
+            flags & P_EXEC ? " ex" : "",
+            flags & P_SHARED ? " sh" : "",
+            flags & P_GROWSDOWN ? " gd" : "");
+}
+
+// /proc/pid/maps, and with smaps the /proc/pid/smaps fields after each line.
+static void proc_maps_show_regions(struct task *task, struct proc_data *buf, bool smaps) {
     struct mem *mem = task->mem;
     if (mem == NULL)
         return;
@@ -236,6 +297,7 @@ void proc_maps_dump(struct task *task, struct proc_data *buf) {
         struct data *data = start_pt->data;
 
         // find the end of said region
+        struct smaps_counts counts = {0};
         while (page < MEM_PAGES) {
             struct pt_entry *pt = mem_pt(mem, page);
             if (pt == NULL)
@@ -245,6 +307,7 @@ void proc_maps_dump(struct task *task, struct proc_data *buf) {
             // region continues if data is the same or both are anonymous
             if (!(pt->data == data || (pt->flags & P_ANONYMOUS && start_pt->flags & P_ANONYMOUS)))
                 break;
+            smaps_count_page(&counts, pt->flags);
             mem_next_page(mem, &page);
         }
         page_t end = page;
@@ -273,8 +336,14 @@ void proc_maps_dump(struct task *task, struct proc_data *buf) {
                 (unsigned long) data->file_offset, // offset
                 0, // inode
                 path);
+        if (smaps)
+            smaps_print(buf, end - start, &counts, start_pt->flags);
     }
     read_wrunlock(&mem->lock);
+}
+
+void proc_maps_dump(struct task *task, struct proc_data *buf) {
+    proc_maps_show_regions(task, buf, false);
 }
 
 static int proc_pid_maps_show(struct proc_entry *entry, struct proc_data *buf) {
@@ -283,6 +352,17 @@ static int proc_pid_maps_show(struct proc_entry *entry, struct proc_data *buf) {
         return _ESRCH;
     lock(&task->general_lock);   // [T-ish-exit-mm-general-lock]
     proc_maps_dump(task, buf);
+    unlock(&task->general_lock);
+    proc_put_task(task);
+    return 0;
+}
+
+static int proc_pid_smaps_show(struct proc_entry *entry, struct proc_data *buf) {
+    struct task *task = proc_get_task(entry);
+    if (task == NULL)
+        return _ESRCH;
+    lock(&task->general_lock);   // [T-ish-exit-mm-general-lock]
+    proc_maps_show_regions(task, buf, true);
     unlock(&task->general_lock);
     proc_put_task(task);
     return 0;
@@ -421,6 +501,7 @@ struct proc_children proc_pid_children = PROC_CHILDREN({
     {"exe", S_IFLNK, .readlink = proc_pid_exe_readlink},
     {"fd", S_IFDIR, .readdir = proc_pid_fd_readdir},
     {"maps", .show = proc_pid_maps_show},
+    {"smaps", .show = proc_pid_smaps_show},
     {"mem", .pread = proc_pid_mem_pread, .pwrite = proc_pid_mem_pwrite, .show = proc_pid_mem_show},
     {"stat", .show = proc_pid_stat_show},
     {"statm", .show = proc_pid_statm_show},

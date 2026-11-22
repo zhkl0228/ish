@@ -189,6 +189,19 @@ else
         status=1
     fi
 
+    echo
+    echo "########## /proc/self/smaps (redis' arm64 COW bug check) ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_smaps" \
+            tests/regress/regress_smaps.c; then
+        out=$("$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_smaps 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_smaps"
+    else
+        echo "failed to build regress_smaps" >&2
+        status=1
+    fi
+
     # AF_NETLINK stub: no read blocks without bound; links and addresses are
     # the host's; everything else is refused at once. The second run pins
     # the ISH_NETLINK_ROUTE=empty switch (read from the host environment).
