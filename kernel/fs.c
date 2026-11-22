@@ -620,9 +620,18 @@ dword_t sys_pwrite(fd_t f, addr_t buf_addr, dword_t size, off_t_ off) {
 // registers (5-argument syscall form), consistent with what musl's
 // src/unistd/pwritev.c emits. Combine them back into a 64-bit offset before
 // doing the pread/pwrite loop under fd->lock (like readv/writev).
+static off_t_ rw_pos(pos_arg_t pos_l, pos_arg_t pos_h) {
+#ifdef GUEST_ARM64
+    (void) pos_h;
+    return (off_t_) pos_l;
+#else
+    return ((qword_t) pos_h << 32) | pos_l;
+#endif
+}
+
 dword_t sys_preadv(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count,
-                   dword_t pos_l, dword_t pos_h) {
-    off_t_ off = ((qword_t)pos_h << 32) | pos_l;
+                   pos_arg_t pos_l, pos_arg_t pos_h) {
+    off_t_ off = rw_pos(pos_l, pos_h);
     STRACE("preadv(%d, %#x, %d, %lld)", fd_no, iovec_addr, iovec_count, (long long)off);
     struct fd *fd = f_get(fd_no);
     if (fd == NULL)
@@ -674,8 +683,8 @@ error:
 }
 
 dword_t sys_pwritev(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count,
-                    dword_t pos_l, dword_t pos_h) {
-    off_t_ off = ((qword_t)pos_h << 32) | pos_l;
+                    pos_arg_t pos_l, pos_arg_t pos_h) {
+    off_t_ off = rw_pos(pos_l, pos_h);
     STRACE("pwritev(%d, %#x, %d, %lld)", fd_no, iovec_addr, iovec_count, (long long)off);
     struct fd *fd = f_get(fd_no);
     if (fd == NULL)
@@ -734,8 +743,8 @@ error:
 #define RWF_APPEND_ 0x10
 
 dword_t sys_preadv2(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count,
-                    dword_t pos_l, dword_t pos_h, dword_t flags) {
-    off_t_ off = ((qword_t)pos_h << 32) | pos_l;
+                    pos_arg_t pos_l, pos_arg_t pos_h, dword_t flags) {
+    off_t_ off = rw_pos(pos_l, pos_h);
     STRACE("preadv2(%d, %#x, %d, %lld, %#x)", fd_no, iovec_addr, iovec_count, (long long)off, flags);
     if (flags & ~(RWF_HIPRI_|RWF_NOWAIT_))
         return _EOPNOTSUPP;
@@ -754,8 +763,8 @@ dword_t sys_preadv2(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count,
 }
 
 dword_t sys_pwritev2(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count,
-                     dword_t pos_l, dword_t pos_h, dword_t flags) {
-    off_t_ off = ((qword_t)pos_h << 32) | pos_l;
+                     pos_arg_t pos_l, pos_arg_t pos_h, dword_t flags) {
+    off_t_ off = rw_pos(pos_l, pos_h);
     STRACE("pwritev2(%d, %#x, %d, %lld, %#x)", fd_no, iovec_addr, iovec_count, (long long)off, flags);
     // DSYNC/SYNC are stronger durability than we provide anywhere else and
     // HIPRI is a hint; treat them all as best-effort. APPEND with an explicit
