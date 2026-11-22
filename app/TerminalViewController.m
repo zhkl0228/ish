@@ -148,18 +148,25 @@ static NSString *_Nullable arrowKeySymbol(NSInteger tag) {
         self.barHeight.constant = 43;
     }
     
+    // The keys are named in text: few people read the Mac key symbols (⎋ ⇥ ⌃ ⌥)
+    // as esc, tab, ctrl and alt. A key is 28 points wide on a 320-point screen,
+    // so the name may shrink a little to fit.
+    NSDictionary<NSString *, UIButton *> *namedKeys = @{
+        @"esc": self.escapeKey,
+        @"tab": self.tabKey,
+        @"ctrl": self.controlKey,
+        @"alt": self.altKey,
+    };
+    [namedKeys enumerateKeysAndObjectsUsingBlock:^(NSString *name, UIButton *key, BOOL *stop) {
+        [key setTitle:name forState:UIControlStateNormal];
+        key.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
+        key.titleLabel.adjustsFontSizeToFitWidth = YES;
+        key.titleLabel.minimumScaleFactor = 0.75;
+    }];
+
     // SF Symbols is cool
     if (@available(iOS 13, *)) {
         [self.pasteButton setImage:[UIImage systemImageNamed:@"doc.on.clipboard"] forState:UIControlStateNormal];
-        
-        [self.tabKey setTitle:nil forState:UIControlStateNormal];
-        [self.tabKey setImage:[UIImage systemImageNamed:@"arrow.right.to.line.alt"] forState:UIControlStateNormal];
-        [self.controlKey setTitle:nil forState:UIControlStateNormal];
-        [self.controlKey setImage:[UIImage systemImageNamed:@"control"] forState:UIControlStateNormal];
-        [self.escapeKey setTitle:nil forState:UIControlStateNormal];
-        [self.escapeKey setImage:[UIImage systemImageNamed:@"escape"] forState:UIControlStateNormal];
-        [self.altKey setTitle:nil forState:UIControlStateNormal];
-        [self.altKey setImage:[UIImage systemImageNamed:@"option"] forState:UIControlStateNormal];
         for (UIButton *button in self.barButtons) {
             NSString *symbol = arrowKeySymbol(button.tag);
             if (symbol != nil) {
