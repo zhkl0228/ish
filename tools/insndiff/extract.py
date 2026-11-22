@@ -2,7 +2,7 @@
 # Extract distinct aarch64 instruction words from an ELF's .text for insndiff.
 #
 # usage: extract.py <elf> <outdir>
-# Writes <outdir>/simd_dp.bin, int_dp.bin and ldst_simd.bin: little-endian
+# Writes <outdir>/simd_dp.bin, int_dp.bin, ldst_simd.bin and ldst_int.bin: little-endian
 # uint32 words, sorted. Words that name x27-x30 are left out (insndiff keeps
 # its state pointer, branch target, frame pointer and LR there), and so are
 # words whose result depends on the PC or that would move the harness stack.
@@ -33,7 +33,33 @@ def classify(w):
         if rn == 31:                        # SP base
             return None
         return 'ldst_simd'
+    if (w >> 25) & 5 == 4:                  # loads and stores, general registers
+        if (w >> 27) & 7 == 3 and not (w >> 24) & 1:
+            return None                     # load register (literal): PC-relative
+        if rn == 31:                        # SP base
+            return None
+        if constrained_unpredictable(w):
+            return None
+        return 'ldst_int'
     return None
+
+def constrained_unpredictable(w):
+    """Load/store forms whose result the architecture leaves open, so native
+    and iSH may both be right and still differ."""
+    rt, rn, rt2 = w & 31, (w >> 5) & 31, (w >> 10) & 31
+    load = (w >> 22) & 1
+    if (w >> 27) & 7 == 5 and not (w >> 26) & 1:   # load/store pair, general registers
+        writeback = (w >> 23) & 3 in (1, 3)         # post- or pre-indexed
+        if writeback and rn in (rt, rt2):
+            return True
+        if load and rt == rt2:
+            return True
+        return False
+    if (w >> 27) & 7 == 7 and (w >> 24) & 3 == 0 and not (w >> 21) & 1:
+        # load/store register, immediate post- or pre-indexed: writeback into Rt
+        if (w >> 10) & 3 in (1, 3) and rn == rt:
+            return True
+    return False
 
 def main():
     elf, outdir = sys.argv[1], sys.argv[2]
@@ -42,7 +68,7 @@ def main():
         subprocess.run(['objcopy', '-O', 'binary', '--only-section=.text', elf, t.name], check=True)
         raw = open(t.name, 'rb').read()
     words = set(struct.unpack('<%dI' % (len(raw) // 4), raw[:len(raw) // 4 * 4]))
-    sets = {'simd_dp': [], 'int_dp': [], 'ldst_simd': []}
+    sets = {'simd_dp': [], 'int_dp': [], 'ldst_simd': [], 'ldst_int': []}
     for w in words:
         c = classify(w)
         if c:

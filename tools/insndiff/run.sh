@@ -22,8 +22,9 @@ put() { "$ish" -f "$rootfs" /bin/sh -c "cat > $2 && chmod +x $2" < "$1"; }
 put "$work/insndiff" /tmp/insndiff
 
 # set:mode:seeds. Mode 1 points every X register into a memory window.
-for spec in simd_dp:0:4 int_dp:0:4 ldst_simd:1:2; do
+for spec in simd_dp:0:4 int_dp:0:4 ldst_simd:1:2 ldst_int:1:2; do
     IFS=: read -r set mode seeds <<< "$spec"
+    [ -s "$work/$set.bin" ] || { echo "== $set: no instructions"; continue; }
     "$work/insndiff" "$work/$set.bin" "$work/native_$set.bin" "$mode" "$seeds"
     put "$work/$set.bin" "/tmp/insndiff_$set.bin"
     guest /tmp/insndiff "/tmp/insndiff_$set.bin" "/tmp/insndiff_out_$set.bin" "$mode" "$seeds" > /dev/null

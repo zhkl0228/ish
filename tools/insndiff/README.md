@@ -21,10 +21,14 @@ large one such as a Bun or Node binary covers what real programs execute.
 | `simd_dp` | SIMD and FP data processing | registers | 4 |
 | `int_dp` | integer data processing (immediate and register) | registers | 4 |
 | `ldst_simd` | SIMD and FP loads and stores | memory | 2 |
+| `ldst_int` | general-register loads and stores, exclusives and atomics | memory | 2 |
 
 In memory mode every X register points into a 4 KB window of a buffer mapped
 at the same fixed address in both runs; the window is restored before and
 hashed after each run.
+
+`ldst_int` also leaves out the forms whose result the architecture leaves
+open (writeback into the base register, a load pair into one register).
 
 `extract.py` leaves out words that name x27-x30 (the harness keeps its state
 pointer, branch target, frame pointer and return address there), PC-relative
