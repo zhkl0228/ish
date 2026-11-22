@@ -15,12 +15,6 @@ static unsigned long fd_telldir(struct fd *fd) {
     return off;
 }
 
-static void fd_seekdir(struct fd *fd, unsigned long off) {
-    fd->offset = off;
-    if (fd->ops->seekdir)
-        fd->ops->seekdir(fd, off);
-}
-
 struct linux_dirent_ {
     dword_t inode;
     dword_t offset;
@@ -81,22 +75,25 @@ int_t sys_getdents_common(fd_t f, addr_t dirents, dword_t count,
 
     dword_t orig_count = count;
 
-    long ptr;
-    int err;
     int printed = 0;
     while (true) {
-        ptr = fd_telldir(fd);
         struct dir_entry entry;
-        err = fd->ops->readdir(fd, &entry);
-        if (err < 0)
-            return err;
-        if (err == 0)
-            break;
+        off_t_ offset;
+        if (fd->dirent_pending.valid) {
+            entry = fd->dirent_pending.entry;
+            offset = fd->dirent_pending.offset;
+        } else {
+            int err = fd->ops->readdir(fd, &entry);
+            if (err < 0)
+                return err;
+            if (err == 0)
+                break;
+            offset = fd_telldir(fd);
+        }
 
         size_t max_reclen = sizeof(struct linux_dirent64_) + strlen(entry.name) + 4;
         char dirent_data[max_reclen];
         ino_t inode = entry.inode;
-        off_t_ offset = fd_telldir(fd);
         const char *name = entry.name;
         int type = 0;
         size_t reclen = fill_dirent(dirent_data, inode, offset, name, type);
@@ -107,12 +104,13 @@ int_t sys_getdents_common(fd_t f, addr_t dirents, dword_t count,
         }
 
         if (reclen > count) {
-            if (count == orig_count) {
-                // If the buffer isn't large enough to read even a single dirent,
-                // reset the fd and return _EINVAL.
-                fd_seekdir(fd, ptr);
+            // Keep the entry for the next call instead of seeking back.
+            fd->dirent_pending.entry = entry;
+            fd->dirent_pending.offset = offset;
+            fd->dirent_pending.valid = true;
+            // Not even one entry fits: EINVAL, position unchanged.
+            if (count == orig_count)
                 return _EINVAL;
-            }
             break;
         }
 #if DENTS_DEBUG
@@ -121,11 +119,11 @@ int_t sys_getdents_common(fd_t f, addr_t dirents, dword_t count,
 #endif
         if (user_write(dirents, dirent_data, reclen))
             return _EFAULT;
+        fd->dirent_pending.valid = false;
         dirents += reclen;
         count -= reclen;
     }
 
-    fd_seekdir(fd, ptr);
 #if DENTS_DEBUG
     fprintf(stderr, "getdents: returning %d bytes\n", orig_count - count);
 #endif

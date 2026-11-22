@@ -11,6 +11,12 @@
 
 // FIXME almost everything that uses the structs in this file does so without any kind of sane locking
 
+#define NAME_MAX 255
+struct dir_entry {
+    qword_t inode;
+    char name[NAME_MAX + 1];
+};
+
 struct fd {
     atomic_uint refcount;
     unsigned flags;
@@ -122,6 +128,16 @@ struct fd {
     // realfs_flock), 0 if it never took a flock
     _Atomic int flock_proxy;
     DIR *dir;
+    // getdents: an entry already read from the directory that did not fit in
+    // the caller's buffer. The next getdents returns it first, so the
+    // directory position never moves backwards: seekdir() back to a position
+    // taken before entries were deleted is unspecified by POSIX and does not
+    // work on every host filesystem. Dropped by lseek on the directory.
+    struct {
+        bool valid;
+        struct dir_entry entry;
+        off_t_ offset; // d_off reported with it
+    } dirent_pending;
     struct inode_data *inode;
     ino_t fake_inode;
     // [T-ish-exec-fewer-meta-txns] fakefs_open reads the stat row inside the
@@ -152,11 +168,6 @@ int fd_close(struct fd *fd);
 int fd_getflags(struct fd *fd);
 int fd_setflags(struct fd *fd, int flags);
 
-#define NAME_MAX 255
-struct dir_entry {
-    qword_t inode;
-    char name[NAME_MAX + 1];
-};
 
 #define LSEEK_SET 0
 #define LSEEK_CUR 1

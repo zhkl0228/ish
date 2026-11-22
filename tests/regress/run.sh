@@ -141,6 +141,17 @@ else
         status=1
     fi
 
+    echo
+    echo "########## getdents keeps no seekdir position ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_getdents" \
+            tests/regress/regress_getdents.c; then
+        "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_getdents || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_getdents"
+    else
+        echo "failed to build regress_getdents" >&2
+        status=1
+    fi
+
     # AF_NETLINK stub: no read blocks without bound; links and addresses are
     # the host's; everything else is refused at once. The second run pins
     # the ISH_NETLINK_ROUTE=empty switch (read from the host environment).

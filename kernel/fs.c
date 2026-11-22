@@ -489,6 +489,16 @@ error:
     return res;
 }
 
+// lseek on an fd. Moving a directory's position drops the entry getdents kept
+// back (see fd->dirent_pending); lseek(fd, 0, SEEK_CUR) only reads the
+// position and keeps it. Called with fd->lock held.
+static off_t_ fd_lseek(struct fd *fd, off_t_ off, dword_t whence) {
+    off_t_ res = fd->ops->lseek(fd, off, whence);
+    if (res >= 0 && S_ISDIR(fd->type) && !(whence == LSEEK_CUR && off == 0))
+        fd->dirent_pending.valid = false;
+    return res;
+}
+
 dword_t sys__llseek(fd_t f, dword_t off_high, dword_t off_low, addr_t res_addr, dword_t whence) {
     struct fd *fd = f_get(f);
     if (fd == NULL)
@@ -498,7 +508,7 @@ dword_t sys__llseek(fd_t f, dword_t off_high, dword_t off_low, addr_t res_addr, 
     lock(&fd->lock);
     off_t_ off = ((qword_t) off_high << 32) | off_low;
     STRACE("llseek(%d, %lu, %#x, %d)", f, off, res_addr, whence);
-    off_t_ res = fd->ops->lseek(fd, off, whence);
+    off_t_ res = fd_lseek(fd, off, whence);
     STRACE(" -> %lu", res);
     unlock(&fd->lock);
     if (res < 0)
@@ -515,7 +525,7 @@ dword_t sys_lseek(fd_t f, dword_t off, dword_t whence) {
     if (!fd->ops->lseek)
         return _ESPIPE;
     lock(&fd->lock);
-    off_t res = fd->ops->lseek(fd, off, whence);
+    off_t res = fd_lseek(fd, off, whence);
     unlock(&fd->lock);
     if ((dword_t) res != res)
         return _EOVERFLOW;
@@ -532,7 +542,7 @@ qword_t sys_lseek64(fd_t f, sqword_t off, dword_t whence) {
         return _ESPIPE;
     lock(&fd->lock);
     STRACE("lseek64(%d, %lld, %d)", f, (long long)off, whence);
-    off_t_ res = fd->ops->lseek(fd, off, whence);
+    off_t_ res = fd_lseek(fd, off, whence);
     STRACE(" -> %lld", (long long)res);
     unlock(&fd->lock);
     return res;
