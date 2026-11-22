@@ -25,6 +25,7 @@
                                 </userDefinedRuntimeAttributes>
                                 <connections>
                                     <outlet property="controlKey" destination="W9v-cj-FWz" id="HgQ-u7-5IL"/>
+                                    <outlet property="altKey" destination="Alt-Ky-k01" id="Alt-Ov-k01"/>
                                     <outlet property="inputAccessoryView" destination="GyN-ob-WFz" id="rBB-FQ-HiM"/>
                                 </connections>
                             </view>
@@ -50,6 +51,7 @@
                         <outlet property="barView" destination="GyN-ob-WFz" id="lVV-s6-cQt"/>
                         <outlet property="bottomConstraint" destination="TjH-PI-NBO" id="ZSq-o1-EC4"/>
                         <outlet property="controlKey" destination="W9v-cj-FWz" id="c9i-VC-j7f"/>
+                        <outlet property="altKey" destination="Alt-Ky-k01" id="Alt-Oc-k01"/>
                         <outlet property="escapeKey" destination="IPm-l0-f25" id="QBn-lt-GPd"/>
                         <outlet property="pasteButton" destination="hmm-tv-z35" id="mgi-xs-C8r"/>
                         <outlet property="tabKey" destination="cJt-oG-BnW" id="YaE-o4-lKm"/>
@@ -58,9 +60,11 @@
                         <outletCollection property="barButtons" destination="cJt-oG-BnW" id="Yjx-uz-RbI"/>
                         <outletCollection property="barButtons" destination="W9v-cj-FWz" id="OFf-FH-2Xy"/>
                         <outletCollection property="barButtons" destination="IPm-l0-f25" id="dHH-gh-Tzq"/>
-                        <outletCollection property="barButtons" destination="VCr-TW-PIZ" id="NlS-hh-ara"/>
-                        <outletCollection property="barButtons" destination="Shf-Ar-rw1" id="Shf-Ou-t01"/>
-                        <outletCollection property="barButtons" destination="Ctl-Ar-rw1" id="Ctl-Ou-t01"/>
+                        <outletCollection property="barButtons" destination="Alt-Ky-k01" id="Alt-Oc-k02"/>
+                        <outletCollection property="barButtons" destination="ArL-Ky-k01" id="ArL-Oc-k02"/>
+                        <outletCollection property="barButtons" destination="ArD-Ky-k01" id="ArD-Oc-k02"/>
+                        <outletCollection property="barButtons" destination="ArU-Ky-k01" id="ArU-Oc-k02"/>
+                        <outletCollection property="barButtons" destination="ArR-Ky-k01" id="ArR-Oc-k02"/>
                         <outletCollection property="barControls" destination="hmm-tv-z35" id="EEv-5m-po5"/>
                     </connections>
                 </viewController>
@@ -72,6 +76,21 @@
                         <stackView opaque="NO" contentMode="scaleToFill" spacing="6" translatesAutoresizingMaskIntoConstraints="NO" id="4pc-Ei-ihz">
                             <rect key="frame" x="6" y="50" width="488" height="50"/>
                             <subviews>
+                                <button contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="IPm-l0-f25" customClass="BarButton">
+                                    <rect key="frame" x="74" y="0.0" width="31" height="50"/>
+                                    <color key="backgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
+                                    <accessibility key="accessibilityConfiguration" label="Escape">
+                                        <accessibilityTraits key="traits" button="YES"/>
+                                    </accessibility>
+                                    <fontDescription key="fontDescription" type="system" pointSize="24"/>
+                                    <color key="tintColor" white="0.0" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
+                                    <state key="normal" title="⎋">
+                                        <color key="titleColor" systemColor="darkTextColor"/>
+                                    </state>
+                                    <connections>
+                                        <action selector="pressEscape:" destination="BYZ-38-t0r" eventType="primaryActionTriggered" id="Z7i-gl-kzw"/>
+                                    </connections>
+                                </button>
                                 <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="cJt-oG-BnW" customClass="BarButton">
                                     <rect key="frame" x="0.0" y="0.0" width="31" height="50"/>
                                     <color key="backgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
@@ -105,65 +124,94 @@
                                         <action selector="pressControl:" destination="BYZ-38-t0r" eventType="primaryActionTriggered" id="c21-jR-m4I"/>
                                     </connections>
                                 </button>
-                                <button contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="IPm-l0-f25" customClass="BarButton">
+                                <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="Alt-Ky-k01" customClass="BarButton">
+                                    <rect key="frame" x="37" y="0.0" width="31" height="50"/>
+                                    <color key="backgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
+                                    <accessibility key="accessibilityConfiguration" label="Alt">
+                                        <accessibilityTraits key="traits" button="YES"/>
+                                    </accessibility>
+                                    <fontDescription key="fontDescription" type="system" pointSize="20"/>
+                                    <color key="tintColor" white="0.0" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
+                                    <state key="normal" title="⌥">
+                                        <color key="titleColor" systemColor="darkTextColor"/>
+                                    </state>
+                                    <userDefinedRuntimeAttributes>
+                                        <userDefinedRuntimeAttribute type="boolean" keyPath="toggleable" value="YES"/>
+                                    </userDefinedRuntimeAttributes>
+                                    <connections>
+                                        <action selector="pressAlt:" destination="BYZ-38-t0r" eventType="primaryActionTriggered" id="Alt-Ac-k01"/>
+                                    </connections>
+                                </button>
+                                <button contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" tag="3" id="ArL-Ky-k01" userLabel="Left Arrow" customClass="BarButton">
                                     <rect key="frame" x="74" y="0.0" width="31" height="50"/>
                                     <color key="backgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
-                                    <accessibility key="accessibilityConfiguration" label="Escape">
+                                    <accessibility key="accessibilityConfiguration" label="Left Arrow">
                                         <accessibilityTraits key="traits" button="YES"/>
                                     </accessibility>
                                     <fontDescription key="fontDescription" type="system" pointSize="24"/>
                                     <color key="tintColor" white="0.0" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
-                                    <state key="normal" title="⎋">
+                                    <state key="normal" title="←">
                                         <color key="titleColor" systemColor="darkTextColor"/>
                                     </state>
                                     <connections>
-                                        <action selector="pressEscape:" destination="BYZ-38-t0r" eventType="primaryActionTriggered" id="Z7i-gl-kzw"/>
+                                        <action selector="arrowKeyDown:" destination="BYZ-38-t0r" eventType="touchDown" id="ArL-Dn-k01"/>
+                                        <action selector="arrowKeyUp:" destination="BYZ-38-t0r" eventType="touchUpInside" id="ArL-Ui-k01"/>
+                                        <action selector="arrowKeyUp:" destination="BYZ-38-t0r" eventType="touchUpOutside" id="ArL-Uo-k01"/>
+                                        <action selector="arrowKeyUp:" destination="BYZ-38-t0r" eventType="touchCancel" id="ArL-Uc-k01"/>
                                     </connections>
                                 </button>
-                                <button contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="VCr-TW-PIZ" userLabel="Arrows" customClass="ArrowBarButton">
-                                    <rect key="frame" x="111" y="0.0" width="31" height="50"/>
+                                <button contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" tag="2" id="ArD-Ky-k01" userLabel="Down Arrow" customClass="BarButton">
+                                    <rect key="frame" x="74" y="0.0" width="31" height="50"/>
                                     <color key="backgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
+                                    <accessibility key="accessibilityConfiguration" label="Down Arrow">
+                                        <accessibilityTraits key="traits" button="YES"/>
+                                    </accessibility>
                                     <fontDescription key="fontDescription" type="system" pointSize="24"/>
                                     <color key="tintColor" white="0.0" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
-                                    <state key="normal">
+                                    <state key="normal" title="↓">
                                         <color key="titleColor" systemColor="darkTextColor"/>
                                     </state>
                                     <connections>
-                                        <action selector="pressArrow:" destination="BYZ-38-t0r" eventType="valueChanged" id="SBI-0w-nSu"/>
+                                        <action selector="arrowKeyDown:" destination="BYZ-38-t0r" eventType="touchDown" id="ArD-Dn-k01"/>
+                                        <action selector="arrowKeyUp:" destination="BYZ-38-t0r" eventType="touchUpInside" id="ArD-Ui-k01"/>
+                                        <action selector="arrowKeyUp:" destination="BYZ-38-t0r" eventType="touchUpOutside" id="ArD-Uo-k01"/>
+                                        <action selector="arrowKeyUp:" destination="BYZ-38-t0r" eventType="touchCancel" id="ArD-Uc-k01"/>
                                     </connections>
                                 </button>
-                                <button contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="Shf-Ar-rw1" userLabel="Shift Arrows" customClass="ArrowBarButton">
-                                    <rect key="frame" x="111" y="0.0" width="31" height="50"/>
+                                <button contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" tag="1" id="ArU-Ky-k01" userLabel="Up Arrow" customClass="BarButton">
+                                    <rect key="frame" x="74" y="0.0" width="31" height="50"/>
                                     <color key="backgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
+                                    <accessibility key="accessibilityConfiguration" label="Up Arrow">
+                                        <accessibilityTraits key="traits" button="YES"/>
+                                    </accessibility>
                                     <fontDescription key="fontDescription" type="system" pointSize="24"/>
                                     <color key="tintColor" white="0.0" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
-                                    <state key="normal">
+                                    <state key="normal" title="↑">
                                         <color key="titleColor" systemColor="darkTextColor"/>
                                     </state>
-                                    <userDefinedRuntimeAttributes>
-                                        <userDefinedRuntimeAttribute type="number" keyPath="modifiers">
-                                            <integer key="value" value="131072"/>
-                                        </userDefinedRuntimeAttribute>
-                                    </userDefinedRuntimeAttributes>
                                     <connections>
-                                        <action selector="pressArrow:" destination="BYZ-38-t0r" eventType="valueChanged" id="Shf-Ac-t01"/>
+                                        <action selector="arrowKeyDown:" destination="BYZ-38-t0r" eventType="touchDown" id="ArU-Dn-k01"/>
+                                        <action selector="arrowKeyUp:" destination="BYZ-38-t0r" eventType="touchUpInside" id="ArU-Ui-k01"/>
+                                        <action selector="arrowKeyUp:" destination="BYZ-38-t0r" eventType="touchUpOutside" id="ArU-Uo-k01"/>
+                                        <action selector="arrowKeyUp:" destination="BYZ-38-t0r" eventType="touchCancel" id="ArU-Uc-k01"/>
                                     </connections>
                                 </button>
-                                <button contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="Ctl-Ar-rw1" userLabel="Control Arrows" customClass="ArrowBarButton">
-                                    <rect key="frame" x="111" y="0.0" width="31" height="50"/>
+                                <button contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" tag="4" id="ArR-Ky-k01" userLabel="Right Arrow" customClass="BarButton">
+                                    <rect key="frame" x="74" y="0.0" width="31" height="50"/>
                                     <color key="backgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
+                                    <accessibility key="accessibilityConfiguration" label="Right Arrow">
+                                        <accessibilityTraits key="traits" button="YES"/>
+                                    </accessibility>
                                     <fontDescription key="fontDescription" type="system" pointSize="24"/>
                                     <color key="tintColor" white="0.0" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
-                                    <state key="normal">
+                                    <state key="normal" title="→">
                                         <color key="titleColor" systemColor="darkTextColor"/>
                                     </state>
-                                    <userDefinedRuntimeAttributes>
-                                        <userDefinedRuntimeAttribute type="number" keyPath="modifiers">
-                                            <integer key="value" value="262144"/>
-                                        </userDefinedRuntimeAttribute>
-                                    </userDefinedRuntimeAttributes>
                                     <connections>
-                                        <action selector="pressArrow:" destination="BYZ-38-t0r" eventType="valueChanged" id="Ctl-Ac-t01"/>
+                                        <action selector="arrowKeyDown:" destination="BYZ-38-t0r" eventType="touchDown" id="ArR-Dn-k01"/>
+                                        <action selector="arrowKeyUp:" destination="BYZ-38-t0r" eventType="touchUpInside" id="ArR-Ui-k01"/>
+                                        <action selector="arrowKeyUp:" destination="BYZ-38-t0r" eventType="touchUpOutside" id="ArR-Uo-k01"/>
+                                        <action selector="arrowKeyUp:" destination="BYZ-38-t0r" eventType="touchCancel" id="ArR-Uc-k01"/>
                                     </connections>
                                 </button>
                                 <view contentMode="scaleToFill" horizontalHuggingPriority="100" translatesAutoresizingMaskIntoConstraints="NO" id="qmg-M1-7W8" userLabel="Spacer">
@@ -186,10 +234,12 @@
                                 <constraint firstAttribute="height" constant="43" id="3cy-zm-9Qp"/>
                                 <constraint firstItem="W9v-cj-FWz" firstAttribute="width" secondItem="hmm-tv-z35" secondAttribute="width" id="Xdt-z5-Zdb"/>
                                 <constraint firstItem="IPm-l0-f25" firstAttribute="width" secondItem="hmm-tv-z35" secondAttribute="width" id="ebo-yF-ffX"/>
-                                <constraint firstItem="hmm-tv-z35" firstAttribute="width" secondItem="VCr-TW-PIZ" secondAttribute="width" id="fXl-3w-1Zj"/>
-                                <constraint firstItem="hmm-tv-z35" firstAttribute="width" secondItem="Shf-Ar-rw1" secondAttribute="width" id="Shf-Wd-t01"/>
-                                <constraint firstItem="hmm-tv-z35" firstAttribute="width" secondItem="Ctl-Ar-rw1" secondAttribute="width" id="Ctl-Wd-t01"/>
                                 <constraint firstItem="cJt-oG-BnW" firstAttribute="width" secondItem="hmm-tv-z35" secondAttribute="width" id="oQb-HX-lTG"/>
+                                <constraint firstItem="Alt-Ky-k01" firstAttribute="width" secondItem="hmm-tv-z35" secondAttribute="width" id="Alt-Wd-k01"/>
+                                <constraint firstItem="ArL-Ky-k01" firstAttribute="width" secondItem="hmm-tv-z35" secondAttribute="width" id="ArL-Wd-k01"/>
+                                <constraint firstItem="ArD-Ky-k01" firstAttribute="width" secondItem="hmm-tv-z35" secondAttribute="width" id="ArD-Wd-k01"/>
+                                <constraint firstItem="ArU-Ky-k01" firstAttribute="width" secondItem="hmm-tv-z35" secondAttribute="width" id="ArU-Wd-k01"/>
+                                <constraint firstItem="ArR-Ky-k01" firstAttribute="width" secondItem="hmm-tv-z35" secondAttribute="width" id="ArR-Wd-k01"/>
                             </constraints>
                         </stackView>
                     </subviews>

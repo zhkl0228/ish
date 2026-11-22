@@ -14,7 +14,6 @@
 #import "BackgroundKeepAlive.h"
 #import "SceneDelegate.h"
 #import "BarButton.h"
-#import "ArrowBarButton.h"
 #import "UserPreferences.h"
 #import "AboutViewController.h"
 #import "CurrentRoot.h"
@@ -42,7 +41,10 @@
 
 @property (weak, nonatomic) IBOutlet UIButton *tabKey;
 @property (weak, nonatomic) IBOutlet UIButton *controlKey;
+@property (weak, nonatomic) IBOutlet UIButton *altKey;
 @property (weak, nonatomic) IBOutlet UIButton *escapeKey;
+// Repeats the arrow key being held down.
+@property NSTimer *arrowRepeat;
 @property (strong, nonatomic) IBOutletCollection(id) NSArray *barButtons;
 @property (strong, nonatomic) IBOutletCollection(id) NSArray *barControls;
 
@@ -72,6 +74,20 @@
 @property (nonatomic) BOOL hasExternalKeyboard;
 
 @end
+
+// The bar's arrow keys carry their direction in the storyboard tag:
+// 1 up, 2 down, 3 left, 4 right. These are the CSI final bytes.
+static const char arrowKeyFinals[] = {[1] = 'A', [2] = 'B', [3] = 'D', [4] = 'C'};
+
+static NSString *_Nullable arrowKeySymbol(NSInteger tag) {
+    switch (tag) {
+        case 1: return @"arrow.up";
+        case 2: return @"arrow.down";
+        case 3: return @"arrow.left";
+        case 4: return @"arrow.right";
+    }
+    return nil;
+}
 
 @implementation TerminalViewController
 
@@ -142,6 +158,15 @@
         [self.controlKey setImage:[UIImage systemImageNamed:@"control"] forState:UIControlStateNormal];
         [self.escapeKey setTitle:nil forState:UIControlStateNormal];
         [self.escapeKey setImage:[UIImage systemImageNamed:@"escape"] forState:UIControlStateNormal];
+        [self.altKey setTitle:nil forState:UIControlStateNormal];
+        [self.altKey setImage:[UIImage systemImageNamed:@"option"] forState:UIControlStateNormal];
+        for (UIButton *button in self.barButtons) {
+            NSString *symbol = arrowKeySymbol(button.tag);
+            if (symbol != nil) {
+                [button setTitle:nil forState:UIControlStateNormal];
+                [button setImage:[UIImage systemImageNamed:symbol] forState:UIControlStateNormal];
+            }
+        }
     }
     
     [UserPreferences.shared observe:@[@"hideStatusBar"] options:0 owner:self usingBlock:^(typeof(self) self) {
@@ -532,8 +557,13 @@
     // set sizing parameters on bar
     // numbers stolen from iVim and modified somewhat
     if (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone) {
-        // phone
-        [self setBarHorizontalPadding:6 verticalPadding:6 buttonWidth:32];
+        // phone: up to 32 points a key, narrower when the row would not fit (a
+        // 320-point wide iPhone SE). Every arranged view but the spacer is a key.
+        CGFloat padding = 6;
+        NSUInteger views = self.bar.arrangedSubviews.count;
+        NSUInteger keys = views - 1;
+        CGFloat fit = (bar.width - 2 * padding - self.bar.spacing * (views - 1)) / keys;
+        [self setBarHorizontalPadding:padding verticalPadding:6 buttonWidth:MIN(32, floor(fit))];
     } else if (bar.width >= 450) {
         // wide ipad
         [self setBarHorizontalPadding:15 verticalPadding:8 buttonWidth:43];
@@ -566,14 +596,31 @@
     self.controlKey.selected = !self.controlKey.selected;
 }
     
-- (IBAction)pressArrow:(ArrowBarButton *)sender {
-    switch (sender.direction) {
-        case ArrowUp: [self pressKey:[self.terminal arrow:'A' modifiers:sender.modifiers]]; break;
-        case ArrowDown: [self pressKey:[self.terminal arrow:'B' modifiers:sender.modifiers]]; break;
-        case ArrowLeft: [self pressKey:[self.terminal arrow:'D' modifiers:sender.modifiers]]; break;
-        case ArrowRight: [self pressKey:[self.terminal arrow:'C' modifiers:sender.modifiers]]; break;
-        case ArrowNone: break;
-    }
+- (IBAction)pressAlt:(id)sender {
+    self.altKey.selected = !self.altKey.selected;
+}
+
+// An arrow key sends its sequence on touch down and, while held, repeats it
+// after half a second, ten times a second, like a hardware key. Control and Alt
+// from the bar are taken once and apply to the whole press.
+- (IBAction)arrowKeyDown:(UIButton *)sender {
+    NSString *sequence = [self.terminal arrow:arrowKeyFinals[sender.tag]
+                                    modifiers:[self.termView takeBarModifiers]];
+    [self.termView insertSequence:sequence];
+    [self.arrowRepeat invalidate];
+    __weak typeof(self) weakSelf = self;
+    self.arrowRepeat = [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:NO block:^(NSTimer *_) {
+        [weakSelf.termView insertSequence:sequence];
+        weakSelf.arrowRepeat = [NSTimer scheduledTimerWithTimeInterval:0.1 repeats:YES block:^(NSTimer *_) {
+            [weakSelf.termView insertSequence:sequence];
+        }];
+    }];
+}
+
+// Touch up inside or outside, or cancelled (the keyboard went away).
+- (IBAction)arrowKeyUp:(id)sender {
+    [self.arrowRepeat invalidate];
+    self.arrowRepeat = nil;
 }
 
 #pragma mark Commands

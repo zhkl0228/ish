@@ -323,21 +323,49 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollHeight",
 
 // implementing these makes a keyboard pop up when this view is first responder
 
+// Whether a bar modifier key applies to the next key. One held down applies
+// while it is held; one toggled on applies once and is cleared.
+static BOOL takeBarKey(UIButton *key) {
+    if (key.highlighted)
+        key.selected = YES;
+    if (!key.selected)
+        return NO;
+    if (!key.highlighted)
+        key.selected = NO;
+    return YES;
+}
+
+- (UIKeyModifierFlags)takeBarModifiers {
+    UIKeyModifierFlags modifiers = 0;
+    if (takeBarKey(self.controlKey))
+        modifiers |= UIKeyModifierControl;
+    if (takeBarKey(self.altKey))
+        modifiers |= UIKeyModifierAlternate;
+    return modifiers;
+}
+
 - (void)insertText:(NSString *)text {
     self.markedText = nil;
 
-    if (self.controlKey.highlighted)
-        self.controlKey.selected = YES;
-    if (self.controlKey.selected) {
-        if (!self.controlKey.highlighted)
-            self.controlKey.selected = NO;
-        if (text.length == 1)
+    // The bar's modifiers apply to a single key. Pasted text and the escape
+    // sequences of arrows and other special keys use them up unchanged.
+    UIKeyModifierFlags modifiers = [self takeBarModifiers];
+    if (text.length == 1) {
+        // Alt (Meta) sends ESC before the key, as terminals encode it.
+        if (modifiers & UIKeyModifierAlternate)
+            [self.terminal sendInput:[NSData dataWithBytes:"\x1b" length:1]];
+        if (modifiers & UIKeyModifierControl)
             return [self insertControlChar:[text characterAtIndex:0]];
     }
 
     text = [text stringByReplacingOccurrencesOfString:@"\n" withString:@"\r"];
     NSData *data = [text dataUsingEncoding:NSUTF8StringEncoding];
     [self.terminal sendInput:data];
+}
+
+- (void)insertSequence:(NSString *)sequence {
+    self.markedText = nil;
+    [self.terminal sendInput:[sequence dataUsingEncoding:NSUTF8StringEncoding]];
 }
 
 - (void)insertControlChar:(char)ch {

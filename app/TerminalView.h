@@ -26,6 +26,15 @@ enum OverrideAppearance {
 
 @property (weak) IBOutlet UIInputView *inputAccessoryView;
 @property (weak) IBOutlet UIButton *controlKey;
+@property (weak) IBOutlet UIButton *altKey;
+
+// The Control and Alt bar keys as modifiers for the next key, as insertText:
+// applies them: a key that is held counts, a toggled one counts once and is
+// cleared.
+- (UIKeyModifierFlags)takeBarModifiers;
+// Sends an already encoded key sequence (an arrow with its modifiers) without
+// applying the bar's Control and Alt keys again.
+- (void)insertSequence:(NSString *)sequence;
 
 @property (nonatomic) Terminal *terminal;
 

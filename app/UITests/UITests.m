@@ -392,6 +392,26 @@
     XCTAssert([self.app.otherElements[@"paste stack"] waitForNonExistenceWithTimeout:5]);
 }
 
+// The keyboard bar: an arrow key moves the cursor, and Control applies to the next
+// key only (Ctrl-U clears the line, then typing is plain again).
+- (void)testKeyboardBarKeys {
+    [self waitForTerminalText:@":~#" timeout:30];
+    XCUIElement *left = self.app.buttons[@"Left Arrow"];
+    XCTAssert([left waitForExistenceWithTimeout:5], @"the keyboard bar should be showing");
+    // Typed at the end of the line, the * would follow the parentheses: a syntax error.
+    [self.app typeText:@"echo arrow-$((6 7))"];
+    for (int i = 0; i < 3; i++)
+        [left tap];
+    [self.app typeText:@"*\n"];
+    [self waitForTerminalText:@"arrow-42" timeout:10];
+
+    [self.app typeText:@"junk-to-clear"];
+    [self.app.buttons[@"Control"] tap];
+    [self.app typeText:@"u"];
+    [self.app typeText:@"echo ctrl-$((40+2))\n"];
+    [self waitForTerminalText:@"ctrl-42" timeout:10];
+}
+
 - (void)testShellRunsCommands {
     [self waitForTerminalText:@":~#" timeout:30];
     [self.app typeText:@"echo smoke-$((6*7)); uname -m\n"];
