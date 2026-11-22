@@ -152,6 +152,7 @@
             .endif
             tst w8, 31
             b.eq 1f
+            ubfx w11, _tmp, 31, 1
             mov w9, 32
             sub w9, w9, w8
             sub w8, w8, 1 /* shift by one less */
@@ -170,6 +171,9 @@
             .endif
             orr _tmp, w8, w9
             strb w10, [_cpu, CPU_cf]
+            ubfx w10, _tmp, 31, 1
+            eor w10, w10, w11
+            strb w10, [_cpu, CPU_of]
             setf_zsp
         1:
             .ifc \arg,imm
