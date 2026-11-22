@@ -297,9 +297,11 @@
         [self closeTab:session];
         return;
     }
-    if (session.state == TerminalSessionStateExited && self.tabs.count == 1) {
-        // The only shell exited: replace it, as the app has always done on iPhone, unless
-        // it died right after starting, which would just loop.
+    if (session.state == TerminalSessionStateExited) {
+        // The shell exited (`exit`, Ctrl-D): close its tab. If it was the only one, closeTab:
+        // starts a fresh shell in its place, as the app has always done on iPhone. A shell
+        // that died right after starting keeps its tab marked exited instead: its output
+        // usually says why, and replacing the only one would just loop.
         if ([NSDate.date timeIntervalSinceDate:session.startDate] > 1) {
             [self closeTab:session];
             return;

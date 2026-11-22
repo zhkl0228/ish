@@ -164,6 +164,22 @@
     [self waitForTerminalText:@"after-42" timeout:10];
 }
 
+// A shell that exits in one of several tabs closes its tab; the other tabs stay.
+- (void)testExitClosesTab {
+    [self waitForTerminalText:@":~#" timeout:30];
+    [self.app typeText:@"echo in-tab-one\n"];
+    [self waitForTerminalText:@"in-tab-one" timeout:10];
+    [self.app.buttons[@"new tab"] tap];
+    XCTAssert([self.app.buttons[@"tab 2"] waitForExistenceWithTimeout:5]);
+    [self waitForTerminalText:@":~#" timeout:30];
+    // Sleep first: a shell that exits within a second of starting keeps its tab.
+    [self.app typeText:@"sleep 2; exit\n"];
+    XCTAssert([self.app.buttons[@"tab 2"] waitForNonExistenceWithTimeout:20],
+              @"the exited shell's tab should close");
+    XCTAssert(self.app.buttons[@"tab 1"].exists);
+    [self waitForTerminalText:@"in-tab-one" timeout:5];
+}
+
 // Kept in the result bundle so the tab strip can be looked at after a run.
 - (void)attachScreenshotNamed:(NSString *)name {
     XCTAttachment *attachment = [XCTAttachment attachmentWithScreenshot:[XCUIScreen.mainScreen screenshot]];
