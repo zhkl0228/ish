@@ -228,6 +228,19 @@ else
         status=1
     fi
 
+    echo
+    echo "########## kill() reaches a thread in sigwait ##########"
+    if "$CC_GUEST" -static -O1 -Wall -pthread -o "$GUEST_ROOT/tmp/regress_sigwait_kill" \
+            tests/regress/regress_sigwait_kill.c; then
+        out=$("$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_sigwait_kill 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_sigwait_kill"
+    else
+        echo "failed to build regress_sigwait_kill" >&2
+        status=1
+    fi
+
     # AF_NETLINK stub: no read blocks without bound; links and addresses are
     # the host's; everything else is refused at once. The second run pins
     # the ISH_NETLINK_ROUTE=empty switch (read from the host environment).

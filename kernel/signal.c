@@ -1082,7 +1082,31 @@ int_t sys_rt_sigtimedwait(addr_t set_addr, addr_t info_addr, addr_t timeout_addr
     return info.sig;
 }
 
-static int kill_task(struct task *task, dword_t sig) {
+// The thread a signal sent to task's process goes to: one that can take it,
+// because it does not block it or waits for it in sigwait. The thread named is
+// preferred. With none, it stays pending on the named thread. Linux keeps such
+// a signal pending for the whole process, so a thread that unblocks it later
+// takes it; iSH has no process-wide pending set. Caller holds pids_lock (the
+// thread list).
+static struct task *process_signal_target(struct task *task, int sig) {
+    struct task *target = task;
+    lock(&task->sighand->lock);
+    if (sigset_has(task->blocked & ~task->waiting, sig) && signal_is_blockable(sig)) {
+        struct task *thread;
+        list_for_each_entry(&task->group->threads, thread, group_links) {
+            if (!sigset_has(thread->blocked & ~thread->waiting, sig)) {
+                target = thread;
+                break;
+            }
+        }
+    }
+    unlock(&task->sighand->lock);
+    return target;
+}
+
+// process_directed: kill() (and its process group forms) address the whole
+// process; tkill() and tgkill() address one thread.
+static int kill_task(struct task *task, dword_t sig, bool process_directed) {
     if (!superuser() &&
             current->uid != task->uid &&
             current->uid != task->suid &&
@@ -1094,6 +1118,8 @@ static int kill_task(struct task *task, dword_t sig) {
         .kill.pid = current->pid,
         .kill.uid = current->uid,
     };
+    if (process_directed && sig != 0)
+        task = process_signal_target(task, sig);
     send_signal(task, sig, info);
     return 0;
 }
@@ -1107,7 +1133,7 @@ static int kill_group(pid_t_ pgid, dword_t sig) {
     struct tgroup *tgroup;
     int err = _EPERM;
     list_for_each_entry(&pid->pgroup, tgroup, pgroup) {
-        int kill_err = kill_task(tgroup->leader, sig);
+        int kill_err = kill_task(tgroup->leader, sig, true);
         // killing a group should return an error only if no process can be signaled
         if (err == _EPERM)
             err = kill_err;
@@ -1121,14 +1147,14 @@ static int kill_everything(dword_t sig) {
         struct task *task = pid_get_task(i);
         if (task == NULL || task == current || !task_is_leader(task))
             continue;
-        int kill_err = kill_task(task, sig);
+        int kill_err = kill_task(task, sig, true);
         if (err == _EPERM)
             err = kill_err;
     }
     return err;
 }
 
-static int do_kill(pid_t_ pid, dword_t sig, pid_t_ tgid) {
+static int do_kill(pid_t_ pid, dword_t sig, pid_t_ tgid, bool process_directed) {
     STRACE("kill(%d, %d)", pid, sig);
     if (sig >= NUM_SIGS)
         return _EINVAL;
@@ -1155,7 +1181,7 @@ static int do_kill(pid_t_ pid, dword_t sig, pid_t_ tgid) {
             return _ESRCH;
         }
 
-        err = kill_task(task, sig);
+        err = kill_task(task, sig, process_directed);
     }
 
     unlock(&pids_lock);
@@ -1163,15 +1189,15 @@ static int do_kill(pid_t_ pid, dword_t sig, pid_t_ tgid) {
 }
 
 dword_t sys_kill(pid_t_ pid, dword_t sig) {
-    return do_kill(pid, sig, 0);
+    return do_kill(pid, sig, 0, true);
 }
 dword_t sys_tgkill(pid_t_ tgid, pid_t_ tid, dword_t sig) {
     if (tid <= 0 || tgid <= 0)
         return _EINVAL;
-    return do_kill(tid, sig, tgid);
+    return do_kill(tid, sig, tgid, false);
 }
 dword_t sys_tkill(pid_t_ tid, dword_t sig) {
     if (tid <= 0)
         return _EINVAL;
-    return do_kill(tid, sig, 0);
+    return do_kill(tid, sig, 0, false);
 }
