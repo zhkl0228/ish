@@ -270,7 +270,8 @@ else
     # iSH exits with init's status. It used to exit 0 whatever init returned,
     # and when init exited with a process still running (a background job,
     # timeout's watchdog) halt_system deadlocked on pids_lock and iSH ended
-    # with a host SIGTERM (143).
+    # with a host SIGTERM (143). init, as on Linux, ignores signals it has no
+    # handler for, even SIGKILL, but a fault still ends it.
     echo
     echo "########## exit status of init ##########"
     exit_passed=0 exit_failed=0
@@ -290,6 +291,8 @@ else
     check_exit 1 /bin/false
     check_exit 0 /bin/true
     check_exit 5 /bin/sh -c 'sleep 30 & exit 5'
+    check_exit 7 /bin/sh -c 'kill -9 $$; exit 7'
+    check_exit 8 /bin/sh -c 'kill -TERM $$; exit 8'
     check_exit 9 /bin/sh -c 'trap "exit 9" TERM; kill -TERM $$; sleep 1; exit 1'
     check_exit 137 /bin/sh -c 'sh -c "kill -9 \$\$"; exit $?'
     printf 'int main(void) { return *(volatile int *) 0; }\n' > "$GUEST_ROOT/tmp/regress_init_fault.c"
@@ -302,6 +305,19 @@ else
     rm -f "$GUEST_ROOT/tmp/regress_init_fault" "$GUEST_ROOT/tmp/regress_init_fault.c"
     echo "$exit_passed passed, $exit_failed failed"
     [ "$exit_failed" = 0 ] || status=1
+
+    echo
+    echo "########## signals init acts on ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_init_signals" \
+            tests/regress/regress_init_signals.c; then
+        out=$(timeout 20 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_init_signals 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_init_signals"
+    else
+        echo "failed to build regress_init_signals" >&2
+        status=1
+    fi
 
     echo
     echo "########## /proc/net/tcp, udp and socket:[inode] links ##########"

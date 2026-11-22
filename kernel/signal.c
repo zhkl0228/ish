@@ -58,7 +58,7 @@ static int signal_action(struct sighand *sighand, int sig) {
 // JSC's thread resume path uses RT signals (RTMIN/RT_1/RT_2); dropping a
 // duplicate as "already pending" loses a resume and wedges the GC handshake.
 #define SIGRTMIN_ 32
-static void deliver_signal_unlocked(struct task *task, int sig, struct siginfo_ info) {
+static void deliver_signal_unlocked(struct task *task, int sig, struct siginfo_ info, bool forced) {
     if (sig < SIGRTMIN_ && sigset_has(task->pending, sig))
         return;
 
@@ -66,6 +66,7 @@ static void deliver_signal_unlocked(struct task *task, int sig, struct siginfo_ 
     struct sigqueue *sigqueue = malloc(sizeof(struct sigqueue));
     sigqueue->info = info;
     sigqueue->info.sig = sig;
+    sigqueue->forced = forced;
     list_add_tail(&task->queue, &sigqueue->queue);
 
     if (sigset_has(task->blocked & ~task->waiting, sig) && signal_is_blockable(sig))
@@ -96,7 +97,7 @@ void deliver_signal(struct task *task, int sig, struct siginfo_ info) {
     if (task->sighand == NULL)
         return;
     lock(&task->sighand->lock);
-    deliver_signal_unlocked(task, sig, info);
+    deliver_signal_unlocked(task, sig, info, true);
     unlock(&task->sighand->lock);
     cpu_poke(&task->cpu);
 }
@@ -125,8 +126,18 @@ void send_signal(struct task *task, int sig, struct siginfo_ info) {
     if (sighand == NULL)
         return;
     lock(&sighand->lock);
-    if (signal_action(sighand, sig) != SIGNAL_IGNORE) {
-        deliver_signal_unlocked(task, sig, info);
+    int action = signal_action(sighand, sig);
+    // init, like the init of a Linux PID namespace (SIGNAL_UNKILLABLE), only
+    // gets the signals it has a handler for, SIGKILL and SIGSTOP included, so
+    // `kill -9 1` does nothing. A signal it blocks still queues, as on Linux:
+    // it may be taken by sigwait or get a handler before it is unblocked
+    // (receive_signals drops it if it does not). Faults are delivered with
+    // deliver_signal and still end it.
+    bool blocked = sigset_has(task->blocked | task->waiting, sig);
+    if (task->tgid == 1 && action != SIGNAL_CALL_HANDLER && !blocked)
+        action = SIGNAL_IGNORE;
+    if (action != SIGNAL_IGNORE) {
+        deliver_signal_unlocked(task, sig, info, false);
         // Poke the target CPU so it exits the JIT loop at the next gadget
         // boundary instead of waiting for INT_TIMER (up to 1024 cycles).
         // This reduces signal delivery latency from ~1024 to ~1 gadget.
@@ -150,7 +161,7 @@ bool try_self_signal(int sig) {
     bool can_send = signal_action(sighand, sig) != SIGNAL_IGNORE &&
         !sigset_has(current->blocked, sig);
     if (can_send)
-        deliver_signal_unlocked(current, sig, SIGINFO_NIL);
+        deliver_signal_unlocked(current, sig, SIGINFO_NIL, false);
     unlock(&sighand->lock);
     return can_send;
 }
@@ -650,6 +661,16 @@ void receive_signals(void) {
             continue;
         list_remove(&sigqueue->queue);
         sigset_del(&current->pending, sig);
+
+        // init drops a signal that was not forced and would take its default
+        // action, as Linux's get_signal does for an unkillable init: one it
+        // had blocked when it was sent, unblocked without a handler.
+        int action = signal_action(sighand, sig);
+        if (current->tgid == 1 && !sigqueue->forced &&
+                (action == SIGNAL_KILL || action == SIGNAL_STOP)) {
+            free(sigqueue);
+            continue;
+        }
 
         if (current->ptrace.traced && sig != SIGKILL_) {
             // This notifies the parent, goes to sleep, and waits for the
