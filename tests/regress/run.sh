@@ -241,6 +241,19 @@ else
         status=1
     fi
 
+    echo
+    echo "########## *at() with an absolute path ignores dirfd ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_at_absolute" \
+            tests/regress/regress_at_absolute.c; then
+        out=$("$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_at_absolute 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_at_absolute"
+    else
+        echo "failed to build regress_at_absolute" >&2
+        status=1
+    fi
+
     # AF_NETLINK stub: no read blocks without bound; links and addresses are
     # the host's; everything else is refused at once. The second run pins
     # the ISH_NETLINK_ROUTE=empty switch (read from the host environment).
