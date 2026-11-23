@@ -146,7 +146,8 @@ func main() {
 }
 EOF
 check go-preempt sh -c 'go build -o preempt preempt.go && timeout -s KILL 60 ./preempt'
-check go-mod sh -c 'mkdir -p gm && cd gm && go mod init example.com/gm >/dev/null 2>&1 && printf "package main\nimport (\"fmt\"; \"github.com/google/uuid\")\nfunc main(){ fmt.Println(len(uuid.NewString())) }\n" > main.go && go mod tidy >/dev/null 2>&1 && go run .'
+# go's own output kept: a failed download says why (once only an empty FAIL)
+check go-mod sh -c 'mkdir -p gm && cd gm && go mod init example.com/gm && printf "package main\nimport (\"fmt\"; \"github.com/google/uuid\")\nfunc main(){ fmt.Println(len(uuid.NewString())) }\n" > main.go && go mod tidy && go run .'
 
 check git-clone sh -c 'git clone -q --depth 1 https://github.com/octocat/Hello-World.git hw && git -C hw log --oneline -1'
 
