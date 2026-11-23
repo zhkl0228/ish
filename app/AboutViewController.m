@@ -99,6 +99,7 @@
     self.upgradeApkCell.userInteractionEnabled = FsNeedsRepositoryUpdate();
     self.upgradeApkLabel.enabled = FsNeedsRepositoryUpdate();
     self.upgradeApkBadge.hidden = !FsNeedsRepositoryUpdate();
+    self.upgradeApkCell.hidden = !FsIsManaged();
     [self.tableView reloadData];
 }
 
@@ -130,11 +131,19 @@
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
 }
 
+// Upgrade Repositories only applies to upstream's roots, whose repositories
+// iSH keeps (/ish/version); for any other filesystem, the built-in arm64 one
+// included, the row is hidden rather than left disabled without a reason.
+- (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
+    if ([super tableView:tableView cellForRowAtIndexPath:indexPath] == self.upgradeApkCell && !FsIsManaged())
+        return 0;
+    return [super tableView:tableView heightForRowAtIndexPath:indexPath];
+}
+
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     if (section == 1) { // filesystems / upgrade
-        // Only upstream's roots (with /ish/version) have their repositories
-        // kept by iSH; the built-in arm64 filesystem has its own, so there is
-        // nothing to say about one that isn't.
+        // Nothing to say about a filesystem whose repositories iSH does not
+        // keep: its Upgrade Repositories row is hidden (heightForRow above).
         if (!FsIsManaged()) {
             return nil;
         } else if (!FsNeedsRepositoryUpdate()) {
