@@ -2,7 +2,8 @@
 // Chromium, with a stand-in for the app's message handlers (Terminal.m,
 // TerminalView.m): output in UTF-8 split anywhere, the answers to programs,
 // bracketed paste, OSC 52, titles, the application cursor mode, sizes, the
-// scroll view's sync both ways, long-press selection and its rect, Cmd-click
+// scroll view's sync both ways, its drags as a full-screen program's wheel,
+// long-press selection and its rect, Cmd-click
 // links, wrapped lines, resizing, and no errors. WebKit is not Chromium, so
 // this checks term.js, not the app.
 //
@@ -29,7 +30,7 @@ const utf8 = (s) => Buffer.from(s, 'utf8').toString('latin1');
     await page.addInitScript(() => {
         window.__messages = [];
         const names = ['load', 'log', 'sendInput', 'sendBinary', 'resize', 'propUpdate', 'setTitle', 'copyText',
-                       'syncFocus', 'focus', 'newScrollRange', 'newScrollTop', 'openLink'];
+                       'syncFocus', 'focus', 'newScrollRange', 'newScrollTop', 'newWheelScrolling', 'openLink'];
         window.webkit = { messageHandlers: {} };
         for (const name of names)
             window.webkit.messageHandlers[name] = { postMessage: (body) => window.__messages.push([name, body]) };
@@ -110,6 +111,34 @@ const utf8 = (s) => Buffer.from(s, 'utf8').toString('latin1');
     await page.waitForTimeout(50);
     const atBottom = await page.evaluate(() => [term.buffer.active.viewportY, term.buffer.active.baseY]);
     check("the app's scroll at its bottom is the terminal's", atBottom[0] == atBottom[1], JSON.stringify(atBottom));
+
+    // A full-screen program's screen (claude's): the app's drags are its
+    // wheel, a notch a line of the finger's way
+    await take();
+    await write('\x1b[?1049h');
+    msgs = await take();
+    check('the alternate screen told to the app', msgs.some(([n, b]) => n == 'newWheelScrolling' && b === true), JSON.stringify(msgs));
+    const mid = await page.evaluate(() => {
+        const rect = document.querySelector('.xterm-screen').getBoundingClientRect();
+        return [rect.left + rect.width / 2, rect.top + rect.height / 2];
+    });
+    const inputOf = (m) => m.filter(([n]) => n == 'sendInput').map(([, b]) => b).join('');
+    await page.evaluate(([x, y, h]) => { exports.wheel(2.5 * h, x, y); exports.wheel(0.6 * h, x, y); }, [mid[0], mid[1], cellH]);
+    let wheeled = inputOf(await take());
+    check('a drag down, no mouse reports asked for: up arrows, a line each, parts added up',
+          wheeled == '\x1b[A'.repeat(3), JSON.stringify(wheeled));
+    await write('\x1b[?1000h\x1b[?1006h');
+    await take();
+    await page.evaluate(([x, y, h]) => exports.wheel(-2 * h, x, y), [mid[0], mid[1], cellH]);
+    wheeled = inputOf(await take());
+    check('a drag up, SGR mouse reports asked for (claude): the wheel turned down, at the finger',
+          /^(\x1b\[<65;\d+;\d+M){2}$/.test(wheeled), JSON.stringify(wheeled));
+    await page.evaluate(([x, y, h]) => exports.wheel(1.5 * h, x, y), [mid[0], mid[1], cellH]);
+    wheeled = inputOf(await take());
+    check('a drag down: the wheel turned up', /^\x1b\[<64;\d+;\d+M$/.test(wheeled), JSON.stringify(wheeled));
+    await write('\x1b[?1006l\x1b[?1000l\x1b[?1049l');
+    msgs = await take();
+    check('the normal screen told to the app', msgs.some(([n, b]) => n == 'newWheelScrolling' && b === false), JSON.stringify(msgs));
 
     // selection and links, at points of the page
     await page.evaluate(() => exports.clearScrollback());

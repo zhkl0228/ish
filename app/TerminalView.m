@@ -28,6 +28,15 @@ struct rowcol {
 // (term.js's newScrollRange). The scroll view's content is that and its own
 // height, so that its bottom is the terminal's.
 @property CGFloat scrollRange;
+// In a full-screen program's screen (the alternate one), which has no lines
+// above it to scroll, the drags are the program's mouse wheel (term.js's
+// newWheelScrolling and wheel). wheelSent: the drag's way already sent.
+@property BOOL wheelScrolling;
+@property CGFloat wheelSent;
+// A drag let go while moving: the wheel goes on, slowing as a scroll view does
+@property (nullable) CADisplayLink *wheelMomentum;
+@property CGFloat wheelVelocity;
+@property CGPoint wheelPoint;
 
 @property (nullable) NSString *markedText;
 @property (nullable) NSString *selectedText;
@@ -64,6 +73,7 @@ struct rowcol {
     // the page clamps the out-of-range scroll positions it is sent.
     scrollbarView.alwaysBounceVertical = YES;
     scrollbarView.keyboardDismissMode = UIScrollViewKeyboardDismissModeInteractive;
+    [scrollbarView.panGestureRecognizer addTarget:self action:@selector(scrollPanned:)];
     [self addSubview:scrollbarView];
 
     // Cmd-click opens links. The web view doesn't reliably pass Cmd through to
@@ -113,7 +123,7 @@ struct rowcol {
     }
 }
 
-static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollRange", @"newScrollTop", @"openLink"};
+static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollRange", @"newScrollTop", @"newWheelScrolling", @"openLink"};
 
 - (void)setTerminal:(Terminal *)terminal {
     if (_terminal) {
@@ -160,6 +170,7 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollRange", 
     self.scrollbarView.contentSize = CGSizeZero;
     self.scrollbarView.contentOffset = CGPointZero;
     self.syncingScroll = NO;
+    self.wheelScrolling = NO;
     [webView evaluateJavaScript:@"exports.resyncScroll()" completionHandler:nil];
     self.terminalFocused = self.isFirstResponder;
 }
@@ -172,6 +183,7 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollRange", 
         return;
     }
 
+    [self stopWheelMomentum];
     [_terminal.webView removeFromSuperview];
     self.scrollbarView.contentView = nil;
     for (int i = 0; i < sizeof(HANDLERS)/sizeof(HANDLERS[0]); i++) {
@@ -279,6 +291,8 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollRange", 
                    selector:@selector(windowDidResignKey:)
                        name:UIWindowDidResignKeyNotification
                      object:newWindow];
+    } else {
+        [self stopWheelMomentum];
     }
 }
 
@@ -299,6 +313,10 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollRange", 
         self.syncingScroll = YES;
         [self.scrollbarView setContentOffset:CGPointMake(0, newOffset) animated:NO];
         self.syncingScroll = NO;
+    } else if ([message.name isEqualToString:@"newWheelScrolling"]) {
+        self.wheelScrolling = [message.body boolValue];
+        if (!self.wheelScrolling)
+            [self stopWheelMomentum];
     } else if ([message.name isEqualToString:@"openLink"]) {
         [UIApplication openURL:message.body];
     }
@@ -414,6 +432,69 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollRange", 
     if (self.syncingScroll)
         return;
     [self.terminal.webView evaluateJavaScript:[NSString stringWithFormat:@"exports.newScrollTop(%f)", scrollView.contentOffset.y] completionHandler:nil];
+}
+
+// A drag in a full-screen program's screen turns the program's wheel, by the
+// finger's way down (term.js's wheel); let go while moving, the wheel goes on.
+// The scroll view's own scroll there is its bounce, which does not show.
+- (void)scrollPanned:(UIPanGestureRecognizer *)pan {
+    if (pan.state == UIGestureRecognizerStateBegan) {
+        [self stopWheelMomentum];
+        self.wheelSent = 0;
+    }
+    WKWebView *webView = self.terminal.webView;
+    if (!self.wheelScrolling || webView.superview == nil)
+        return;
+    CGPoint point = [pan locationInView:webView];
+    switch (pan.state) {
+        case UIGestureRecognizerStateBegan:
+        case UIGestureRecognizerStateChanged: {
+            CGFloat way = [pan translationInView:self].y;
+            [self turnWheelBy:way - self.wheelSent at:point];
+            self.wheelSent = way;
+            break;
+        }
+        case UIGestureRecognizerStateEnded:
+            [self startWheelMomentum:[pan velocityInView:self].y at:point];
+            break;
+        default:
+            break;
+    }
+}
+
+- (void)turnWheelBy:(CGFloat)way at:(CGPoint)point {
+    if (way == 0)
+        return;
+    [self.terminal.webView callAsyncJavaScript:@"exports.wheel(dy, x, y)"
+                                     arguments:@{@"dy": @(way), @"x": @(point.x), @"y": @(point.y)}
+                                       inFrame:nil
+                                inContentWorld:WKContentWorld.pageWorld
+                             completionHandler:nil];
+}
+
+- (void)startWheelMomentum:(CGFloat)velocity at:(CGPoint)point {
+    [self stopWheelMomentum];
+    self.wheelVelocity = velocity;
+    self.wheelPoint = point;
+    self.wheelMomentum = [CADisplayLink displayLinkWithTarget:self selector:@selector(wheelMomentumStep:)];
+    [self.wheelMomentum addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+}
+
+- (void)wheelMomentumStep:(CADisplayLink *)link {
+    CFTimeInterval frame = link.targetTimestamp - link.timestamp;
+    // A scroll view's deceleration rate is per millisecond
+    self.wheelVelocity *= pow(UIScrollViewDecelerationRateNormal, frame * 1000);
+    if (!self.wheelScrolling || fabs(self.wheelVelocity) < 20) {
+        [self stopWheelMomentum];
+        return;
+    }
+    [self turnWheelBy:self.wheelVelocity * frame at:self.wheelPoint];
+}
+
+// The display link holds this view: stopped when the view goes or its terminal does
+- (void)stopWheelMomentum {
+    [self.wheelMomentum invalidate];
+    self.wheelMomentum = nil;
 }
 
 - (void)setKeyboardAppearance:(UIKeyboardAppearance)keyboardAppearance {

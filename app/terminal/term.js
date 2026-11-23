@@ -189,12 +189,18 @@ exports.getCharacterSize = () => {
 // view is rarely a whole number of lines high, and with half a line or more
 // left over the bottom of the scroll view came out a line above the bottom,
 // the last line (the cursor's) under the keys over the keyboard.
-let lastScrollRange, lastScrollTop;
+// A full-screen program's screen (the alternate one) has no lines above it:
+// there the app's drags are the program's wheel (newWheelScrolling, wheel).
+let lastScrollRange, lastScrollTop, lastWheelScrolling;
 // the line the app's scroll view put at the top, not to be told back to it
 let appScrollLine = null;
 function syncScroll() {
     const height = cellSize().height;
     const buffer = term.buffer.active;
+    const wheelScrolling = buffer.type == 'alternate';
+    if (wheelScrolling !== lastWheelScrolling)
+        native.newWheelScrolling(wheelScrolling);
+    lastWheelScrolling = wheelScrolling;
     const scrollRange = buffer.baseY * height;
     if (scrollRange != lastScrollRange)
         native.newScrollRange(scrollRange);
@@ -210,6 +216,7 @@ function syncScroll() {
 term.onScroll(syncScroll);
 term.onWriteParsed(syncScroll);
 term.onResize(syncScroll);
+term.buffer.onBufferChange(syncScroll);
 exports.newScrollTop = (y) => {
     const height = cellSize().height;
     if (height == 0)
@@ -221,6 +228,34 @@ exports.newScrollTop = (y) => {
 };
 exports.scrollToBottom = () => term.scrollToBottom();
 
+// The app's drags in a full-screen program's screen (TerminalView's
+// scrollPanned:), the finger's way down in points: the program's mouse wheel,
+// a notch for each line the finger goes, turned up as the finger goes down (to
+// what is above). xterm.js sends a notch as it does a wheel's: a report to a
+// program that asked for the mouse's (claude, tmux, vim with mouse=a), at the
+// cell under the finger; the arrow keys to one that did not (less, man). What
+// is left of a line is kept for the next, unless the finger turns back.
+let wheelPartial = 0;
+exports.wheel = (dy, x, y) => {
+    const cell = cellSize();
+    if (cell.height == 0)
+        return;
+    if (Math.sign(dy) != Math.sign(wheelPartial))
+        wheelPartial = 0;
+    wheelPartial += dy;
+    const notches = Math.trunc(wheelPartial / cell.height);
+    wheelPartial -= notches * cell.height;
+    const clientX = Math.min(Math.max(x, cell.rect.left), cell.rect.right - 1);
+    const clientY = Math.min(Math.max(y, cell.rect.top), cell.rect.bottom - 1);
+    for (let i = 0; i < Math.abs(notches); i++) {
+        term.element.dispatchEvent(new WheelEvent('wheel', {
+            deltaY: notches > 0 ? -1 : 1,
+            deltaMode: WheelEvent.DOM_DELTA_LINE,
+            clientX, clientY, bubbles: true, cancelable: true,
+        }));
+    }
+};
+
 // The text the terminal showed, as the sequences that draw it again: the
 // lines of its normal screen and up to 1000 above, without a full-screen
 // program's screen (vim's, claude's) or the modes, for the tab the app
@@ -229,7 +264,7 @@ exports.serialize = () => serializer.serialize({scrollback: 1000, excludeAltBuff
 // Called by the app when a TerminalView (re)attaches, since scroll updates
 // sent while detached were dropped.
 exports.resyncScroll = () => {
-    lastScrollRange = lastScrollTop = undefined;
+    lastScrollRange = lastScrollTop = lastWheelScrolling = undefined;
     appScrollLine = null;
     syncScroll();
 };
