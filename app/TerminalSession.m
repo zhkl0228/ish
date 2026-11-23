@@ -297,7 +297,7 @@ NSNotificationName const TerminalSessionDidChangeNotification = @"TerminalSessio
 
 #if !ISH_LINUX
 // As Linux starts the logins after the boot's sysinit actions, a session's
-// process runs once the boot (/usr/local/sbin/ish-sysinit) is done: its login
+// process runs once the boot (/usr/libexec/ish-sysinit) is done: its login
 // is then recorded with utmpd (w, who), which the boot starts. A login before
 // it went unrecorded, the first session's after the app started.
 //
@@ -312,7 +312,7 @@ static bool boot_is_awaited(void) {
         return false;
     struct statbuf stat;
     // a root the app has not given it, or a boot that is not init's
-    if (generic_statat(AT_PWD, "/usr/local/sbin/ish-sysinit", &stat, true) < 0 ||
+    if (generic_statat(AT_PWD, "/usr/libexec/ish-sysinit", &stat, true) < 0 ||
             ![UserPreferences.shared.bootCommand.firstObject isEqualToString:@"/sbin/init"]) {
         atomic_store(&boot_waited, true);
         return false;

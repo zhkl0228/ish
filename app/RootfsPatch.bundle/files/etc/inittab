@@ -3,7 +3,7 @@
 # iSH: what OpenRC's boot services would do, without OpenRC in the root (user
 # accounting for w and who). Rewritten by the iSH app when it updates the
 # root, with the rest of this file as Alpine has it.
-::sysinit:/usr/local/sbin/ish-sysinit
+::sysinit:/usr/libexec/ish-sysinit
 
 ::sysinit:/sbin/openrc sysinit
 ::sysinit:/sbin/openrc boot
