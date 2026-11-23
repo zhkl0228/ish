@@ -46,13 +46,27 @@ packages() {
     esac
 }
 
-# The groups with a tool from npm: its command and package. Installed with
-# npm -g, the way the tool's own updater expects to update it.
+# The groups with a tool from npm: its command, its package and, for a tool
+# npm installs into a directory of its own (npm -g --prefix), that directory.
+# Installed with npm -g, the way the tool's own updater expects to update it.
 npm_tool() {
     case $1 in
-        claude) echo "claude @anthropic-ai/claude-code" ;;
+        claude) echo "claude @anthropic-ai/claude-code /opt/claude-code" ;;
         kimi)   echo "kimi @moonshot-ai/kimi-code" ;;
     esac
+}
+
+# Whether npm_tool's tool is there: in its directory, or on the PATH. Sets
+# cmd, package and prefix from it.
+has_tool() {
+    read -r cmd package prefix <<EOF
+$1
+EOF
+    if [ -n "$prefix" ]; then
+        [ -x "$prefix/bin/$cmd" ]
+    else
+        command -v "$cmd" > /dev/null
+    fi
 }
 
 # apk info -e names the packages given that are installed
@@ -60,7 +74,7 @@ installed() {
     # shellcheck disable=SC2046
     [ "$(apk info -e $(packages "$1") | wc -l)" -eq "$(packages "$1" | wc -w)" ] || return 1
     tool=$(npm_tool "$1")
-    [ -z "$tool" ] || command -v "${tool%% *}" > /dev/null
+    [ -z "$tool" ] || has_tool "$tool"
 }
 
 list() {
@@ -110,8 +124,12 @@ npm_installed=''
 for group in $todo; do
     tool=$(npm_tool "$group")
     [ -n "$tool" ] || continue
-    command -v "${tool%% *}" > /dev/null && continue
-    npm install -g --no-audit --no-fund "${tool#* }"
+    has_tool "$tool" && continue
+    if [ -n "$prefix" ]; then
+        npm install -g --prefix "$prefix" --no-audit --no-fund "$package"
+    else
+        npm install -g --no-audit --no-fund "$package"
+    fi
     npm_installed=1
 done
 [ -z "$npm_installed" ] || npm cache clean --force 2> /dev/null

@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>version</key>
-    <integer>12</integer>
+    <integer>13</integer>
     <key>files</key>
     <array>
         <dict>
@@ -29,6 +29,13 @@
             <string>files/etc/profile.d/ish-aliases.sh</string>
             <key>dst</key>
             <string>/etc/profile.d/ish-aliases.sh</string>
+        </dict>
+        <!-- node's compile cache, for the next run of a program -->
+        <dict>
+            <key>src</key>
+            <string>files/etc/profile.d/ish-node.sh</string>
+            <key>dst</key>
+            <string>/etc/profile.d/ish-node.sh</string>
         </dict>
         <!-- says how to install them, until one is installed -->
         <dict>
