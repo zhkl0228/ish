@@ -121,10 +121,13 @@ NSNotificationName const TerminalSessionDidChangeNotification = @"TerminalSessio
 #if !ISH_LINUX
     if (self.state != TerminalSessionStateRunning)
         return NO;
-    // login forks the shell into its own process group, so the shell's pid is not
-    // known; go by what the foreground group's leader is running instead.
+    // The shell leads the session (login execs it there) and owns the terminal
+    // while the session's process group is the foreground one: a job has a
+    // group of its own, a script run by `sh` too. Until login has exec'd the
+    // shell the leader is login, whose terminal setup would throw typed text
+    // away: the leader's program tells.
     int fg_group = self.terminal.foregroundProcessGroup;
-    if (fg_group == 0)
+    if (fg_group == 0 || fg_group != self.terminal.sessionId)
         return NO;
     static NSSet<NSString *> *shells;
     static dispatch_once_t once;
