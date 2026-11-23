@@ -495,6 +495,18 @@ EOF
         status=1
     fi
     echo
+    echo "########## /proc/<pid>/stat and status, meminfo, loadavg, vmstat ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_proc_pid" \
+            tests/regress/regress_proc_pid.c; then
+        out=$(timeout 30 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_proc_pid 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_proc_pid"
+    else
+        echo "failed to build regress_proc_pid" >&2
+        status=1
+    fi
+    echo
     echo "########## /proc/net/tcp, udp and socket:[inode] links ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_proc_net" \
             tests/regress/regress_proc_net.c; then

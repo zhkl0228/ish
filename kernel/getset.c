@@ -52,6 +52,28 @@ int_t sys_setuid(uid_t_ uid) {
     return 0;
 }
 
+// iSH has no filesystem ids of their own: they are the effective ones. As
+// Linux, setfsuid returns the old one whatever happens, and a caller learns
+// whether its change took by asking again (with -1): one to an id other than
+// the effective one is refused, as for a caller not allowed it, and said
+// (top sets them, to the effective ones).
+static dword_t setfsid(const char *call, uid_t_ id, uid_t_ effective) {
+    if (id != (uid_t_) -1 && id != effective)
+        printk("%s[%d]: %s(%u) with the effective id %u refused: iSH has no filesystem ids\n",
+               current->comm, current->pid, call, id, effective);
+    return effective;
+}
+
+dword_t sys_setfsuid(uid_t_ fsuid) {
+    STRACE("setfsuid(%d)", fsuid);
+    return setfsid("setfsuid", fsuid, current->euid);
+}
+
+dword_t sys_setfsgid(uid_t_ fsgid) {
+    STRACE("setfsgid(%d)", fsgid);
+    return setfsid("setfsgid", fsgid, current->egid);
+}
+
 dword_t sys_setresuid(uid_t_ ruid, uid_t_ euid, uid_t_ suid) {
     STRACE("setresuid(%d, %d, %d)", ruid, euid, suid);
     if (!superuser()) {

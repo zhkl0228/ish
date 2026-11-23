@@ -14,6 +14,18 @@ static int proc_show_version(struct proc_entry *UNUSED(entry), struct proc_data 
     return 0;
 }
 
+// Tasks that have not begun to exit. /proc/<pid>/stat calls every task
+// running, iSH cannot tell a sleeping one; so do the counts that use this.
+static unsigned live_tasks(void) {
+    unsigned tasks = 0;
+    for (pid_t_ pid = 1; pid <= MAX_PID; pid++) {
+        struct task *task = pid_get_task(pid);
+        if (task != NULL && !task->exiting)
+            tasks++;
+    }
+    return tasks;
+}
+
 static int proc_show_stat(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
     struct cpu_usage usage = get_cpu_usage();
     // All ten of Linux's fields: procps-ng 4 refuses a cpu line with fewer
@@ -42,15 +54,9 @@ static int proc_show_stat(struct proc_entry *UNUSED(entry), struct proc_data *bu
 
     // forks since boot, threads included, as Linux's total_forks
     proc_printf(buf, "processes %"PRIu64"\n", (uint64_t) atomic_load(&ish_guest_forks));
-    // /proc/<pid>/stat calls every task running, iSH cannot tell a sleeping
-    // one; so does this. None is ever in uninterruptible sleep (D).
-    unsigned tasks = 0;
+    // none is ever in uninterruptible sleep (D)
     lock(&pids_lock);
-    for (pid_t_ pid = 1; pid <= MAX_PID; pid++) {
-        struct task *task = pid_get_task(pid);
-        if (task != NULL && !task->exiting)
-            tasks++;
-    }
+    unsigned tasks = live_tasks();
     unlock(&pids_lock);
     proc_printf(buf, "procs_running %u\n", tasks);
     proc_printf(buf, "procs_blocked 0\n");
@@ -83,8 +89,9 @@ static int proc_show_cpuinfo(struct proc_entry *UNUSED(entry), struct proc_data 
     return 0;
 }
 
+// value in bytes; Linux's kB is 1024 of them
 static void show_kb(struct proc_data *buf, const char *name, uint64_t value) {
-    proc_printf(buf, "%s%8"PRIu64" kB\n", name, value / 1000);
+    proc_printf(buf, "%s%8"PRIu64" kB\n", name, value / 1024);
 }
 
 static int proc_show_meminfo(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
@@ -114,6 +121,32 @@ static int proc_show_meminfo(struct proc_entry *UNUSED(entry), struct proc_data 
     show_kb(buf, "AnonPages:      ", 0);
     show_kb(buf, "Mapped:         ", 0);
     show_kb(buf, "Slab:           ", 0);
+    return 0;
+}
+
+// The host's load averages (uptime, top and w show them), as Linux prints
+// them: two decimals, then running/all tasks and the last pid given out.
+static int proc_show_loadavg(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    struct uptime_info uptime = get_uptime();
+    uint64_t loads[] = {uptime.load_1m, uptime.load_5m, uptime.load_15m};
+    for (int i = 0; i < 3; i++) {
+        // in 16-bit fixed point, as sysinfo's
+        uint64_t hundredths = (loads[i] * 100 + (1 << 15)) >> 16;
+        proc_printf(buf, "%"PRIu64".%02"PRIu64" ", hundredths / 100, hundredths % 100);
+    }
+    lock(&pids_lock);
+    unsigned tasks = live_tasks();
+    pid_t_ last_pid = pid_last_allocated();
+    unlock(&pids_lock);
+    proc_printf(buf, "%u/%u %d\n", tasks, tasks, last_pid);
+    return 0;
+}
+
+// What vmstat reads from it (si, so, bi, bo): iSH neither swaps nor pages to
+// a disk of its own. Without the file vmstat failed: "Unable to create vmstat
+// structure".
+static int proc_show_vmstat(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    proc_printf(buf, "pgpgin 0\npgpgout 0\npswpin 0\npswpout 0\n");
     return 0;
 }
 
@@ -180,6 +213,7 @@ extern struct proc_children proc_net_children;
 struct proc_dir_entry proc_root_entries[] = {
     {"cpuinfo", .show = proc_show_cpuinfo},
     {"ish", S_IFDIR, .children = &proc_ish_children},
+    {"loadavg", .show = proc_show_loadavg},
     {"meminfo", .show = proc_show_meminfo},
     {"mounts", .show = proc_show_mounts},
     {"net", S_IFDIR, .children = &proc_net_children},
@@ -187,6 +221,7 @@ struct proc_dir_entry proc_root_entries[] = {
     {"stat", .show = proc_show_stat},
     {"uptime", .show = proc_show_uptime},
     {"version", .show = proc_show_version},
+    {"vmstat", .show = proc_show_vmstat},
 };
 #define PROC_ROOT_LEN sizeof(proc_root_entries)/sizeof(proc_root_entries[0])
 

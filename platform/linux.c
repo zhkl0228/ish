@@ -44,6 +44,8 @@ unsigned get_per_cpu_usage(struct cpu_usage *usage, unsigned max) {
     return n;
 }
 
+// In bytes, as on Darwin (the host's /proc/meminfo has kB: the guest's showed
+// 7.9 MB of memory for 7.9 GB)
 struct mem_usage get_mem_usage() {
     struct mem_usage usage;
     char buf[1234];
@@ -56,6 +58,10 @@ struct mem_usage get_mem_usage() {
     sscanf(buf, "Active: %"PRIu64" kB\n", &usage.active);
     read_proc_line("/proc/meminfo", "Inactive:", buf);
     sscanf(buf, "Inactive: %"PRIu64" kB\n", &usage.inactive);
+    usage.total *= 1024;
+    usage.free *= 1024;
+    usage.active *= 1024;
+    usage.inactive *= 1024;
 
     return usage;
 }

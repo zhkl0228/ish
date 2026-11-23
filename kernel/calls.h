@@ -247,6 +247,8 @@ uid_t_ sys_getgid(void);
 uid_t_ sys_getegid32(void);
 uid_t_ sys_getegid(void);
 dword_t sys_setresuid(uid_t_ ruid, uid_t_ euid, uid_t_ suid);
+dword_t sys_setfsuid(uid_t_ fsuid);
+dword_t sys_setfsgid(uid_t_ fsgid);
 dword_t sys_setresgid(uid_t_ rgid, uid_t_ egid, uid_t_ sgid);
 int_t sys_setreuid(uid_t_ ruid, uid_t_ euid);
 int_t sys_setregid(uid_t_ rgid, uid_t_ egid);

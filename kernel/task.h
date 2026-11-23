@@ -44,6 +44,9 @@ struct task {
     // Those sent to its process are on the group's shared_queue.
     sigset_t_ pending;
     sigset_t_ waiting; // if nonzero, an ongoing call to sigtimedwait is waiting on these
+    // When it was created, in hundredths of a second since boot (USER_HZ):
+    // /proc/<pid>/stat's starttime, ps's START
+    uint64_t start_ticks;
     // Alternate signal stack (sigaltstack). Per thread, as on Linux: only the
     // task itself reads or writes it, so it needs no lock.
     addr_t altstack;
@@ -289,6 +292,8 @@ extern lock_t pids_lock;
 // these functions must be called with pids_lock
 struct pid *pid_get(dword_t pid);
 struct task *pid_get_task(dword_t pid);
+// The pid last given out (/proc/loadavg). Caller holds pids_lock.
+pid_t_ pid_last_allocated(void);
 struct task *pid_get_task_zombie(dword_t id); // don't return null if the task exists as a zombie
 
 #define MAX_PID (1 << 15) // oughta be enough

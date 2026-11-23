@@ -8,6 +8,7 @@
 #include "kernel/task.h"
 #include "kernel/memory.h"
 #include "emu/tlb.h"
+#include "platform/platform.h"
 
 __thread struct task *current;
 
@@ -42,9 +43,14 @@ struct task *pid_get_task(dword_t id) {
     return task;
 }
 
+static int cur_pid = 0; // the last pid given out; locked by pids_lock
+
+pid_t_ pid_last_allocated(void) {
+    return cur_pid;
+}
+
 struct task *task_create_(struct task *parent) {
     lock(&pids_lock);
-    static int cur_pid = 0;
     do {
         cur_pid++;
         if (cur_pid > MAX_PID) cur_pid = 1;
@@ -71,6 +77,7 @@ struct task *task_create_(struct task *parent) {
     if (parent != NULL)
         *task = *parent;
     task->pid = pid->id;
+    task->start_ticks = get_uptime().uptime_ticks;
     pid->task = task;
     // Copied from the parent above; a new task has not begun exiting.
     atomic_store(&task->exit_started, false);

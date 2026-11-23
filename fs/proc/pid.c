@@ -27,11 +27,41 @@ static void proc_put_task(struct task *UNUSED(task)) {
     unlock(&pids_lock);
 }
 
+// The task's memory in pages, by walking its page table: all mapped, resident
+// (backed by real data, not a PROT_NONE reservation or lazy anonymous memory)
+// and resident shared. Caller holds task->general_lock, which keeps task->mem
+// alive (do_exit unpublishes the mm under it).
+static void task_mem_pages(struct task *task, unsigned long *total, unsigned long *resident, unsigned long *shared) {
+    *total = *resident = *shared = 0;
+    struct mem *mem = task->mem;
+    if (mem == NULL)
+        return;
+    read_wrlock(&mem->lock);
+    page_t page = 0;
+    while (page < MEM_PAGES) {
+        struct pt_entry *pt = mem_pt(mem, page);
+        if (pt != NULL) {
+            (*total)++;
+            if (pt->data != NULL) {
+                (*resident)++;
+                if (pt->flags & P_SHARED)
+                    (*shared)++;
+            }
+        }
+        mem_next_page(mem, &page);
+    }
+    read_wrunlock(&mem->lock);
+}
+
 static int proc_pid_stat_show(struct proc_entry *entry, struct proc_data *buf) {
     struct task *task = proc_get_task(entry);
     if (task == NULL)
         return _ESRCH;
+    // Before the group and sighand locks: the page walk takes the memory's
+    // lock, which signal delivery takes under sighand's.
     lock(&task->general_lock);
+    unsigned long pages, resident, shared;
+    task_mem_pages(task, &pages, &resident, &shared);
     lock(&task->group->lock);
     lock(&task->sighand->lock);
 
@@ -66,10 +96,10 @@ static int proc_pid_stat_show(struct proc_entry *entry, struct proc_data *buf) {
     proc_printf(buf, "%ld ", 0l); // nice (also not adjustable)
     proc_printf(buf, "%ld ", list_size(&task->group->threads));
     proc_printf(buf, "%ld ", 0l); // itimer value (deprecated, always 0)
-    proc_printf(buf, "%lld ", 0ll); // jiffies on process start
+    proc_printf(buf, "%llu ", (unsigned long long) task->start_ticks); // start, in ticks since boot
 
-    proc_printf(buf, "%lu ", 0l); // vsize
-    proc_printf(buf, "%ld ", 0l); // rss
+    proc_printf(buf, "%lu ", pages * PAGE_SIZE); // vsize, in bytes
+    proc_printf(buf, "%lu ", resident); // rss, in pages
     proc_printf(buf, "%lu ", 0l); // rss limit
 
     // bunch of shit that can only be accessed by a debugger
@@ -81,13 +111,14 @@ static int proc_pid_stat_show(struct proc_entry *entry, struct proc_data *buf) {
 
     proc_printf(buf, "%lu ", (unsigned long) task->pending & 0xffffffff);
     proc_printf(buf, "%lu ", (unsigned long) task->blocked & 0xffffffff);
+    // signal n is bit n - 1, as in the masks above (it was bit n)
     uint32_t ignored = 0;
     uint32_t caught = 0;
-    for (int i = 0; i < 32; i++) {
+    for (int i = 1; i <= 32; i++) {
         if (task->sighand->action[i].handler == SIG_IGN_)
-            ignored |= 1l << i;
+            ignored |= 1u << (i - 1);
         else if (task->sighand->action[i].handler != SIG_DFL_)
-            caught |= 1l << i;
+            caught |= 1u << (i - 1);
     }
     proc_printf(buf, "%lu ", (unsigned long) ignored);
     proc_printf(buf, "%lu ", (unsigned long) caught);
@@ -107,41 +138,93 @@ static int proc_pid_stat_show(struct proc_entry *entry, struct proc_data *buf) {
     return 0;
 }
 
+// What iSH knows of Linux's status file. ps takes VSZ and RSS from here
+// (procps reads VmSize and VmRSS): with no file they were 0.
+static int proc_pid_status_show(struct proc_entry *entry, struct proc_data *buf) {
+    struct task *task = proc_get_task(entry);
+    if (task == NULL)
+        return _ESRCH;
+    // the page walk first, as in proc_pid_stat_show
+    lock(&task->general_lock);
+    unsigned long pages, resident, shared;
+    task_mem_pages(task, &pages, &resident, &shared);
+    char comm[sizeof(task->comm) + 1] = "";
+    strncpy(comm, task->comm, sizeof(task->comm));
+    unlock(&task->general_lock);
+
+    proc_printf(buf, "Name:\t%s\n", comm);
+    if (task->fs != NULL) {
+        lock(&task->fs->lock);
+        proc_printf(buf, "Umask:\t%04o\n", task->fs->umask);
+        unlock(&task->fs->lock);
+    }
+    lock(&task->group->lock);
+    bool stopped = task->group->stopped;
+    unlock(&task->group->lock);
+    // as /proc/<pid>/stat: iSH cannot tell a sleeping task
+    proc_printf(buf, "State:\t%s\n", stopped ? "T (stopped)" : "R (running)");
+    proc_printf(buf, "Tgid:\t%d\n", task->tgid);
+    proc_printf(buf, "Ngid:\t0\n");
+    proc_printf(buf, "Pid:\t%d\n", task->pid);
+    proc_printf(buf, "PPid:\t%d\n", task->parent ? task->parent->tgid : 0);
+    lock(&task->ptrace.lock);
+    bool traced = task->ptrace.traced;
+    unlock(&task->ptrace.lock);
+    // iSH's tracer is the parent (PTRACE_TRACEME)
+    proc_printf(buf, "TracerPid:\t%d\n", traced && task->parent ? task->parent->tgid : 0);
+    // the filesystem ids follow the effective ones: iSH has no setfsuid
+    proc_printf(buf, "Uid:\t%u\t%u\t%u\t%u\n", task->uid, task->euid, task->suid, task->euid);
+    proc_printf(buf, "Gid:\t%u\t%u\t%u\t%u\n", task->gid, task->egid, task->sgid, task->egid);
+    if (task->files != NULL) {
+        lock(&task->files->lock);
+        proc_printf(buf, "FDSize:\t%u\n", task->files->size);
+        unlock(&task->files->lock);
+    }
+    proc_printf(buf, "Groups:\t");
+    for (unsigned i = 0; i < task->ngroups; i++)
+        proc_printf(buf, "%u ", task->groups[i]);
+    proc_printf(buf, "\n");
+    proc_printf(buf, "NStgid:\t%d\n", task->tgid);
+    proc_printf(buf, "NSpid:\t%d\n", task->pid);
+    proc_printf(buf, "NSpgid:\t%d\n", task->group->pgid);
+    proc_printf(buf, "NSsid:\t%d\n", task->group->sid);
+    proc_printf(buf, "VmSize:\t%8lu kB\n", pages * (PAGE_SIZE / 1024));
+    proc_printf(buf, "VmRSS:\t%8lu kB\n", resident * (PAGE_SIZE / 1024));
+    proc_printf(buf, "RssShmem:\t%8lu kB\n", shared * (PAGE_SIZE / 1024));
+    proc_printf(buf, "Threads:\t%d\n", list_size(&task->group->threads));
+    lock(&task->sighand->lock);
+    uint64_t ignored = 0, caught = 0;
+    for (int i = 1; i < NUM_SIGS; i++) {
+        if (task->sighand->action[i].handler == SIG_IGN_)
+            ignored |= 1ull << (i - 1);
+        else if (task->sighand->action[i].handler != SIG_DFL_)
+            caught |= 1ull << (i - 1);
+    }
+    proc_printf(buf, "SigPnd:\t%016llx\n", (unsigned long long) task->pending);
+    proc_printf(buf, "ShdPnd:\t%016llx\n", (unsigned long long) task->group->shared_pending);
+    proc_printf(buf, "SigBlk:\t%016llx\n", (unsigned long long) task->blocked);
+    proc_printf(buf, "SigIgn:\t%016llx\n", (unsigned long long) ignored);
+    proc_printf(buf, "SigCgt:\t%016llx\n", (unsigned long long) caught);
+    unlock(&task->sighand->lock);
+
+    proc_put_task(task);
+    return 0;
+}
+
 static int proc_pid_statm_show(struct proc_entry *entry, struct proc_data *buf) {
     struct task *task = proc_get_task(entry);
     if (task == NULL)
         return _ESRCH;
 
-    // Count mapped pages by walking the page table. Reporting all-zeros here
-    // breaks runtimes (e.g. Bun/JSC) that derive pool/lock sizes from the
-    // reported VM size and reject a value of 0 ("Invalid value for lock: 0").
-    unsigned long total = 0;   // total program size (VmSize, in pages)
-    unsigned long resident = 0; // resident set size (VmRSS, in pages)
-    unsigned long shared = 0;   // resident shared pages
+    // Reporting all-zeros here breaks runtimes (e.g. Bun/JSC) that derive
+    // pool/lock sizes from the reported VM size and reject a value of 0
+    // ("Invalid value for lock: 0").
+    unsigned long total, resident, shared; // in pages
     // [T-ish-exit-mm-general-lock] general_lock is what keeps task->mem alive
     // while we walk it (do_exit unpublishes the mm under it); cmdline/environ
     // already did this, statm/maps/mem did not.
     lock(&task->general_lock);
-    struct mem *mem = task->mem;
-    if (mem != NULL) {
-        read_wrlock(&mem->lock);
-        page_t page = 0;
-        while (page < MEM_PAGES) {
-            struct pt_entry *pt = mem_pt(mem, page);
-            if (pt != NULL) {
-                total++;
-                // A page backed by real data (not a pure PROT_NONE
-                // reservation / lazy anon) counts as resident.
-                if (pt->data != NULL) {
-                    resident++;
-                    if (pt->flags & P_SHARED)
-                        shared++;
-                }
-            }
-            mem_next_page(mem, &page);
-        }
-        read_wrunlock(&mem->lock);
-    }
+    task_mem_pages(task, &total, &resident, &shared);
     unlock(&task->general_lock);
 
     proc_printf(buf, "%lu ", total);    // total program size
@@ -505,6 +588,7 @@ struct proc_children proc_pid_children = PROC_CHILDREN({
     {"mem", .pread = proc_pid_mem_pread, .pwrite = proc_pid_mem_pwrite, .show = proc_pid_mem_show},
     {"stat", .show = proc_pid_stat_show},
     {"statm", .show = proc_pid_statm_show},
+    {"status", .show = proc_pid_status_show},
     {"task", S_IFDIR, .readdir = proc_pid_task_readdir},
 });
 
