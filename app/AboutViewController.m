@@ -15,12 +15,15 @@
 #import "UIApplication+OpenURL.h"
 #import "NSObject+SaneKVO.h"
 
-@interface AboutViewController ()
+@interface AboutViewController () <UIDocumentPickerDelegate>
 @property (weak, nonatomic) IBOutlet UITableViewCell *capsLockMappingCell;
 @property (weak, nonatomic) IBOutlet UITableViewCell *themeCell;
 @property (weak, nonatomic) IBOutlet UISwitch *disableDimmingSwitch;
 @property (weak, nonatomic) IBOutlet UITextField *launchCommandField;
 @property (weak, nonatomic) IBOutlet UITextField *bootCommandField;
+@property (weak, nonatomic) IBOutlet UITextField *claudeProxyField;
+@property (weak, nonatomic) IBOutlet UITableViewCell *claudeMemoryCell;
+@property (weak, nonatomic) IBOutlet UITableViewCell *removeClaudeMemoryCell;
 
 @property (weak, nonatomic) IBOutlet UITableViewCell *sendFeedback;
 @property (weak, nonatomic) IBOutlet UITableViewCell *openGithub;
@@ -58,7 +61,7 @@
                           [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"],
                           [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleVersion"]];
 
-    [UserPreferences.shared observe:@[@"capsLockMapping", @"fontSize", @"launchCommand", @"bootCommand"]
+    [UserPreferences.shared observe:@[@"capsLockMapping", @"fontSize", @"launchCommand", @"bootCommand", @"claudeProxy", @"claudeMemory"]
                             options:0 owner:self usingBlock:^(typeof(self) self) {
         dispatch_async(dispatch_get_main_queue(), ^{
             [self _updateUI];
@@ -95,6 +98,9 @@
     self.disableDimmingSwitch.on = UserPreferences.shared.shouldDisableDimming;
     self.launchCommandField.text = [UserPreferences.shared.launchCommand componentsJoinedByString:@" "];
     self.bootCommandField.text = [UserPreferences.shared.bootCommand componentsJoinedByString:@" "];
+    self.claudeProxyField.text = UserPreferences.shared.claudeProxy;
+    self.claudeMemoryCell.detailTextLabel.text = UserPreferences.shared.claudeMemory[@"name"] ?: @"Not imported";
+    self.removeClaudeMemoryCell.hidden = UserPreferences.shared.claudeMemory == nil;
 
     self.upgradeApkCell.userInteractionEnabled = FsNeedsRepositoryUpdate();
     self.upgradeApkLabel.enabled = FsNeedsRepositoryUpdate();
@@ -113,6 +119,10 @@
         [UIApplication openURL:@"https://publ.ish.app/ish"];
     } else if (cell == self.openDiscord) {
         [UIApplication openURL:@"https://discord.gg/HFAXj44"];
+    } else if (cell == self.claudeMemoryCell) {
+        [self importClaudeMemory];
+    } else if (cell == self.removeClaudeMemoryCell) {
+        [self confirmRemoveClaudeMemory];
     } else if (cell == self.exportContainerCell) {
         // copy the files to the app container so they can be extracted from iTunes file sharing
         NSURL *container = ContainerURL();
@@ -135,7 +145,10 @@
 // iSH keeps (/ish/version); for any other filesystem, the built-in arm64 one
 // included, the row is hidden rather than left disabled without a reason.
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
-    if ([super tableView:tableView cellForRowAtIndexPath:indexPath] == self.upgradeApkCell && !FsIsManaged())
+    UITableViewCell *cell = [super tableView:tableView cellForRowAtIndexPath:indexPath];
+    if (cell == self.upgradeApkCell && !FsIsManaged())
+        return 0;
+    if (cell == self.removeClaudeMemoryCell && UserPreferences.shared.claudeMemory == nil)
         return 0;
     return [super tableView:tableView heightForRowAtIndexPath:indexPath];
 }
@@ -178,6 +191,62 @@
     UserPreferences.shared.bootCommand = [self.bootCommandField.text componentsSeparatedByString:@" "];
 }
 
+- (IBAction)claudeProxyChanged:(id)sender {
+    UserPreferences.shared.claudeProxy = self.claudeProxyField.text;
+}
+
+// A CLAUDE.md is text, of a few KB: the import is stored base64 in the
+// defaults, which stop keeping a value past 4 MB
+static const long long kClaudeMemoryMaxBytes = 1024 * 1024;
+
+- (void)importClaudeMemory {
+    UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[@"public.text", @"net.daringfireball.markdown"]
+                                                                                                 inMode:UIDocumentPickerModeImport];
+    picker.delegate = self;
+    [self presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)showImportFailure:(NSString *)message {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Import Failed"
+                                                                   message:message
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+    NSURL *url = urls.firstObject;
+    NSNumber *size;
+    [url getResourceValue:&size forKey:NSURLFileSizeKey error:nil];
+    if (size.longLongValue > kClaudeMemoryMaxBytes) {
+        [self showImportFailure:[NSString stringWithFormat:@"%@ is %@; a CLAUDE.md of at most %@ can be imported.",
+                                 url.lastPathComponent,
+                                 [NSByteCountFormatter stringFromByteCount:size.longLongValue countStyle:NSByteCountFormatterCountStyleFile],
+                                 [NSByteCountFormatter stringFromByteCount:kClaudeMemoryMaxBytes countStyle:NSByteCountFormatterCountStyleFile]]];
+        return;
+    }
+    NSData *data = [NSData dataWithContentsOfURL:url];
+    if (data == nil) {
+        [self showImportFailure:@"The selected file could not be read."];
+        return;
+    }
+    UserPreferences.shared.claudeMemory = @{
+        @"name": url.lastPathComponent,
+        @"content": [data base64EncodedStringWithOptions:0],
+    };
+}
+
+- (void)confirmRemoveClaudeMemory {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Remove Claude Global Memory"
+                                                                   message:@"The imported file will be removed. An unmodified guest copy will be removed the next time a shell starts."
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Remove" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *_) {
+        UserPreferences.shared.claudeMemory = nil;
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
 - (void)confirmResetRootfs {
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Reset Rootfs"
                                                                    message:@"This will replace the current filesystem with the built-in one. Your files in /root and /home are kept; everything else is lost, including the packages you installed."
@@ -187,7 +256,7 @@
                                             handler:nil]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Reset"
                                               style:UIAlertActionStyleDestructive
-                                            handler:^(UIAlertAction *action) {
+                                            handler:^(UIAlertAction *_) {
         [self performResetRootfs];
     }]];
     [self presentViewController:alert animated:YES completion:nil];

@@ -29,6 +29,8 @@ static NSString *const kPreferenceColorSchemeKey = @"Color Scheme";
 // This key has a different naming scheme because it's used in UI tests as a
 // CLI argument.
 NSString *const kHostnameOverrideKey = @"hostnameOverride";
+static NSString *const kPreferenceClaudeProxyKey = @"Claude HTTPS Proxy";
+static NSString *const kPreferenceClaudeMemoryKey = @"Claude Global Memory";
 
 NSDictionary<NSString *, NSString *> *friendlyPreferenceMapping;
 NSDictionary<NSString *, NSString *> *friendlyPreferenceReverseMapping;
@@ -204,6 +206,8 @@ bool (*remove_user_default)(const char *name);
             @"color_scheme": kPreferenceColorSchemeKey,
             @"theme": kPreferenceThemeKey,
             @"hostname_override": kHostnameOverrideKey,
+            @"claude_proxy": kPreferenceClaudeProxyKey,
+            @"claude_memory": kPreferenceClaudeMemoryKey,
         };
         NSMutableDictionary <NSString *, NSString *> *reverseMapping = [NSMutableDictionary new];
         for (NSString *key in friendlyPreferenceMapping) {
@@ -227,6 +231,8 @@ bool (*remove_user_default)(const char *name);
             kPreferenceBlinkCursorKey: property(blinkCursor),
             kPreferenceHideStatusBarKey: property(hideStatusBar),
             kPreferenceColorSchemeKey: property(colorScheme),
+            kPreferenceClaudeProxyKey: property(claudeProxy),
+            kPreferenceClaudeMemoryKey: property(claudeMemory),
             // This one is a little bit special, so it needs extra handling.
             // The backing property for this is intentionally underscored.
             kPreferenceThemeKey: @"userTheme",
@@ -542,6 +548,36 @@ bool (*remove_user_default)(const char *name);
     }
     int _value = [(NSNumber *)(*value) intValue];
     return _value >= __ColorSchemeFirst && _value < __ColorSchemeLast;
+}
+
+// MARK: claudeProxy
+- (NSString *)claudeProxy {
+    return [_defaults stringForKey:kPreferenceClaudeProxyKey];
+}
+
+- (void)setClaudeProxy:(NSString *)claudeProxy {
+    if (claudeProxy.length == 0) {
+        [_defaults removeObjectForKey:kPreferenceClaudeProxyKey];
+    } else {
+        [_defaults setObject:claudeProxy forKey:kPreferenceClaudeProxyKey];
+    }
+}
+
+- (BOOL)validateClaudeProxy:(id *)value error:(NSError **)error {
+    return [*value isKindOfClass:NSString.class];
+}
+
+// MARK: claudeMemory
+- (NSDictionary<NSString *, NSString *> *)claudeMemory {
+    return [_defaults dictionaryForKey:kPreferenceClaudeMemoryKey];
+}
+
+- (void)setClaudeMemory:(NSDictionary<NSString *, NSString *> *)claudeMemory {
+    [_defaults setValue:claudeMemory forKey:kPreferenceClaudeMemoryKey];
+}
+
+- (BOOL)validateClaudeMemory:(id *)value error:(NSError **)error {
+    return [*value isKindOfClass:NSDictionary.class];
 }
 
 // MARK: hostnameOverride

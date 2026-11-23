@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>version</key>
-    <integer>13</integer>
+    <integer>16</integer>
     <key>files</key>
     <array>
         <dict>
@@ -37,6 +37,13 @@
             <key>dst</key>
             <string>/etc/profile.d/ish-node.sh</string>
         </dict>
+        <!-- imported Claude global memory, synchronized without overwriting edits -->
+        <dict>
+            <key>src</key>
+            <string>files/etc/profile.d/ish-claude-memory.sh</string>
+            <key>dst</key>
+            <string>/etc/profile.d/ish-claude-memory.sh</string>
+        </dict>
         <!-- says how to install them, until one is installed -->
         <dict>
             <key>src</key>
@@ -65,6 +72,22 @@
             <string>files/etc/timezone</string>
             <key>dst</key>
             <string>/etc/timezone</string>
+        </dict>
+        <!-- checks the configured proxy before starting the separately installed CLI -->
+        <dict>
+            <key>src</key>
+            <string>files/usr/libexec/claude-wrapper</string>
+            <key>dst</key>
+            <string>/usr/libexec/claude-wrapper</string>
+            <!-- 0755 -->
+            <key>mode</key>
+            <integer>493</integer>
+        </dict>
+        <dict>
+            <key>dst</key>
+            <string>/usr/local/bin/claude</string>
+            <key>link</key>
+            <string>/usr/libexec/claude-wrapper</string>
         </dict>
         <!-- installs the development tools the root leaves out -->
         <dict>

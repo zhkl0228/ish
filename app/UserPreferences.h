@@ -72,6 +72,11 @@ extern NSString *const kThemeBackgroundColor;
 @property NSString *hostnameOverride;
 // Same as above but returns nil if the user has never set the hostname
 @property (readonly) NSString *_hostnameOverride;
+@property (nullable) NSString *claudeProxy;
+// The imported CLAUDE.md, its name and its content in base64 in one value
+// ({"name": ..., "content": ...}), so that the guest (/proc/ish/defaults/
+// claude_memory) changes or removes both at once
+@property (nullable) NSDictionary<NSString *, NSString *> *claudeMemory;
 
 + (instancetype)shared;
 

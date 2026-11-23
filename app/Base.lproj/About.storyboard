@@ -290,6 +290,83 @@
                                     </tableViewCell>
                                 </cells>
                             </tableViewSection>
+                            <tableViewSection headerTitle="Claude" footerTitle="Claude requires this HTTPS CONNECT proxy and a California exit. An imported Global Memory becomes ~/.claude/CLAUDE.md when a shell starts; a CLAUDE.md changed there (by Claude&apos;s # or /memory) is kept instead, until it is deleted." id="cLd-Se-ct1">
+                                <cells>
+                                    <tableViewCell clipsSubviews="YES" contentMode="scaleToFill" preservesSuperviewLayoutMargins="YES" selectionStyle="none" indentationWidth="10" id="cLd-Pr-xy1" userLabel="Claude HTTPS Proxy">
+                                        <rect key="frame" x="0.0" y="620.5" width="320" height="43.5"/>
+                                        <autoresizingMask key="autoresizingMask"/>
+                                        <tableViewCellContentView key="contentView" opaque="NO" clipsSubviews="YES" multipleTouchEnabled="YES" contentMode="center" preservesSuperviewLayoutMargins="YES" insetsLayoutMarginsFromSafeArea="NO" tableViewCell="cLd-Pr-xy1" id="cLd-Pc-xy2">
+                                            <rect key="frame" x="0.0" y="0.0" width="320" height="43.5"/>
+                                            <autoresizingMask key="autoresizingMask"/>
+                                            <subviews>
+                                                <label opaque="NO" multipleTouchEnabled="YES" contentMode="left" horizontalHuggingPriority="1000" insetsLayoutMarginsFromSafeArea="NO" text="HTTPS Proxy" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="cLd-Pl-xy3">
+                                                    <rect key="frame" x="16" y="11.5" width="104" height="21"/>
+                                                    <fontDescription key="fontDescription" type="system" pointSize="17"/>
+                                                    <nil key="textColor"/>
+                                                    <nil key="highlightedColor"/>
+                                                </label>
+                                                <textField opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="left" contentVerticalAlignment="center" placeholder="https://user:password@host:port" adjustsFontSizeToFit="NO" minimumFontSize="10" translatesAutoresizingMaskIntoConstraints="NO" id="cLd-Pf-xy4">
+                                                    <rect key="frame" x="132" y="13" width="172" height="18"/>
+                                                    <fontDescription key="fontDescription" name="Menlo-Regular" family="Menlo" pointSize="12"/>
+                                                    <textInputTraits key="textInputTraits" autocorrectionType="no" spellCheckingType="no" keyboardType="URL" returnKeyType="done" smartDashesType="no" smartInsertDeleteType="no" smartQuotesType="no"/>
+                                                    <connections>
+                                                        <action selector="claudeProxyChanged:" destination="yJz-O7-jlW" eventType="editingDidEnd" id="cLd-Pa-xy5"/>
+                                                        <action selector="textBoxSubmit:" destination="yJz-O7-jlW" eventType="primaryActionTriggered" id="cLd-Pb-xy6"/>
+                                                    </connections>
+                                                </textField>
+                                            </subviews>
+                                            <constraints>
+                                                <constraint firstAttribute="trailingMargin" secondItem="cLd-Pf-xy4" secondAttribute="trailing" id="cLd-Pc-xy7"/>
+                                                <constraint firstItem="cLd-Pf-xy4" firstAttribute="centerY" secondItem="cLd-Pc-xy2" secondAttribute="centerY" id="cLd-Pc-xy8"/>
+                                                <constraint firstItem="cLd-Pl-xy3" firstAttribute="leading" secondItem="cLd-Pc-xy2" secondAttribute="leadingMargin" id="cLd-Pc-xy9"/>
+                                                <constraint firstItem="cLd-Pf-xy4" firstAttribute="leading" secondItem="cLd-Pl-xy3" secondAttribute="trailing" constant="12" id="cLd-Pc-x10"/>
+                                                <constraint firstItem="cLd-Pl-xy3" firstAttribute="centerY" secondItem="cLd-Pc-xy2" secondAttribute="centerY" id="cLd-Pc-x11"/>
+                                            </constraints>
+                                        </tableViewCellContentView>
+                                    </tableViewCell>
+                                    <tableViewCell clipsSubviews="YES" contentMode="scaleToFill" preservesSuperviewLayoutMargins="YES" selectionStyle="default" accessoryType="disclosureIndicator" indentationWidth="10" textLabel="cLd-Mt-x12" detailTextLabel="cLd-Md-x13" style="IBUITableViewCellStyleSubtitle" id="cLd-Mm-xy2" userLabel="Claude Global Memory">
+                                        <rect key="frame" x="0.0" y="664" width="320" height="43.5"/>
+                                        <autoresizingMask key="autoresizingMask"/>
+                                        <tableViewCellContentView key="contentView" opaque="NO" clipsSubviews="YES" multipleTouchEnabled="YES" contentMode="center" preservesSuperviewLayoutMargins="YES" insetsLayoutMarginsFromSafeArea="NO" tableViewCell="cLd-Mm-xy2" id="cLd-Mc-x14">
+                                            <rect key="frame" x="0.0" y="0.0" width="286" height="43.5"/>
+                                            <autoresizingMask key="autoresizingMask"/>
+                                            <subviews>
+                                                <label opaque="NO" multipleTouchEnabled="YES" contentMode="left" insetsLayoutMarginsFromSafeArea="NO" text="Global Memory" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" id="cLd-Mt-x12">
+                                                    <rect key="frame" x="16" y="5" width="69" height="14"/>
+                                                    <autoresizingMask key="autoresizingMask"/>
+                                                    <fontDescription key="fontDescription" type="system" pointSize="17"/>
+                                                    <nil key="textColor"/>
+                                                    <nil key="highlightedColor"/>
+                                                </label>
+                                                <label opaque="NO" multipleTouchEnabled="YES" contentMode="left" insetsLayoutMarginsFromSafeArea="NO" text="Not imported" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" id="cLd-Md-x13">
+                                                    <rect key="frame" x="16" y="23" width="42" height="12"/>
+                                                    <autoresizingMask key="autoresizingMask"/>
+                                                    <fontDescription key="fontDescription" type="system" pointSize="12"/>
+                                                    <nil key="textColor"/>
+                                                    <nil key="highlightedColor"/>
+                                                </label>
+                                            </subviews>
+                                        </tableViewCellContentView>
+                                    </tableViewCell>
+                                    <tableViewCell clipsSubviews="YES" contentMode="scaleToFill" preservesSuperviewLayoutMargins="YES" selectionStyle="default" indentationWidth="10" textLabel="cLd-Rt-x15" style="IBUITableViewCellStyleDefault" id="cLd-Rm-xy3" userLabel="Remove Claude Global Memory">
+                                        <rect key="frame" x="0.0" y="707.5" width="320" height="43.5"/>
+                                        <autoresizingMask key="autoresizingMask"/>
+                                        <tableViewCellContentView key="contentView" opaque="NO" clipsSubviews="YES" multipleTouchEnabled="YES" contentMode="center" preservesSuperviewLayoutMargins="YES" insetsLayoutMarginsFromSafeArea="NO" tableViewCell="cLd-Rm-xy3" id="cLd-Rc-x16">
+                                            <rect key="frame" x="0.0" y="0.0" width="320" height="43.5"/>
+                                            <autoresizingMask key="autoresizingMask"/>
+                                            <subviews>
+                                                <label opaque="NO" multipleTouchEnabled="YES" contentMode="left" insetsLayoutMarginsFromSafeArea="NO" text="Remove Imported Memory" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" id="cLd-Rt-x15">
+                                                    <rect key="frame" x="8" y="0.0" width="304" height="43.5"/>
+                                                    <autoresizingMask key="autoresizingMask"/>
+                                                    <fontDescription key="fontDescription" type="system" pointSize="17"/>
+                                                    <color key="textColor" systemColor="systemRedColor"/>
+                                                    <nil key="highlightedColor"/>
+                                                </label>
+                                            </subviews>
+                                        </tableViewCellContentView>
+                                    </tableViewCell>
+                                </cells>
+                            </tableViewSection>
                             <tableViewSection headerTitle="Secret Advanced Debugging Options" footerTitle="Warning: Changing these can break everything! If that happens, there's a reset switch in the Settings app." id="d0T-DL-SuP">
                                 <cells>
                                     <tableViewCell clipsSubviews="YES" contentMode="scaleToFill" preservesSuperviewLayoutMargins="YES" selectionStyle="none" indentationWidth="10" id="RKb-ed-FOs" userLabel="Init Command">
@@ -408,6 +485,9 @@
                     <connections>
                         <outlet property="bootCommandField" destination="bKw-tV-nX1" id="MVz-gk-QE7"/>
                         <outlet property="capsLockMappingCell" destination="31N-0g-RhF" id="UjF-21-3df"/>
+                        <outlet property="claudeMemoryCell" destination="cLd-Mm-xy2" id="cLd-Mo-x17"/>
+                        <outlet property="claudeProxyField" destination="cLd-Pf-xy4" id="cLd-Po-x18"/>
+                        <outlet property="removeClaudeMemoryCell" destination="cLd-Rm-xy3" id="cLd-Ro-x19"/>
                         <outlet property="disableDimmingSwitch" destination="cPj-sQ-qsh" id="Kjp-xA-A0Y"/>
                         <outlet property="exportContainerCell" destination="OIE-9g-Btx" id="qxo-l5-0Mq"/>
                         <outlet property="launchCommandField" destination="gDx-hv-hhV" id="RQn-gk-Dx8"/>

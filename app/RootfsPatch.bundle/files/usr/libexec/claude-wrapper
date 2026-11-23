@@ -1,0 +1,54 @@
+#!/bin/sh
+# Installed by the iSH app, which rewrites this file when it updates the root.
+# Claude Code, which ish-install puts in /opt/claude-code, through the HTTPS
+# proxy of iSH's Settings and only with that proxy's exit in California.
+# --version and --help reach no server: they run as they are.
+
+claude=/opt/claude-code/bin/claude
+if [ ! -x "$claude" ]; then
+    echo 'claude: Claude Code is not installed; run ish-install claude first' >&2
+    exit 1
+fi
+
+case $1 in
+    -v|--version|-h|--help) exec "$claude" "$@" ;;
+esac
+
+# The setting, a JSON string, there once it is set
+setting=/proc/ish/defaults/claude_proxy
+if [ ! -e "$setting" ]; then
+    echo 'claude: configure Claude HTTPS Proxy in iSH Settings first — aborting' >&2
+    exit 1
+fi
+proxy=$(jq -r . "$setting") || exit 1
+case $proxy in
+    https://*) ;;
+    *)
+        echo "claude: Claude HTTPS Proxy must be an https:// URL, not $proxy — aborting" >&2
+        exit 1
+        ;;
+esac
+
+# The exit as ipinfo.io sees it: {"ip", "city", "region", "country", "org", ...}
+if ! info=$(curl -sS --fail --connect-timeout 5 --max-time 15 -x "$proxy" https://ipinfo.io); then
+    echo "claude: ipinfo.io through $proxy failed — aborting" >&2
+    exit 1
+fi
+if ! exit_line=$(printf '%s' "$info" | jq -r '"\(.ip)  ·  \(.city), \(.region), \(.country)  ·  \(.org)"'); then
+    echo "claude: ipinfo.io answered: $info — aborting" >&2
+    exit 1
+fi
+echo "Claude exit: $exit_line" >&2
+region=$(printf '%s' "$info" | jq -r .region)
+if [ "$region" != California ]; then
+    echo "claude: the exit is in $region, not California — aborting" >&2
+    exit 1
+fi
+
+export HTTPS_PROXY="$proxy" HTTP_PROXY="$proxy" https_proxy="$proxy" http_proxy="$proxy"
+export NO_PROXY="localhost,127.0.0.1"
+export no_proxy="$NO_PROXY"
+# Claude Code updates itself with `npm install -g`, into npm's global prefix
+# (/usr/local): its updates go where ish-install put it instead
+export NPM_CONFIG_PREFIX=/opt/claude-code
+exec "$claude" "$@"
