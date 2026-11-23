@@ -215,6 +215,7 @@ static inline int sock_flags_from_real(int real) {
 #define SO_SNDBUF_ 7
 #define SO_RCVBUF_ 8
 #define SO_KEEPALIVE_ 9
+#define SO_OOBINLINE_ 10
 #define SO_LINGER_ 13
 #define SO_REUSEPORT_ 15
 #define SO_PEERCRED_ 17
@@ -233,6 +234,7 @@ static inline int sock_flags_from_real(int real) {
 #define IP_RECVTTL_ 12
 #define IP_RECVTOS_ 13
 #define TCP_NODELAY_ 1
+#define TCP_CORK_ 3
 #define TCP_KEEPIDLE_ 4
 #define TCP_KEEPINTVL_ 5
 #define TCP_KEEPCNT_ 6
@@ -253,6 +255,7 @@ static inline int sock_opt_to_real(int fake, int level) {
             case SO_ERROR_: return SO_ERROR;
             case SO_BROADCAST_: return SO_BROADCAST;
             case SO_KEEPALIVE_: return SO_KEEPALIVE;
+            case SO_OOBINLINE_: return SO_OOBINLINE; // telnet sets it
             case SO_LINGER_: return SO_LINGER;
             case SO_SNDBUF_: return SO_SNDBUF;
             case SO_RCVBUF_: return SO_RCVBUF;
@@ -263,6 +266,14 @@ static inline int sock_opt_to_real(int fake, int level) {
         } break;
         case IPPROTO_TCP: switch (fake) {
             case TCP_NODELAY_: return TCP_NODELAY;
+            // apk (libfetch) corks its requests. Darwin's TCP_NOPUSH is not
+            // sure to send what it held back when cleared, so there corking
+            // is accepted and does nothing: the data only goes out sooner.
+#if defined(__APPLE__)
+            case TCP_CORK_: return 0;
+#else
+            case TCP_CORK_: return TCP_CORK;
+#endif
 #if defined(__APPLE__)
             case TCP_KEEPIDLE_: return TCP_KEEPALIVE; // macOS equivalent
 #else

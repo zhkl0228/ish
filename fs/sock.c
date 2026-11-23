@@ -1378,6 +1378,35 @@ int_t sys_shutdown(fd_t sock_fd, dword_t how) {
 
 #define DEFAULT_TCP_CONGESTION "cubic"
 
+// A socket option iSH does not know fails with EINVAL, as Linux fails an
+// unknown one: there is no telling what setting it would have meant. Said once
+// per level and option, with what was asked, to add it from (telnet's
+// SO_OOBINLINE failed with nothing but "Invalid argument" on its screen).
+static void sock_opt_unknown(const char *call, struct fd *sock, dword_t level, dword_t option,
+                             const char *value, dword_t value_len) {
+    static lock_t seen_lock = LOCK_INITIALIZER;
+    static uint64_t seen[64];
+    static unsigned seen_count;
+    uint64_t key = (uint64_t) level << 32 | option;
+    lock(&seen_lock);
+    bool first = true;
+    for (unsigned i = 0; i < seen_count; i++) {
+        if (seen[i] == key)
+            first = false;
+    }
+    if (first && seen_count < sizeof(seen) / sizeof(seen[0]))
+        seen[seen_count++] = key;
+    unlock(&seen_lock);
+    if (!first)
+        return;
+    char hex[3 * 32 + 1] = "";
+    for (dword_t i = 0; i < value_len && i < 32; i++)
+        sprintf(hex + 3 * i, "%02x ", (unsigned char) value[i]);
+    printk("%s[%d]: %s level %u option %u (domain %d type %d) unknown, EINVAL; value (%u bytes): %s\n",
+           current->comm, current->pid, call, level, option, sock->socket.domain, sock->socket.type,
+           value_len, hex);
+}
+
 int_t sys_setsockopt(fd_t sock_fd, dword_t level, dword_t option, addr_t value_addr, dword_t value_len) {
     STRACE("setsockopt(%d, %d, %d, 0x%x, %d)", sock_fd, level, option, value_addr, value_len);
     struct fd *sock = sock_getfd(sock_fd);
@@ -1449,8 +1478,10 @@ int_t sys_setsockopt(fd_t sock_fd, dword_t level, dword_t option, addr_t value_a
 #endif
 
     int real_opt = sock_opt_to_real(option, level);
-    if (real_opt < 0)
+    if (real_opt < 0) {
+        sock_opt_unknown("setsockopt", sock, level, option, value, value_len);
         return _EINVAL;
+    }
     int real_level = sock_level_to_real(level);
     if (real_level < 0)
         return _EINVAL;
@@ -1567,8 +1598,10 @@ int_t sys_getsockopt(fd_t sock_fd, dword_t level, dword_t option, addr_t value_a
 #endif
     } else {
         int real_opt = sock_opt_to_real(option, level);
-        if (real_opt < 0)
+        if (real_opt < 0) {
+            sock_opt_unknown("getsockopt", sock, level, option, NULL, 0);
             return _EINVAL;
+        }
         int real_level = sock_level_to_real(level);
         if (real_level < 0)
             return _EINVAL;
