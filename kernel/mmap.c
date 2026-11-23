@@ -408,25 +408,48 @@ static addr_t do_mmap(addr_t addr, uint64_t len, dword_t prot, dword_t flags, fd
         // so don't count them against the anonymous page limit.
         bool is_prot_none = !(prot & P_READ) && !(prot & P_WRITE) && !(prot & P_EXEC);
 #ifdef GUEST_ARM64
-        if ((flags & MMAP_NORESERVE) && pages > 0x10000) {
-            pages_t align_pages = pages;
-            if (align_pages > 0x40000) align_pages = 0x40000;
-            page_t aligned = (page / align_pages) * align_pages;
-            if (aligned >= MMAP_HOLE_END && pt_is_hole(current->mem, aligned, pages))
-                page = aligned;
-            if ((err = pt_map_lazy(current->mem, page, pages, prot)) < 0)
-                return err;
-            return page << PAGE_BITS;
-        }
-        // Large PROT_NONE reservations (V8 heap cage chunks) use lazy
-        // mapping even without MAP_NORESERVE. V8 reserves 128MB
-        // chunks with PROT_NONE then mprotect's sub-regions RW as it
-        // allocates. Allocating all 128MB of host memory up front
-        // would waste ~640MB per node process; track the region as a
-        // mem_reservation instead and demand-map each page on first
-        // mprotect/touch. The INT_GPF write-fault demand-map path
-        // uses mem_find_reservation to detect cage pages.
-        if (is_prot_none && pages >= 0x8000) {
+        // Three kinds of mapping are address space, not memory, and become a
+        // lazy mem_reservation: no host memory until a page is mprotect'ed or
+        // touched (mem_ptr's demand-map path, pt_set_flags' commit).
+        //
+        // MAP_NORESERVE over 256MB: JSC's 128GB cage, the JVM's heap.
+        bool big_noreserve = (flags & MMAP_NORESERVE) && pages > 0x10000;
+        // [T-ish-noreserve-lazy] PROT_NONE with MAP_NORESERVE from 1MB: what
+        // the JVM reserves (os::reserve_memory), its 240MB code cache, 64MB
+        // metaspace nodes, G1's side tables, and what it uncommits. A host
+        // PROT_NONE mapping costs no memory, but it costs address space, and
+        // every guest process shares the app's one, which iOS caps: a few JVMs
+        // at once (Maven, the javadoc it forks, another build) and one could no
+        // longer start, "Failed to reserve memory for metaspace". Smaller ones
+        // (V8's 256KB pages, guard pages) keep their host mapping, so the
+        // reservation list, searched linearly, stays short.
+        bool reserve_only = is_prot_none && (flags & MMAP_NORESERVE) &&
+            pages >= NORESERVE_LAZY_MIN_PAGES;
+        // PROT_NONE from 128MB, even without MAP_NORESERVE: V8 reserves its
+        // heap cage in 128MB chunks and mprotect's sub-regions RW as it
+        // allocates. Allocating all of it up front would waste ~640MB per
+        // node process.
+        bool cage_chunk = is_prot_none && pages >= 0x8000;
+        if (big_noreserve || reserve_only || cage_chunk) {
+            // Where we placed it ourselves, a big NORESERVE reservation goes
+            // on its natural alignment when the hole allows. Never where the
+            // guest asked for an address: MAP_FIXED must be at it, and a hint
+            // we honoured too, or the JVM, which reserves at chosen addresses,
+            // takes it for a miss.
+            if (big_noreserve && addr == 0) {
+                pages_t align_pages = pages;
+                if (align_pages > 0x40000) align_pages = 0x40000;
+                page_t aligned = (page / align_pages) * align_pages;
+                if (aligned >= MMAP_HOLE_END && pt_is_hole(current->mem, aligned, pages))
+                    page = aligned;
+            }
+            // MAP_FIXED replaces what was there, as the eager path's pt_map
+            // does: the JVM uncommits with mmap(MAP_FIXED | MAP_NORESERVE,
+            // PROT_NONE), and V8 decommits with MAP_FIXED PROT_NONE. Without
+            // this the old pages stayed, readable and writable, their memory
+            // held, their contents there again at the next commit.
+            if (flags & MMAP_FIXED)
+                pt_unmap_always(current->mem, page, pages);
             if ((err = pt_map_lazy(current->mem, page, pages, prot)) < 0)
                 return err;
             return page << PAGE_BITS;

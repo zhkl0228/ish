@@ -56,15 +56,53 @@ void mem_init(struct mem *mem) {
     lock_init(&mem->cow_lock);
 }
 
+static void mem_unlink_reservation(struct mem *mem, struct mem_reservation *gone) {
+    for (struct mem_reservation **pp = &mem->reservations; *pp; pp = &(*pp)->next) {
+        if (*pp == gone) {
+            *pp = gone->next;
+            free(gone);
+            return;
+        }
+    }
+}
+
 int pt_map_lazy(struct mem *mem, page_t start, pages_t pages, unsigned flags) {
-    struct mem_reservation *res = malloc(sizeof(struct mem_reservation));
-    if (res == NULL)
-        return _ENOMEM;
-    res->start = start;
-    res->pages = pages;
-    res->flags = flags | P_ANONYMOUS;
-    res->next = mem->reservations;
-    mem->reservations = res;
+    flags |= P_ANONYMOUS;
+    // [T-ish-noreserve-lazy] One reservation with a neighbour of the same
+    // flags: the list is searched linearly (each fault on an absent page,
+    // each hole the mmap search tries), and the JVM would otherwise grow it
+    // without end. It reserves its regions one below the other, and each
+    // uncommit (MAP_FIXED over part of a reservation) splits one in three,
+    // which merge again here. The cluster commit asks only that a neighbour
+    // be of the same reservation, for its flags; merged ones have the same.
+    struct mem_reservation *below = NULL, *above = NULL;
+    for (struct mem_reservation *r = mem->reservations; r; r = r->next) {
+        if (r->flags != flags)
+            continue;
+        if (r->start + r->pages == start)
+            below = r;
+        else if (r->start == start + pages)
+            above = r;
+    }
+    if (below != NULL) {
+        below->pages += pages;
+        if (above != NULL) {
+            below->pages += above->pages;
+            mem_unlink_reservation(mem, above);
+        }
+    } else if (above != NULL) {
+        above->start = start;
+        above->pages += pages;
+    } else {
+        struct mem_reservation *res = malloc(sizeof(struct mem_reservation));
+        if (res == NULL)
+            return _ENOMEM;
+        res->start = start;
+        res->pages = pages;
+        res->flags = flags;
+        res->next = mem->reservations;
+        mem->reservations = res;
+    }
     mem_changed(mem);
     return 0;
 }
@@ -1268,7 +1306,12 @@ check_reservation: ;
         // acquire spins instead of blocking.
         write_wrlock(&mem->lock);
         entry = mem_pt(mem, page);
-        if (entry == NULL) {
+        // [T-ish-noreserve-lazy] Again, under the write lock: with the lock
+        // dropped, another thread's munmap, or mmap beside it (pt_map_lazy
+        // merges neighbours), may have freed the one found above. Gone, the
+        // page is unmapped, and the access faults as it would have then.
+        res = mem_find_reservation(mem, page);
+        if (entry == NULL && res != NULL) {
             // [T-ish-anon-cap-dynamic] This lazy commit-on-fault is the path
             // large NORESERVE reservations actually materialize through, one
             // page per TLB miss — during the 2026-08-25 jsonnet compile it

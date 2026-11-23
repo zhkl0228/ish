@@ -68,6 +68,9 @@ struct mem {
 #define MMAP_HOLE_END     0x100ULL          // mmap search ends here (above guard pages)
 // Upper bound for valid user addresses (page number, 48-bit / 4K = 36-bit)
 #define USER_ADDR_MAX_PAGE  0xFFFFFFFFFULL
+// A PROT_NONE MAP_NORESERVE mapping this big or bigger is a lazy reservation,
+// no host memory (do_mmap, [T-ish-noreserve-lazy]): 1MB
+#define NORESERVE_LAZY_MIN_PAGES 0x100ULL
 
 #else
 // x86: 2-level flat page table for 32-bit address space
