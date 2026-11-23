@@ -1,0 +1,21 @@
+{
+  "_comment": [
+    "AOT images of what the app's users run most: Java and Maven (libjvm.so), Kimi Code (node),",
+    "Claude Code (claude.exe, Bun) and musl under all of them. Recorded by record_app_images.sh on",
+    "the root the app ships, with the packages below at the versions apk and npm give that day: an",
+    "image serves the module it was recorded from (its ELF build-id), so record again after the",
+    "app's root or those packages change (Claude Code updates itself often). node is recorded in",
+    "the mode the app runs it in with its image, the interpreter (guest/kimi/kimi_train.sh)."
+  ],
+  "packages": {
+    "apk": ["python3", "nodejs", "npm", "openjdk25-jdk", "maven"],
+    "npm": ["@moonshot-ai/kimi-code"],
+    "npm_prefix": {"/opt/claude-code": ["@anthropic-ai/claude-code"]}
+  },
+  "images": {
+    "musl": {"module": "ld-musl", "workload": "app/musl_train.sh"},
+    "node": {"module": "/usr/bin/node", "workload": "kimi/kimi_train.sh"},
+    "jvm": {"module": "libjvm.so", "workload": "java/java_train.sh"},
+    "claude": {"module": "claude.exe", "workload": "claude/claude_train.sh"}
+  }
+}

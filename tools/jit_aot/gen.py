@@ -16,9 +16,16 @@ lays them out as assembly that links into ish:
   self-loop register maps;
 - a constructor that hands the image to ish_aot_register() at load time.
 
+That is Mach-O assembly. For an ish built on Linux (an ELF binary) the same
+image is written in ELF's: .ish_aot, .data.rel.ro.ish_aot and
+.init_array, :lo12: for @PAGEOFF, .L for the local labels, no underscore
+before C names. --format macho writes Mach-O from a Linux recording too, for
+the iOS app: Linux and Darwin builds of ish share the conventions and layouts
+an image depends on (the same abi in /proc/ish/jit), so only the names differ.
+
 An image is not part of ish: a target links it in as an extra object (the
-macOS CLI with meson -Dcli_aot=aot_<name>.S, the iOS app from its own
-target), and ish must be built with -Djit=true.
+CLI, macOS or Linux, with meson -Dcli_aot=aot_<name>.S, the iOS app from its
+own target), and ish must be built with -Djit=true.
 
 usage: gen.py <recording> <ish binary> <rootfs> aot_<name>.S [--name <name>]
 """
@@ -58,6 +65,29 @@ def load_recording(path):
     if header is None:
         sys.exit(f"❌ {path}: no header line (record with the current ish)")
     return header, trans
+
+
+# Assembly labels declared without NAME() (gadgets-generic.h), whose Mach-O names have no
+# underscore before them either: every other global is a C name or a NAME() one, `_x` there.
+GADGET_ASM = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'asbestos', 'guest-arm64',
+                          'gadgets-aarch64')
+
+
+def plain_asm_labels():
+    labels = set()
+    for f in sorted(os.listdir(GADGET_ASM)):
+        if f.endswith('.S'):
+            for line in open(os.path.join(GADGET_ASM, f)):
+                words = line.split()
+                if len(words) == 2 and words[0] in ('.global', '.globl') and '(' not in words[1]:
+                    labels.add(words[1])
+    return labels
+
+
+def macho_symbols(elf_table):
+    """An ELF ish's names (host_symbols) as a Mach-O build of the same source has them."""
+    plain = plain_asm_labels()
+    return {k: v if v in plain else '_' + v for k, v in elf_table.items()}
 
 
 def host_symbols(binary):
@@ -111,8 +141,13 @@ def emit_segment(out, syms, t, s, seg, stats, label=None):
     while i < len(words):
         sp = special.get(i)
         if sp is None:
-            out.append(f'    .inst 0x{words[i]:08x}')
-            i += 1
+            # a run of plain words, 8 to a line: one string per word would not fit in memory for
+            # the largest modules (claude.exe: 26 million words)
+            j = i + 1
+            while j < len(words) and j - i < 8 and j not in special:
+                j += 1
+            out.append('    .inst ' + ', '.join(f'0x{w:08x}' for w in words[i:j]))
+            i = j
             continue
         if sp[0] == 'stub':
             out.append(f'    b {sp[1]}')
@@ -214,6 +249,49 @@ def default_family(mod):
     return m.group(1) + '*' if m else name
 
 
+# The image's Mach-O sections and their ELF counterparts. The code must come after the gadgets,
+# as __ish_aot comes after __text on Mach-O: native code takes a code-stream pointer within 128MB
+# after its image's start for native code too (emit_native_dispatch_ex), and ld merges a .text.*
+# section into .text, before the gadgets of the libraries linked after it; .ish_aot is placed
+# after all of .text.
+ELF_SECTIONS = {
+    '.section __TEXT,__ish_aot,regular,pure_instructions': '.section .ish_aot,"ax",%progbits',
+    '.section __DATA,__const': '.section .data.rel.ro.ish_aot,"aw",%progbits',
+    '.section __DATA,__mod_init_func,mod_init_funcs': '.section .init_array,"aw",%init_array',
+}
+# The labels gen.py makes (Lt<t>s<s>, Lk<t>, Laot_..., Ltrans, ...): local on Mach-O by their L, .L on ELF
+LOCAL_LABEL = re.compile(r'(?<![\w.])L(?=aot_|trans\b|byhash\b|family\b|path\b|[tkgsl]\d)')
+
+
+def is_elf(binary):
+    with open(binary, 'rb') as f:
+        return f.read(4) == b'\x7fELF'
+
+
+def elf_lines(lines):
+    """The image's assembly (Mach-O's) in ELF's, for an ish built on Linux."""
+    out = []
+    for line in lines:
+        t = line.strip()
+        if t.startswith('l_ish_aot_'):   # ld64's anchors (ANCHOR_EVERY): ELF has no such limit
+            continue
+        if t in ELF_SECTIONS:
+            out.append('    ' + ELF_SECTIONS[t])
+            continue
+        if t.startswith('.asciz'):        # a path or a pattern: no labels in it
+            out.append(line)
+            continue
+        line = LOCAL_LABEL.sub('.L', line)
+        line = re.sub(r'(?<![\w.])_ish_aot_', 'ish_aot_', line)
+        if line.endswith('@PAGEOFF'):
+            head, target = line.rsplit(', ', 1)
+            line = f'{head}, :lo12:{target[:-len("@PAGEOFF")]}'
+        elif line.endswith('@PAGE'):
+            line = line[:-len('@PAGE')]
+        out.append(line)
+    return out
+
+
 def sha256_of(path):
     h = hashlib.sha256()
     with open(path, 'rb') as f:
@@ -244,6 +322,8 @@ def main():
                     '"" for none')
     ap.add_argument('--abi', help='abi of the ish that recorded, for a recording made before the header had it '
                     '(the "abi" of /proc/ish/jit in that same build)')
+    ap.add_argument('--format', choices=['elf', 'macho'], help="the image's object format: the recording "
+                    "ish's by default; macho from a Linux recording makes an image for the iOS app")
     ap.add_argument('--no-links', action='store_true', help='no static links between translations: a block '
                     'end enters its successor through the generic path, so it chains to any successor')
     args = ap.parse_args()
@@ -264,10 +344,18 @@ def main():
     if len(mods) != 1:
         sys.exit(f"❌ expected one module in the recording, got {sorted(mods)}")
     mod = mods.pop()
-    mod_file = os.path.join(args.rootfs, mod.lstrip('/'))
+    # a fakefs root (meta.db, as the app's) keeps its files in data/
+    files = os.path.join(args.rootfs, 'data') if os.path.exists(os.path.join(args.rootfs, 'meta.db')) else args.rootfs
+    mod_file = os.path.join(files, mod.lstrip('/'))
     if not os.path.isfile(mod_file):
         sys.exit(f"❌ {mod_file}: module not found in the rootfs")
     syms = host_symbols(args.ish)
+    elf = is_elf(args.ish)
+    out_format = args.format or ('elf' if elf else 'macho')
+    if elf and out_format == 'macho':
+        syms = macho_symbols(syms)
+    elif not elf and out_format == 'elf':
+        sys.exit("❌ --format elf needs a recording made by an ish built on Linux")
     print(f"📼 {len(trans)} translations of {mod}, prologue {header['prologue_words']} words")
 
     kept = range(len(trans))
@@ -293,6 +381,8 @@ def main():
     for ti, t in enumerate(tqdm(trans, desc='🛠  code', unit='tr')):
         body = []
         ok = all(emit_segment(body, syms, ti, si, seg, stats) for si, seg in enumerate(t['segs']))
+        for seg in t['segs']:   # the tables need only the count: the words take a gigabyte for claude.exe
+            seg['nwords'] = len(seg.pop('words'))
         if not ok:
             stats['dropped'] += 1
             continue
@@ -330,7 +420,7 @@ def main():
         data.append(f'Ls{ti}:')
         for si, seg in enumerate(t['segs']):
             data.append(f'    .quad {seg_label(ti, si)}')
-            data.append(f'    .long {seg["pos"]}, {len(seg["words"])}')
+            data.append(f'    .long {seg["pos"]}, {seg["nwords"]}')
         loop = next((seg['loop'] for seg in t['segs'] if seg['loop']), None)
         if loop:
             si = next(i for i, seg in enumerate(t['segs']) if seg['loop'])
@@ -380,7 +470,7 @@ def main():
         lines.append(f'    .quad {h}')
         lines.append(f'    .long {ti}, 0')
     if family:
-        lines.append(f'Lfamily:\n    .asciz "{family}"')
+        lines += ['Lfamily:', f'    .asciz "{family}"']
     lines += ['Lpath:', f'    .asciz "{mod}"', '    .p2align 3',
               f'    .globl _ish_aot_module_{args.name}',
               f'_ish_aot_module_{args.name}:',
@@ -408,9 +498,11 @@ def main():
               '    .p2align 3',
               '    .quad Laot_register', '']
     # The tables go out in the compact layout of aot.h (compact.py; the code is unchanged).
-    out, _ = compact_lines('\n'.join(lines).split('\n'), abi)
+    out, _ = compact_lines(lines, abi)
+    if out_format == 'elf':
+        out = elf_lines(out)
     with open(args.out, 'w') as f:
-        f.write('\n'.join(out) + '\n')
+        f.writelines(line + '\n' for line in out)
     print(f"✅ {args.out}: {stats['sym']} symbols, {stats['exit']} exits, "
           f"{stats['linked']} static links ({stats['unlinked']} unlinked), family {family or '-'}, "
           f"sha256 {digest.hex()[:16]}…")

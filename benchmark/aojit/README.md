@@ -34,6 +34,53 @@ benchmark/aojit/           images, workloads and tests (host scripts at the top)
 Inputs (JSON, logs, images, certificates, the 10 MB scp file) are generated in the guest by
 `guest/setup.sh` and the scripts themselves, never committed.
 
+## The app's tools: `images-app.json`
+
+What the app's users run most has a list of its own: Java and Maven (`libjvm.so`), Kimi Code
+(`/usr/bin/node`), Claude Code (`claude.exe`, a Bun executable) and musl under all of them. Their
+workloads are `guest/java`, `guest/kimi`, `guest/claude` and `guest/app/musl_train.sh`; the agent
+CLIs answer through a model API of their own in the guest (`guest/llm/mock_llm.py`, OpenAI's chat
+completions and Anthropic's messages), so no account or network is needed for them.
+
+On a Mac (Apple silicon) or a Linux arm64 host, from the repository:
+
+```sh
+benchmark/aojit/record_app_images.sh        # build-arm64-jit, build-aot-root, the images, app/AOTImages.local.xcconfig
+benchmark/aojit/measure_app_images.sh       # optional: each workload with and without its image, on the CLI
+```
+
+then build the app in Xcode, which links what `app/AOTImages.local.xcconfig` lists (`$(SRCROOT)`
+paths, so a Linux host that shares the repository with the Mac can write it). The root is the one
+the app ships (`deps/rootfs/arm64-root.tar.gz`), made a fakefs as the app's (`fakefsify`, which
+needs libarchive: `brew install libarchive`), with the packages at the versions apk and npm give
+that day, as `ish-install` installs them on the phone: an image serves the module it was recorded
+from, so record again after the root or the tools change, and keep the phone's packages at the same
+versions (`apk upgrade`). An update does no harm: blocks are matched one by one, and an image still
+serves the blocks of another version that did not change (`other versions` in `/proc/ish/jit`).
+Claude Code updates itself often. node is recorded in the interpreter, the mode `kernel/exec.c`
+gives it when its image is in use; `measure_app_images.sh` also times V8's tiers, with the image and
+without, which is what the mode should be chosen by.
+
+Linux records too: the JIT's code region is a memfd mapped twice there, as iOS maps it. Linux and
+Darwin builds of ish share what an image depends on (the abi in `/proc/ish/jit` is the same for the
+same source), so a Linux recording serves the app: `gen.py --format macho` writes it in Mach-O
+(a C name gets its underscore, an assembly label declared without `NAME()` does not), and clang 20
+assembles that for iOS (`IOS_CC`; clang 18's assembler is quadratic in an image's label
+differences, of which a large image has millions: claude.exe's was unfinished after 8 minutes, 17 s with clang 20).
+For the Linux CLI `gen.py` writes ELF (`.ish_aot` after `.text`: native code takes a pointer
+within 128MB after its image's start for native code, so the gadgets must come before it), which
+`measure_app_images.sh` assembles with GNU as.
+
+Measured on Linux (18 cores; CLI built as the app, `-Djit_emit=false`), the workloads of
+`guest/`, with the images and without (`ISH_JIT=0`):
+
+| workload | images | none |
+|---|---|---|
+| Java and Maven (javac twice, `mvn package` twice) | 177 s | 230 s |
+| Claude Code (`-p` three times, stream-json) | 13 s | 23 s |
+| Kimi Code, node in the interpreter | 38 s | 96 s |
+| Kimi Code, node with V8's tiers | 46 s | 94 s |
+
 ## Images
 
 Recorded AOT images live in `images/` but are not committed (`.gitignore`). They are large (the set

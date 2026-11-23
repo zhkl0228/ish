@@ -25,6 +25,7 @@ e2e_out/
 # Legacy bench scripts (replaced by benchmark/)
 bench/
 tools/prebuilt_gadget_gen/__pycache__/
+tools/jit_aot/__pycache__/
 tools/prebuilt_gadget_gen/*.bak
 .cache/
 
@@ -32,6 +33,9 @@ tools/prebuilt_gadget_gen/*.bak
 benchmark/aojit/images/
 # Local list of the AOT images the ARM64 app links (see app/AppARM64.xcconfig)
 app/AOTImages.local.xcconfig
+# The root benchmark/aojit/record_app_images.sh records the app's images on
+build-aot-root/
+build-aot-root.ready
 
 # IPA archives and exports (benchmark/aojit/README.md, "Link")
 build-ipa/

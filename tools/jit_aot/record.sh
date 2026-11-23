@@ -2,6 +2,8 @@
 # Record one guest module's translations and turn them into an AOT image.
 #
 # usage: record.sh <ish built with -Djit=true> <rootfs> <workload> <out/aot_NAME.S> [module]
+#   rootfs    a fakefs root (meta.db and data/, as the app's: device files work) or a
+#             directory (realfs)
 #   workload  shell script inside the rootfs (guest path) that exercises the module;
 #             it runs in one ish invocation so every translation shares one registry
 #   module    substring of the module's guest path (default: ld-musl)
@@ -9,7 +11,7 @@
 #                     the workload's output in <file>.log
 #
 # A workload whose output shows a step that failed (FAIL, Traceback, a usage
-# message, "skipped", a missing command or file, a crash) makes no image: the
+# message, "skipped", a missing command or file, a crash, Maven's [ERROR]) makes no image: the
 # code that step would have run is missing from the recording. So does a
 # recording made after the JIT's code region filled up (gen.py checks that).
 # The image depends on the ish that recorded it (gen.c, the pinned-register
@@ -28,19 +30,21 @@ if [ -n "$RECORDING" ]; then
     rec=$RECORDING
     log=$RECORDING.log
 else
-    rec=$(mktemp -t jit_aot_rec)
+    rec=$(mktemp "${TMPDIR:-/tmp}/jit_aot_rec.XXXXXX")
     log=$rec.log
     trap 'rm -f "$rec" "$log"' EXIT
 fi
 
+[ -f "$rootfs/meta.db" ] && fs=-f || fs=-r
 echo "📼 recording $module translations: $workload"
 ISH_JIT_PIC=1 ISH_JIT_RECORD="$rec" ISH_JIT_RECORD_MOD="$module" \
-    "$ish" -r "$rootfs" /bin/sh "$workload" < /dev/null > "$log" 2>&1 || echo "⚠️  $workload exited $?"
-if grep -n -E 'FAIL|Traceback|unrecognized option|^Usage:|skipped|: not found|No such file or directory|Segmentation fault|Killed|❌' "$log" > "$log.bad"; then
+    "$ish" $fs "$rootfs" /bin/sh "$workload" < /dev/null > "$log" 2>&1 || echo "⚠️  $workload exited $?"
+if grep -n -E 'FAIL|Traceback|unrecognized option|^Usage:|skipped|: not found|No such file or directory|Segmentation fault|Killed|^\[ERROR\]|❌' "$log" > "$log.bad"; then
     echo "❌ $workload: a step failed, so its code is not recorded (fix the workload or its rootfs):"
     head -5 "$log.bad" | cut -c1-200 | sed 's/^/   /'
     rm -f "$log.bad"
     exit 1
 fi
 rm -f "$log.bad"
-python3 "$(dirname "$0")/gen.py" "$rec" "$ish" "$rootfs" "$out" --name "$name"
+python3 "$(dirname "$0")/gen.py" "$rec" "$ish" "$rootfs" "$out" --name "$name" ||
+    { status=$?; echo "❌ gen.py exited $status (killed by the host when it is over 128: out of memory?)"; exit 1; }

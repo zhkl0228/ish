@@ -1810,12 +1810,22 @@ if get_option('kernel') == 'ish'
 
     if not meson.is_cross_build()
         # AOT images are not part of ish: the CLI links them in only when
-        # given (-Dcli_aot=aot_<name>.S from tools/jit_aot/gen.py).
+        # given (-Dcli_aot=aot_<name>.S from tools/jit_aot/gen.py, or the .o
+        # another assembler made of it: clang 18's is quadratic on the largest).
         cli_aot = get_option('cli_aot')
         if cli_aot.length() > 0 and not ish_jit
             error('-Dcli_aot needs -Djit=true (the images register with the JIT runtime)')
         endif
-        executable('ish', ['main.c'] + files(cli_aot), dependencies: ish)
+        cli_aot_src = []
+        cli_aot_obj = []
+        foreach f : cli_aot
+            if f.endswith('.o')
+                cli_aot_obj += f
+            else
+                cli_aot_src += f
+            endif
+        endforeach
+        executable('ish', ['main.c'] + files(cli_aot_src), objects: files(cli_aot_obj), dependencies: ish)
     endif
 
 elif get_option('kernel') == 'linux'
