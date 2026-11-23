@@ -102,6 +102,27 @@ void deliver_signal(struct task *task, int sig, struct siginfo_ info) {
     cpu_poke(&task->cpu);
 }
 
+// A signal the task brought on itself synchronously: a fault, a breakpoint,
+// a single step. As Linux's force_sig_info_to_task: if the task blocks or
+// ignores it, it is unblocked and its action reset to the default, since the
+// faulting instruction would otherwise run again and fault again forever (or
+// a blocked one stay pending with the task going on as if nothing happened).
+// to_default resets the action even to a handler, as force_sigsegv does when
+// the handler of the signal that failed to be delivered is SIGSEGV's own.
+void force_signal(struct task *task, int sig, struct siginfo_ info, bool to_default) {
+    if (task->sighand == NULL)
+        return;
+    lock(&task->sighand->lock);
+    struct sigaction_ *action = &task->sighand->action[sig];
+    if (to_default || sigset_has(task->blocked, sig) || action->handler == SIG_IGN_) {
+        action->handler = SIG_DFL_;
+        sigset_del(&task->blocked, sig);
+    }
+    deliver_signal_unlocked(task, sig, info, true);
+    unlock(&task->sighand->lock);
+    cpu_poke(&task->cpu);
+}
+
 void send_signal(struct task *task, int sig, struct siginfo_ info) {
     // signal zero is for testing whether a process exists
     if (sig == 0)
@@ -398,80 +419,6 @@ static void receive_signal(struct sighand *sighand, struct siginfo_ *info) {
 
         case SIGNAL_KILL:
             unlock(&sighand->lock); // do_exit must be called without this lock
-#ifdef GUEST_ARM64
-            // V8's IMMEDIATE_CRASH() uses BRK #0 on ARM64 (delivers SIGTRAP).
-            // Generic recovery: unwind the current function frame and return 0
-            // to the caller. This lets V8 continue past non-fatal CHECKs.
-            if (sig == SIGTRAP_) {
-                struct cpu_state *cpu = &current->cpu;
-                if (ish_exec_trace())
-                    fprintf(stderr, "V8_SIGTRAP: pc=0x%llx x0=0x%llx sp=%llx fp=%llx lr=%llx\n",
-                            (unsigned long long)cpu->pc,
-                            (unsigned long long)cpu->regs[0],
-                            (unsigned long long)cpu->sp,
-                            (unsigned long long)cpu->regs[29],
-                            (unsigned long long)cpu->regs[30]);
-                // Only treat as "clean exit 0" if this process has already
-                // committed to V8 abort (printed the V8 fatal preamble to
-                // stderr). Otherwise preserve normal SIGTRAP semantics so
-                // legitimate errors / debugger traps aren't masked.
-                //
-                // Required for npx: npm's inner V8 throws non-fatal CHECKs
-                // (e.g. Handle location_==nullptr during worker teardown)
-                // AFTER all side-effects have landed on disk. Exit 0 lets
-                // npx's outer shell pipeline continue to the actual install
-                // step. Without this gate npx reports failure but the
-                // install actually succeeded.
-                if (current->group && current->group->v8_aborting) {
-                    do_exit_group(0);
-                } else {
-                    do_exit_group(sig);
-                }
-                return;
-            }
-            if (sig == SIGABRT_) {
-                struct cpu_state *cpu = &current->cpu;
-                if (ish_exec_trace())
-                    fprintf(stderr, "V8_SIGABRT: pc=0x%llx sp=%llx fp=%llx lr=%llx\n",
-                            (unsigned long long)cpu->pc,
-                            (unsigned long long)cpu->sp,
-                            (unsigned long long)cpu->regs[29],
-                            (unsigned long long)cpu->regs[30]);
-                // Like SIGTRAP: v8_aborting → exit 0; otherwise preserve
-                // abort() exit semantics.
-                if (current->group && current->group->v8_aborting) {
-                    do_exit_group(0);
-                } else {
-                    do_exit_group(sig);
-                }
-                return;
-            }
-            // V8 scope corruption GPF cascade: the deep frame unwind in
-            // handle_interrupt may leave a background thread with a corrupt
-            // PC pointing into the V8 heap. When that thread tries to
-            // execute "code" at a heap address, it gets SIGILL.
-            // Flush the host-side stdout/stderr pipes before killing the
-            // process group, so buffered output (e.g. npm help) is visible.
-            if (sig == SIGILL_ || sig == SIGBUS_) {
-                struct cpu_state *cpu = &current->cpu;
-                if (cpu->pc >= 0xb0000000 && cpu->pc < 0xf0000000) {
-                    do_exit_group(1 << 8);
-                    return;
-                }
-            }
-            // If this process has already committed to a V8 fatal abort
-            // (printed the V8 fatal preamble to stderr), treat any
-            // subsequent fatal signal as a clean shutdown — the side
-            // effects have already landed on disk and the abort preamble
-            // is suppressed, so surfacing a non-zero exit just confuses
-            // callers. Without v8_aborting set, fall through to normal
-            // SIGSEGV semantics so legitimate user-program crashes still
-            // surface as "Segmentation fault" / non-zero exit.
-            if (sig == SIGSEGV_ && current->group && current->group->v8_aborting) {
-                do_exit_group(0);
-                return;
-            }
-#endif
             do_exit_group(sig);
     }
 
@@ -591,7 +538,7 @@ static void receive_signal(struct sighand *sighand, struct siginfo_ *info) {
     // install frame
     if (user_write(sp, &frame, frame_size)) {
         printk("failed to install frame for %d at %#x\n", info->sig, sp);
-        deliver_signal(current, SIGSEGV_, SIGINFO_NIL);
+        force_signal(current, SIGSEGV_, SIGINFO_NIL, info->sig == SIGSEGV_);
     }
 
 #if defined(GUEST_ARM64)
@@ -753,7 +700,7 @@ int64_t sys_rt_sigreturn(void) {
     addr_t frame_addr = sp - offsetof(struct rt_sigframe_, sig);
 #endif
     if (user_get(frame_addr, frame)) {
-        deliver_signal(current, SIGSEGV_, SIGINFO_NIL);
+        force_signal(current, SIGSEGV_, SIGINFO_NIL, false);
         return _EFAULT;
     }
     restore_sigcontext(&frame.uc.mcontext, cpu);
@@ -794,7 +741,7 @@ int64_t sys_sigreturn(void) {
     addr_t frame_addr = sp - offsetof(struct sigframe_, sc);
 #endif
     if (user_get(frame_addr, frame)) {
-        deliver_signal(current, SIGSEGV_, SIGINFO_NIL);
+        force_signal(current, SIGSEGV_, SIGINFO_NIL, false);
         return _EFAULT;
     }
     restore_sigcontext(&frame.sc, cpu);

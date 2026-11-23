@@ -302,6 +302,15 @@ else
         echo "failed to build regress_init_fault" >&2
         exit_failed=$((exit_failed + 1))
     fi
+    printf 'int main(void) { __builtin_trap(); }\n' > "$GUEST_ROOT/tmp/regress_init_fault.c"
+    if "$CC_GUEST" -static -O0 -o "$GUEST_ROOT/tmp/regress_init_fault" "$GUEST_ROOT/tmp/regress_init_fault.c"; then
+        # A BRK in init, which has no SIGTRAP handler: forced, so it ends init
+        # rather than being ignored as a signal init does not handle.
+        check_exit 133 /tmp/regress_init_fault
+    else
+        echo "failed to build regress_init_fault (BRK)" >&2
+        exit_failed=$((exit_failed + 1))
+    fi
     rm -f "$GUEST_ROOT/tmp/regress_init_fault" "$GUEST_ROOT/tmp/regress_init_fault.c"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_init_thread_exit" \
             tests/regress/regress_init_thread_exit.c; then
@@ -328,6 +337,18 @@ else
         status=1
     fi
 
+    echo
+    echo "########## signals a task brings on itself ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_force_signal" \
+            tests/regress/regress_force_signal.c; then
+        out=$(timeout 120 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_force_signal 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_force_signal"
+    else
+        echo "failed to build regress_force_signal" >&2
+        status=1
+    fi
     echo
     echo "########## device nodes from a Darwin import ##########"
     # A fakefs of its own: a tarball with the test as /init and three device

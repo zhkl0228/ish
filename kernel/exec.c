@@ -474,26 +474,6 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
     current->cpu.fpcr = 0;
     current->cpu.fpsr = 0;
 
-    // Map V8 compressed pointer range as readable zeros.
-    // V8's Zone allocator reuses memory without zeroing. Stale data containing
-    // V8 compressed pointers (small integers like 0x9xxxx) can leak into real
-    // pointer fields. Mapping these low pages with zeros means accidental
-    // dereferences read zeros (NULL) instead of faulting with SIGSEGV.
-    // This covers V8 cage offsets 0x80000-0x100000 which are common stale values.
-    {
-        const char *base_name = strrchr(file, '/');
-        base_name = base_name ? base_name + 1 : file;
-        if (strcmp(base_name, "node") == 0) {
-            // Map zero pages at 0x0-0x100000 (first 1MB)
-            // This catches both NULL dereferences and V8 compressed pointers
-            page_t guard_start = 0; // page 0
-            pages_t guard_pages = 0x100000 / PAGE_SIZE; // 256 pages = 1MB
-            write_wrlock(&current->mem->lock);
-            int map_err = pt_map_nothing(current->mem, guard_start, guard_pages, P_READ | P_WRITE);
-            write_wrunlock(&current->mem->lock);
-            (void)map_err; // guard pages are best-effort
-        }
-    }
 #else
     current->cpu.esp = sp;
     current->cpu.eip = entry;
@@ -670,11 +650,6 @@ static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, 
 int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) {
     ISH_SIGNPOST_SCOPE_BEGIN(exec, "execve", _exec_spid);
     ISH_SIGNPOST_EVENT(exec, "execve_path", "path=%{public}s", file);
-    // New program starts fresh — clear V8 abort-in-progress flag so the
-    // fresh process's stderr isn't permanently muted from a prior abort.
-    if (current && current->group)
-        current->group->v8_aborting = false;
-
     struct fd *fd = generic_open(file, O_RDONLY, 0);
     if (IS_ERR(fd))
         return PTR_ERR(fd);
