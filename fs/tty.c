@@ -1,4 +1,5 @@
 #define DEFAULT_CHANNEL debug
+#include <time.h>
 #include "debug.h"
 #include <string.h>
 #include "kernel/calls.h"
@@ -471,6 +472,19 @@ static int tty_check_background(struct tty *tty, int sig) {
     return err;
 }
 
+// As Linux's tty_update_time: a pty slave's access time on a read, its
+// modification time on a write, to the second, but only once it has moved
+// past an 8-second step, not to give away when each key was typed. Caller
+// holds tty->lock.
+static void tty_update_time(struct tty *tty, bool modified) {
+    if (tty->driver != &pty_slave)
+        return;
+    int64_t now = time(NULL);
+    int64_t *stamp = modified ? &tty->pty.mtime : &tty->pty.atime;
+    if ((now ^ *stamp) & ~7)
+        *stamp = now;
+}
+
 static ssize_t tty_read(struct fd *fd, void *buf, size_t bufsize) {
     // important because otherwise we'll block
     if (bufsize == 0)
@@ -559,6 +573,8 @@ static ssize_t tty_read(struct fd *fd, void *buf, size_t bufsize) {
     }
 
 out:
+    if (bufsize + bufsize_extra > 0)
+        tty_update_time(tty, false);
     unlock(&tty->lock);
     return bufsize + bufsize_extra;
 error:
@@ -613,6 +629,11 @@ static ssize_t tty_write(struct fd *fd, const void *buf, size_t bufsize) {
         free(postbuf);
     if (err < 0)
         return err;
+    if (bufsize > 0) {
+        lock(&tty->lock);
+        tty_update_time(tty, true);
+        unlock(&tty->lock);
+    }
     return bufsize;
 }
 

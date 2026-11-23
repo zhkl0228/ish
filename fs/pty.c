@@ -1,6 +1,7 @@
 #include <string.h>
 #include <limits.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <ctype.h>
 #include "kernel/task.h"
 #include "kernel/errno.h"
@@ -17,6 +18,7 @@ static void pty_slave_init_inode(struct tty *tty) {
     // TODO make these mount options
     tty->pty.gid = current->egid;
     tty->pty.perms = 0620;
+    tty->pty.atime = tty->pty.mtime = tty->pty.ctime = time(NULL);
 }
 
 static int pty_master_init(struct tty *tty) {
@@ -238,6 +240,10 @@ static void devpts_stat_num(int pty_num, struct statbuf *stat) {
         stat->gid = tty->pty.gid;
         stat->inode = pty_num + 3;
         stat->rdev = dev_make(TTY_PSEUDO_SLAVE_MAJOR, pty_num);
+        // the idle time of w and who: now less the access time
+        stat->atime = tty->pty.atime;
+        stat->mtime = tty->pty.mtime;
+        stat->ctime = tty->pty.ctime;
 
         unlock(&tty->lock);
         unlock(&ttys_lock);
@@ -266,6 +272,7 @@ static int devpts_setattr_num(int pty_num, struct attr attr) {
             tty->pty.perms = attr.mode;
             break;
     }
+    tty->pty.ctime = time(NULL);
 
     unlock(&tty->lock);
     unlock(&ttys_lock);

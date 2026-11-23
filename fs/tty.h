@@ -142,6 +142,8 @@ struct tty {
             mode_t_ perms;
             uid_t_ uid;
             uid_t_ gid;
+            // its devpts inode's times, in seconds: a slave's
+            int64_t atime, mtime, ctime;
             bool locked;
             bool packet_mode;
         } pty;
