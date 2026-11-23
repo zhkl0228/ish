@@ -90,7 +90,6 @@ if guest_arch == 'x86'
     gadgets_base = 'asbestos/guest-x86/gadgets-'
 elif guest_arch == 'arm64'
     emu_src += [
-        'emu/arch/arm64/fpu.c',
     ]
     gadgets_base = 'asbestos/guest-arm64/gadgets-'
 endif

@@ -354,8 +354,12 @@ typedef int64_t (*syscall_t)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, u
 typedef int (*syscall_t)(dword_t, dword_t, dword_t, dword_t, dword_t, dword_t);
 #endif
 
-// Stub for unimplemented syscalls
-dword_t syscall_stub(void);
+// Stub for unimplemented syscalls: a syscall_t, as the table holds it
+#ifdef GUEST_ARM64
+int64_t syscall_stub(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+#else
+int syscall_stub(dword_t, dword_t, dword_t, dword_t, dword_t, dword_t);
+#endif
 dword_t syscall_silent_stub(void);
 dword_t syscall_success_stub(void);
 

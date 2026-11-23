@@ -21,7 +21,13 @@
 #include "asbestos/guest-arm64/jit.h"
 #endif
 
-dword_t syscall_stub(void) {
+#ifdef GUEST_ARM64
+int64_t syscall_stub(uint64_t UNUSED(a), uint64_t UNUSED(b), uint64_t UNUSED(c), uint64_t UNUSED(d),
+        uint64_t UNUSED(e), uint64_t UNUSED(f)) {
+#else
+int syscall_stub(dword_t UNUSED(a), dword_t UNUSED(b), dword_t UNUSED(c), dword_t UNUSED(d),
+        dword_t UNUSED(e), dword_t UNUSED(f)) {
+#endif
     return _ENOSYS;
 }
 // While identical, this version of the stub doesn't log below. Use this for

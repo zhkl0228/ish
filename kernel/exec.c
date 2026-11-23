@@ -190,7 +190,7 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
         err = _EIO;
         if (fd->ops->lseek(fd, ph[i].offset, SEEK_SET) < 0)
             goto out_free_interp;
-        if (fd->ops->read(fd, interp_name, ph[i].filesize) != ph[i].filesize)
+        if (fd->ops->read(fd, interp_name, ph[i].filesize) != (ssize_t) ph[i].filesize)
             goto out_free_interp;
 
         // open interpreter and read headers

@@ -153,29 +153,6 @@ static int proc_show_net_unix(struct proc_entry *UNUSED(entry), struct proc_data
 // There is deliberately no /proc/net/route: the host's routing table is not
 // available to us, and a made-up one would be read as the truth.
 
-// /proc/net directory entries
-struct proc_dir_entry proc_net_entries[] = {
-    {"dev", .show = proc_show_net_dev},
-    {"if_inet6", .show = proc_show_net_if_inet6},
-    {"tcp", .show = proc_show_net_tcp},
-    {"tcp6", .show = proc_show_net_tcp6},
-    {"udp", .show = proc_show_net_udp},
-    {"udp6", .show = proc_show_net_udp6},
-    {"raw", .show = proc_show_net_raw},
-    {"raw6", .show = proc_show_net_raw6},
-    {"unix", .show = proc_show_net_unix},
-};
-#define PROC_NET_LEN (sizeof(proc_net_entries)/sizeof(proc_net_entries[0]))
-
-static bool proc_net_readdir(struct proc_entry *UNUSED(entry), unsigned long *index, struct proc_entry *next_entry) {
-    if (*index < PROC_NET_LEN) {
-        *next_entry = (struct proc_entry) {&proc_net_entries[*index], *index, NULL, NULL, 0, 0};
-        (*index)++;
-        return true;
-    }
-    return false;
-}
-
 // Exported /proc/net directory entry
 struct proc_children proc_net_children = PROC_CHILDREN({
     {"dev", .show = proc_show_net_dev},

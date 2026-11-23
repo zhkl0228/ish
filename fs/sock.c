@@ -2056,10 +2056,20 @@ struct mmsghdr64_ {
 #endif
 
 int_t sys_recvmmsg(fd_t sock_fd, addr_t msg_vec, uint_t vec_len, int_t flags, addr_t timeout_addr) {
-    STRACE("recvmmsg(%d, %#x, %d, %d)", sock_fd, msg_vec, vec_len, flags);
+    STRACE("recvmmsg(%d, %#x, %d, %d, %#x)", sock_fd, msg_vec, vec_len, flags, timeout_addr);
     // The error queue is always empty (see IP_RECVERR in setsockopt).
     if (flags & MSG_ERRQUEUE_)
         return _EAGAIN;
+    // The timeout is checked after each datagram, as Linux does (recvmmsg(2),
+    // BUGS: it does not end a wait for one), and what is left of it written
+    // back.
+    struct timespec deadline;
+    if (timeout_addr != 0) {
+        struct timespec_ timeout;
+        if (user_get(timeout_addr, timeout))
+            return _EFAULT;
+        deadline = timespec_add(timespec_now(CLOCK_MONOTONIC), convert_timespec(timeout));
+    }
     int num_recv = 0;
 #ifdef GUEST_ARM64
     size_t mmsghdr_size = sizeof(struct mmsghdr64_);
@@ -2084,6 +2094,16 @@ int_t sys_recvmmsg(fd_t sock_fd, addr_t msg_vec, uint_t vec_len, int_t flags, ad
         num_recv++;
         if (res == 0)
             break;
+        if (timeout_addr != 0 && !timespec_positive(timespec_subtract(deadline, timespec_now(CLOCK_MONOTONIC))))
+            break;
+    }
+    if (timeout_addr != 0) {
+        struct timespec left = timespec_subtract(deadline, timespec_now(CLOCK_MONOTONIC));
+        if (!timespec_positive(left))
+            left = (struct timespec) {0, 0};
+        struct timespec_ timeout = {.sec = left.tv_sec, .nsec = left.tv_nsec};
+        if (user_put(timeout_addr, timeout))
+            return _EFAULT;
     }
     return num_recv;
 }

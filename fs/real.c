@@ -698,8 +698,8 @@ static char flock_dir[PATH_MAX];
 
 static void flock_proxy_dir_init(void) {
     const char *tmp = getenv("TMPDIR");
-    char buf[PATH_MAX];
 #if defined(__APPLE__)
+    char buf[PATH_MAX];
     if (tmp == NULL && confstr(_CS_DARWIN_USER_TEMP_DIR, buf, sizeof(buf)) > 0)
         tmp = buf;
 #endif
