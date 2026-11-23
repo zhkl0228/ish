@@ -5,6 +5,8 @@
 #endif
 
 #include <TargetConditionals.h>
+#include <errno.h>
+#include <unistd.h>
 #include <dlfcn.h>
 #include <fnmatch.h>
 #include <libkern/OSCacheControl.h>
@@ -88,7 +90,37 @@ static _Atomic size_t region_used;
 static _Atomic bool region_full;   // an allocation failed: what came after runs as gadgets
 
 #ifndef ISH_JIT_NO_EMIT   // AOT-only builds never map executable memory
+#if !TARGET_OS_OSX
+// <sys/codesign.h>'s, which the iOS SDK leaves out
+extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
+#define CS_OPS_STATUS 0
+#define CS_DEBUGGED 0x10000000
+
+// Whether iOS lets the process run code it writes: only while a debugger
+// has it (CS_DEBUGGED, which stays once one attached). Without one, mapping
+// the region and making it executable succeed, but running a page of it is
+// a code signing violation the kernel kills the process for at once
+// (SIGKILL, "Invalid Page"), no handler called: launched from the home
+// screen, iOS 27.2.1.
+static bool may_run_written_code(void) {
+    uint32_t flags = 0;
+    if (csops(getpid(), CS_OPS_STATUS, &flags, sizeof(flags)) != 0) {
+        fprintf(stderr, "⚠️  JIT: csops: %s, taken for no debugger\n", strerror(errno));
+        return false;
+    }
+    if (!(flags & CS_DEBUGGED)) {
+        fprintf(stderr, "⚠️  JIT: no debugger attached: iOS runs no code written at run time\n");
+        return false;
+    }
+    return true;
+}
+#endif
+
 static bool map_dual(void) {
+#if !TARGET_OS_OSX
+    if (!may_run_written_code())
+        return false;
+#endif
     void *rw = mmap(NULL, REGION_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (rw == MAP_FAILED)
         return false;
