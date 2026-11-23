@@ -19,6 +19,9 @@
 #include "kernel/vdso.h"
 #include "kernel/mm.h"
 #include "kernel/native_offload.h"
+#ifdef ISH_JIT
+#include "asbestos/guest-arm64/jit.h"
+#endif
 #include "tools/ptraceomatic-config.h"
 
 #define ARGV_MAX 32 * PAGE_SIZE
@@ -958,15 +961,30 @@ dword_t sys_execve(addr_t filename_addr, addr_t argv_addr, addr_t envp_addr) {
                 "--single-generation",
             };
             // Default mode: node as it ships, with real WebAssembly (and with it undici's own fetch
-            // and every package that loads wasm), no polyfill needed. Only V8's JS tiers and
-            // native regexp code are off, so JS runs in the interpreter: code V8 generates at run
-            // time runs through the gadgets, while its interpreter and builtins are part of the
-            // node binary, which an AOT image runs natively. --no-lazy is left out: eager
-            // compilation made large CLIs start ~25% slower and the Zone problem it was added for
-            // did not show up. Measured 2026-10-01 on the Mac CLI (pure AOT build, node image
-            // recorded in this mode): 9 agent workloads 15.6s -> 14.0s, 13 MCP servers start
-            // 10-27% faster (mcp-remote only starts in this mode).
+            // and every package that loads wasm), no polyfill needed, and with V8's JS tiers
+            // (Sparkplug, Maglev, TurboFan) and native regexp code. Under the gadgets the code V8
+            // generates beats its interpreter by far: the interpreter is itself guest code there,
+            // each bytecode a dozen guest instructions and an indirect branch. Measured 2026-11-23
+            // on the Linux CLI (no AOT images), against the interpreter set below: a TUI's text
+            // layout (ANSI widths, wrapping, inline markdown) 4.8x faster; kimi drawing a streamed
+            // answer 1.6-1.8x the frames for the same CPU, idle after it 21% of a core -> 11%;
+            // its start to the first screen 6% more CPU, its peak memory +40 MB (764 -> 803).
+            // --no-lazy is left out: eager compilation made large CLIs start ~25% slower and the
+            // Zone problem it was added for did not show up.
             static const char *inject_args_default[] = {
+                "--max-old-space-size=512",
+                "--no-concurrent-marking",
+                "--no-concurrent-recompilation",
+                "--no-lazy-compile-dispatcher",
+                "--single-generation",
+            };
+            // With an AOT image of node in use (jit_aot_serves) its interpreter and builtins are
+            // native code, while what V8 generates at run time still runs through the gadgets:
+            // JS stays in the interpreter. Measured 2026-10-01 on the Mac CLI (pure AOT build,
+            // node image recorded in this mode) against the tiers: 9 agent workloads 15.6s ->
+            // 14.0s, 13 MCP servers start 10-27% faster (mcp-remote only starts in this mode).
+            // An image covers the node it was recorded from, in this mode.
+            static const char *inject_args_interpreter[] = {
                 "--no-sparkplug",
                 "--no-maglev",
                 "--no-opt",
@@ -1002,9 +1020,16 @@ dword_t sys_execve(addr_t filename_addr, addr_t argv_addr, addr_t envp_addr) {
             };
             const char *inject_args[16]; // base args + optional requires
             size_t inject_count = 0;
+            bool interpreter = false;
+#ifdef ISH_JIT
+            interpreter = !jitless && jit_aot_serves(filename);
+#endif
             if (jitless) {
                 for (size_t i = 0; i < sizeof(inject_args_jitless)/sizeof(inject_args_jitless[0]); i++)
                     inject_args[inject_count++] = inject_args_jitless[i];
+            } else if (interpreter) {
+                for (size_t i = 0; i < sizeof(inject_args_interpreter)/sizeof(inject_args_interpreter[0]); i++)
+                    inject_args[inject_count++] = inject_args_interpreter[i];
             } else {
                 for (size_t i = 0; i < sizeof(inject_args_default)/sizeof(inject_args_default[0]); i++)
                     inject_args[inject_count++] = inject_args_default[i];

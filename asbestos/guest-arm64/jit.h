@@ -130,5 +130,10 @@ size_t jit_describe(char *buf, size_t size);
 // in blocks compiled afterwards (for A/B timing on a device). -1: unknown.
 int jit_control(const char *cmd, size_t len);
 
+// Whether an AOT image in use was recorded from the guest module at path
+// (exec.c: node's JS stays in V8's interpreter, which node's image runs as
+// native code, only when there is one).
+bool jit_aot_serves(const char *path);
+
 #endif
 #endif

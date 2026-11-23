@@ -3666,6 +3666,16 @@ static void jit_init(void) {
     jit_on = true;
 }
 
+bool jit_aot_serves(const char *path) {
+    pthread_once(&init_once, jit_init);
+    if (!jit_on)
+        return false;
+    for (unsigned i = 0; i < aot_nimages; i++)
+        if (strcmp(aot_images[i]->path, path) == 0)
+            return true;
+    return false;
+}
+
 // Per-thread scratch: the units of the block being compiled and the emitter.
 struct jit_scratch {
     struct jit_units units;
