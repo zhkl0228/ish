@@ -5,7 +5,7 @@
 // memory"). Segments are now shared across fork and between processes that
 // attach the same key or id; a removed one can still be attached by id until
 // its last process detaches it, as on Linux. ipcs lists them with SHM_INFO
-// and SHM_STAT.
+// and SHM_STAT. SHM_LOCK and SHM_UNLOCK set and clear SHM_LOCKED.
 //
 // Prints one line per case and "N passed, M failed". Natively passes, as root
 // or not.
@@ -23,6 +23,13 @@
 #include <sys/shm.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#ifndef SHM_STAT_ANY
+#define SHM_STAT_ANY 15
+#endif
+#ifndef SHM_LOCKED
+#define SHM_LOCKED 02000
+#endif
 
 static int passed, failed;
 
@@ -235,6 +242,32 @@ int main(void) {
     shmctl(id, IPC_RMID, NULL);
     snprintf(detail, sizeof(detail), "write attach %d, IPC_RMID by another user %d", denied, not_owner);
     check("permissions: EACCES, EPERM", denied == 0 && not_owner == 0, detail);
+
+    // 12. SHM_LOCK and SHM_UNLOCK: SHM_LOCKED in its mode; SHM_STAT_ANY;
+    // IPC_SET of an owner -1
+    id = shmget(IPC_PRIVATE, 4096, 0600);
+    int locked = shmctl(id, SHM_LOCK, NULL);
+    shmctl(id, IPC_STAT, &ds);
+    unsigned mode_locked = ds.shm_perm.mode;
+    int unlocked = shmctl(id, SHM_UNLOCK, NULL);
+    shmctl(id, IPC_STAT, &ds);
+    unsigned mode_unlocked = ds.shm_perm.mode;
+    max = shmctl(0, SHM_INFO, (struct shmid_ds *) &info);
+    int stat_any = 0;
+    struct shmid_ds any;
+    for (int index = 0; index <= max; index++)
+        if (shmctl(index, SHM_STAT_ANY, &any) == id)
+            stat_any = 1;
+    ds.shm_perm.uid = (uid_t) -1;
+    int set_bad = shmctl(id, IPC_SET, &ds);
+    int set_bad_errno = errno;
+    shmctl(id, IPC_RMID, NULL);
+    snprintf(detail, sizeof(detail), "SHM_LOCK %d: mode %#o, SHM_UNLOCK %d: mode %#o; SHM_STAT_ANY found it %d; "
+             "IPC_SET uid -1 %d (%s)", locked, mode_locked, unlocked, mode_unlocked, stat_any, set_bad,
+             strerror(set_bad_errno));
+    check("SHM_LOCK, SHM_UNLOCK, SHM_STAT_ANY; IPC_SET's owner -1", locked == 0 && (mode_locked & SHM_LOCKED) &&
+          unlocked == 0 && !(mode_unlocked & SHM_LOCKED) && (mode_unlocked & 0777) == 0600 && stat_any &&
+          set_bad < 0 && set_bad_errno == EINVAL, detail);
 
     printf("%d passed, %d failed\n", passed, failed);
     return failed != 0;

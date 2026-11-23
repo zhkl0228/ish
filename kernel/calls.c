@@ -229,6 +229,12 @@ void handle_interrupt(int interrupt) {
                             current->syscall_restartable = true;
                             current->syscall_restart_nohandler = true;
                             break;
+                        // ERESTARTNOHAND: again only if no handler ran,
+                        // EINTR after one even with SA_RESTART
+                        case 188: case 189: // msgrcv, msgsnd
+                            current->syscall_restartable = false;
+                            current->syscall_restart_nohandler = true;
+                            break;
                         default:
                             current->syscall_restartable = false;
                     }

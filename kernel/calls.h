@@ -151,6 +151,18 @@ int_t sys_shmget(int_t key, addr_t size, int_t flags);
 addr_t sys_shmat(int_t id, addr_t addr, int_t flags);
 int_t sys_shmdt(addr_t addr);
 int_t sys_shmctl(int_t id, int_t cmd, addr_t buf_addr);
+// System V message queues (kernel/msg.c) and semaphores (kernel/sem.c), arm64
+// guest
+int_t sys_msgget(int_t key, int_t flags);
+int_t sys_msgsnd(int_t id, addr_t msgp, addr_t size, int_t flags);
+int_t sys_msgrcv(int_t id, addr_t msgp, addr_t size, int64_t type, int_t flags);
+int_t sys_msgctl(int_t id, int_t cmd, addr_t buf_addr);
+int_t sys_semget(int_t key, int_t nsems, int_t flags);
+int_t sys_semop(int_t id, addr_t sops_addr, uint_t nsops);
+int_t sys_semtimedop(int_t id, addr_t sops_addr, uint_t nsops, addr_t timeout_addr);
+int_t sys_semctl(int_t id, int_t num, int_t cmd, addr_t arg);
+// Applies the SEM_UNDO adjustments of group, whose last thread is exiting
+void sem_exit(struct tgroup *group);
 void pidfd_notify_exit(pid_t_ pid);
 int_t sys_eventfd(uint_t initval);
 

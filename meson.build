@@ -1701,7 +1701,7 @@ if get_option('kernel') == 'ish'
     if guest_arch == 'x86'
         arch_kernel_src = ['kernel/arch/x86/calls.c']
     elif guest_arch == 'arm64'
-        arch_kernel_src = ['kernel/arch/arm64/calls.c', 'kernel/shm.c']
+        arch_kernel_src = ['kernel/arch/arm64/calls.c', 'kernel/sysvipc.c', 'kernel/shm.c', 'kernel/msg.c', 'kernel/sem.c']
     endif
 
     src = [

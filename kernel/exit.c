@@ -30,8 +30,9 @@ __attribute__((weak)) void restore_termios(void) {}
 // process was reaped read the freed group. The timers are freed without
 // pids_lock: a callback runs holding its timer's lock and takes pids_lock to
 // send its signal, and timer_free takes the timer's lock, waiting for a
-// callback under way.
-static void delete_timers_if_last(struct task *task) {
+// callback under way. Whether the thread is the last: more than one may find
+// they are, if they began at once.
+static bool delete_timers_if_last(struct task *task) {
     struct timer *timers[1 + TIMERS_MAX];
     int count = 0;
     lock(&pids_lock);
@@ -59,6 +60,7 @@ static void delete_timers_if_last(struct task *task) {
     unlock(&pids_lock);
     for (int i = 0; i < count; i++)
         timer_free(timers[i]);
+    return last;
 }
 
 static bool exit_tgroup(struct task *task) {
@@ -117,7 +119,15 @@ noreturn void do_exit(int status) {
     // do_exit_group's safety valve not to give up on it while it waits for
     // pids_lock below.
     atomic_store(&current->exit_started, true);
-    delete_timers_if_last(current);
+    bool last = delete_timers_if_last(current);
+#ifdef GUEST_ARM64
+    // before the parent hears of it, as Linux's exit_sem: a semaphore the
+    // process held with SEM_UNDO is free once wait returns
+    if (last)
+        sem_exit(current->group);
+#else
+    (void) last;
+#endif
     sockrestart_task_exit(current);
 
     // has to happen before mm_release
