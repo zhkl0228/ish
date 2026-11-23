@@ -418,6 +418,7 @@ extern void gadget_sqdmulh_vec(void);      // SQDMULH Vd, Vn, Vm (signed sat dou
 extern void gadget_sqrdmulh_vec(void);     // SQRDMULH Vd, Vn, Vm (signed sat rounding doubling mul high)
 extern void gadget_abs_vec(void);          // ABS Vd, Vn (absolute value)
 extern void gadget_neg_vec(void);          // NEG Vd, Vn (negate)
+extern void gadget_sqabs_vec(void);        // SQABS Vd, Vn (signed saturating absolute value)
 extern void gadget_clz_vec(void);          // CLZ Vd, Vn (count leading zeros)
 extern void gadget_cls_vec(void);          // CLS Vd, Vn (count leading sign bits)
 extern void gadget_not_vec(void);          // NOT Vd, Vn (bitwise NOT, bytes only)
@@ -5618,6 +5619,26 @@ skip_three_different:
 
         void *gadget = (U == 0) ? gadget_abs_vec : gadget_neg_vec;
         gen(state, (unsigned long) gadget);
+        gen(state, rd | (rn << 8) | (size << 16) | (Q << 24));
+        return 1;
+    }
+
+    // SQABS (vector) - AdvSIMD two-register misc, saturating: the host's own
+    // runs it, and sets FPSR.QC, the guest's while the guest runs
+    // SQABS: 0 Q 0 01110 size 10000 00111 10 Rn Rd  (U=0, opcode=0x07)
+    // ugrep's line count takes it (claude.exe as grep): sqabs v1.16b, v1.16b
+    if ((insn & 0xbf3ffc00) == 0x0e207800) {
+        uint32_t Q = (insn >> 30) & 1;
+        uint32_t size = (insn >> 22) & 0x3;
+        uint32_t rn = (insn >> 5) & 0x1f;
+        uint32_t rd = insn & 0x1f;
+
+        if (size == 3 && Q == 0) {
+            gen_interrupt(state, INT_UNDEFINED);
+            return 0;
+        }
+
+        gen(state, (unsigned long) gadget_sqabs_vec);
         gen(state, rd | (rn << 8) | (size << 16) | (Q << 24));
         return 1;
     }

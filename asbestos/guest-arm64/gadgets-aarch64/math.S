@@ -14843,6 +14843,7 @@ make_threesame_accum mls, mls
 
 make_twomis_native abs, abs, 1
 make_twomis_native neg, neg, 1
+make_twomis_native sqabs, sqabs, 1
 make_twomis_native clz, clz, 0
 make_twomis_native cls, cls, 0
 
