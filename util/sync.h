@@ -155,6 +155,15 @@ typedef struct {
     // -1: write-locked
     // >0: read-locked with this many readers
     atomic_int val;
+    // Writers retrying in __write_wrlock. Readers that take the lock over and
+    // over (the CPU loop, between quanta) wait while this is nonzero: see
+    // read_wrlock_after_writers.
+    atomic_int writers_waiting;
+    // If set, called by a waiting writer on each retry, to make readers that
+    // hold the lock for long stretches let go of it: mem->lock pokes the
+    // threads running guest code (mmu_poke_tlbs).
+    void (*nudge_readers)(void *ctx);
+    void *nudge_ctx;
     const char *file;
     int line;
     int pid;
@@ -169,6 +178,9 @@ static inline void wrlock_init(wrlock_t *lock) {
 #endif
     if (pthread_rwlock_init(&lock->l, pattr)) __builtin_trap();
     lock->val = lock->line = lock->pid = 0;
+    lock->writers_waiting = 0;
+    lock->nudge_readers = NULL;
+    lock->nudge_ctx = NULL;
     lock->file = NULL;
 }
 
@@ -218,12 +230,25 @@ static inline void __write_wrlock(wrlock_t *lock, const char *file, int line) {
     // yields the CPU each iteration (it is not a busy-spin), and readers keep
     // making progress and releasing until the writer wins a trylock. This keeps
     // forward progress for readers guaranteed and the writer non-blocking.
+    //
+    // A trylock succeeds only at a moment no reader holds the lock, and a CPU
+    // loop gives its read lock up for mere microseconds between quanta: one
+    // thread running guest code (a goroutine spinning in a loop) starved mmap
+    // and munmap for seconds, and with them Go's GC. So the writer says it is
+    // waiting, and the CPU loop holds off taking the lock again until the
+    // writer has it (read_wrlock_after_writers). Those readers hold nothing
+    // while they wait, so the writer still never waits on a reader that waits
+    // on it.
+    atomic_fetch_add(&lock->writers_waiting, 1);
     struct timespec _ts = {0, 1000}; // 1us initial backoff, grows to a steady sleep
     while (pthread_rwlock_trywrlock(&lock->l) != 0) {
+        if (lock->nudge_readers != NULL)
+            lock->nudge_readers(lock->nudge_ctx);
         nanosleep(&_ts, NULL);
-        if (_ts.tv_nsec < 100000) // ramp up to a 100us steady sleep (yields CPU)
+        if (_ts.tv_nsec < 16000) // ramp up to a 16us steady sleep (yields CPU)
             _ts.tv_nsec *= 2;
     }
+    atomic_fetch_sub(&lock->writers_waiting, 1);
     assert(lock->val == 0);
     lock->val = -1;
     lock->file = file;
@@ -231,6 +256,16 @@ static inline void __write_wrlock(wrlock_t *lock, const char *file, int line) {
     lock->pid = current_pid();
 }
 #define write_wrlock(lock) __write_wrlock(lock, __FILE__, __LINE__)
+// read_wrlock for a reader that takes the lock over and over, holding nothing
+// in between (the CPU loop between quanta): first waits for any writer
+// retrying in __write_wrlock to get the lock, so that it finds a moment with
+// no readers at all.
+static inline void read_wrlock_after_writers(wrlock_t *lock) {
+    struct timespec ts = {0, 2000};
+    while (atomic_load(&lock->writers_waiting) > 0)
+        nanosleep(&ts, NULL);
+    read_wrlock(lock);
+}
 static inline bool write_wrtrylock(wrlock_t *lock) {
     int err = pthread_rwlock_trywrlock(&lock->l);
     if (err == EBUSY) return false;

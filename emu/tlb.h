@@ -52,6 +52,7 @@ struct tlb {
 #ifdef GUEST_ARM64
     struct mmu *attached;      // whose tlbs list this is on, while running guest code
     struct list tlbs_link;
+    struct cpu_state *cpu;     // the CPU that runs guest code with it, to poke
 #endif
 };
 
@@ -76,6 +77,9 @@ void tlb_refresh(struct tlb *tlb, struct mmu *mmu);
 void tlb_attach(struct tlb *tlb, struct mmu *mmu);
 void tlb_detach(struct tlb *tlb);
 void mmu_tlbs_stale(struct mmu *mmu);
+// Pokes every thread running guest code in this address space, so that it
+// leaves it at its next check and lets go of mem->lock (a writer waits).
+void mmu_poke_tlbs(struct mmu *mmu);
 #endif
 void tlb_free(struct tlb *tlb);
 void tlb_flush(struct tlb *tlb);

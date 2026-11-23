@@ -374,6 +374,18 @@ else
         status=1
     fi
     echo
+    echo "########## mmap while threads spin in guest code ##########"
+    if "$CC_GUEST" -static -O1 -Wall -o "$GUEST_ROOT/tmp/regress_mmap_spin" \
+            tests/regress/regress_mmap_spin.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_mmap_spin 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_mmap_spin"
+    else
+        echo "failed to build regress_mmap_spin" >&2
+        status=1
+    fi
+    echo
     echo "########## device nodes from a Darwin import ##########"
     # A fakefs of its own: a tarball with the test as /init and three device
     # nodes, imported with fakefsify, two of them then rewritten in meta.db to

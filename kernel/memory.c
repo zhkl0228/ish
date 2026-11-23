@@ -33,6 +33,10 @@ static struct mmu_ops mem_mmu_ops;
 // ARM64: 4-level page table for 48-bit address space
 // ============================================================
 
+static void mem_nudge_readers(void *mmu) {
+    mmu_poke_tlbs(mmu);
+}
+
 void mem_init(struct mem *mem) {
     mem->pgdir = calloc(1, sizeof(struct pt_node));
     mem->pgdir_used = 0;
@@ -44,6 +48,11 @@ void mem_init(struct mem *mem) {
     lock_init(&mem->mmu.tlbs_lock);
     list_init(&mem->mmu.tlbs);
     wrlock_init(&mem->lock);
+    // A thread running guest code holds mem->lock for reading until it
+    // leaves the code, which a loop that makes no syscall may never do: a
+    // waiting writer (mmap, munmap, mprotect) pokes it out.
+    mem->lock.nudge_readers = mem_nudge_readers;
+    mem->lock.nudge_ctx = &mem->mmu;
     lock_init(&mem->cow_lock);
 }
 

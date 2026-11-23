@@ -46,6 +46,21 @@ void tlb_detach(struct tlb *tlb) {
     tlb->attached = NULL;
 }
 
+void mmu_poke_tlbs(struct mmu *mmu) {
+    lock(&mmu->tlbs_lock);
+    struct tlb *tlb;
+    list_for_each_entry(&mmu->tlbs, tlb, tlbs_link) {
+        struct cpu_state *cpu = tlb->cpu;
+        // Attached just before its first quantum: cpu_run_to_interrupt has
+        // not pointed poked_ptr at _poked yet, but will.
+        if (cpu->poked_ptr != NULL)
+            cpu_poke(cpu);
+        else
+            __atomic_store_n(&cpu->_poked, true, __ATOMIC_SEQ_CST);
+    }
+    unlock(&mmu->tlbs_lock);
+}
+
 // After mmu->changes moved: the threads running in this address space may
 // hold entries for the old mappings.
 void mmu_tlbs_stale(struct mmu *mmu) {
