@@ -211,6 +211,14 @@ NAME(handle_read_miss):
     mov x20, x0                   // save result in a callee-saved register
     restore_c
     mov x0, x20                   // return result in x0
+    // x10 as a TLB hit leaves it: data_minus_addr, host - guest (x7 is the
+    // guest address again here). The access that follows faults on the host
+    // for a page the guest cannot reach (HotSpot's heap base, under its
+    // implicit null checks), and asbestos_host_fault takes the guest address
+    // as x7 - x10, x7 the host one then; with x10 as save_c had it (an empty
+    // entry's page, 1) the guest was told a host address, and HotSpot took
+    // its null check for a crash.
+    sub x10, x0, x7
 
     // Restore callee-saved registers
     ldr lr, [sp, #0x50]
@@ -249,6 +257,8 @@ NAME(handle_write_miss):
     mov x20, x0                   // save result in a callee-saved register
     restore_c
     mov x0, x20                   // return result
+    // x10 as a TLB hit leaves it (handle_read_miss)
+    sub x10, x0, x7
 
     // Restore callee-saved registers
     ldr lr, [sp, #0x50]

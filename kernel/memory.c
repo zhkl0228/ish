@@ -1064,6 +1064,18 @@ static void *mem_ptr_nofault(struct mem *mem, addr_t addr, int type) {
         return NULL;
     if (type == MEM_WRITE && !P_WRITABLE(entry->flags))
         return NULL;
+    // A page the guest made unreachable (PROT_NONE) is no more read than
+    // written. Its host memory was PROT_NONE only if it was mapped so
+    // (pt_map_nothing): the read faulted on the host, and the run loop took
+    // the fault through its crash path, the TLB flushed and the access tried
+    // again 16 times before the guest had its SIGSEGV. HotSpot reads such
+    // pages by design, at its implicit null checks (its heap base) and its
+    // safepoint polls: javac spent nine tenths of the host's time there. A
+    // page made PROT_NONE by mprotect kept its host memory readable, and the
+    // read went through. Writable or executable counts as readable, as on
+    // Linux.
+    if (type == MEM_READ && !(entry->flags & (P_READ | P_WRITE | P_EXEC)))
+        return NULL;
     return entry->data->data + entry->offset + PGOFFSET(addr);
 }
 

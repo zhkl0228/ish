@@ -301,7 +301,9 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
     if (vdso_page == BAD_PAGE)
         goto beyond_hope;
     vdso_page += 1;
-    if ((err = pt_map(current->mem, vdso_page, vdso_pages, (void *) vdso_data, 0, 0)) < 0)
+    // r-x, as Linux maps it: read and run, now that a page none of read,
+    // write and exec allows does not read (mem_ptr_nofault)
+    if ((err = pt_map(current->mem, vdso_page, vdso_pages, (void *) vdso_data, 0, P_READ | P_EXEC)) < 0)
         goto beyond_hope;
     mem_pt(current->mem, vdso_page)->data->name = "[vdso]";
     current->mm->vdso = vdso_page << PAGE_BITS;
