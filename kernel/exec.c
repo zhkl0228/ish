@@ -1002,10 +1002,23 @@ dword_t sys_execve(addr_t filename_addr, addr_t argv_addr, addr_t envp_addr) {
             // caller that passes --jitless / --no-expose-wasm itself. Both of those flags take
             // WebAssembly away, and Node's own undici calls WebAssembly.compile() when it loads,
             // so they need the jitless set with wasm-polyfill.js.
-            bool jitless = false;
+            // ISH_NODE_MODE=interpreter or =tiers picks either set whatever images there are:
+            // node is recorded for its AOT image, and measured, in the mode the app runs it in.
+            bool jitless = false, forced = false, interpreter = false;
             for (const char *e = envp; *e != '\0'; e += strlen(e) + 1) {
-                if (strcmp(e, "ISH_NODE_MODE=jitless") == 0)
+                if (strncmp(e, "ISH_NODE_MODE=", 14) != 0)
+                    continue;
+                const char *mode = e + 14;
+                if (strcmp(mode, "jitless") == 0) {
                     jitless = true;
+                } else if (strcmp(mode, "interpreter") == 0) {
+                    forced = interpreter = true;
+                } else if (strcmp(mode, "tiers") == 0) {
+                    forced = true;
+                } else {
+                    printk("ISH_NODE_MODE=%s is none of jitless, interpreter and tiers: node %s gets "
+                           "the flags it would without it\n", mode, filename);
+                }
             }
             // node's own options come before the script; what follows it belongs to the script
             for (const char *a = argv + strlen(argv) + 1; *a != '\0'; a += strlen(a) + 1) {
@@ -1022,9 +1035,11 @@ dword_t sys_execve(addr_t filename_addr, addr_t argv_addr, addr_t envp_addr) {
             };
             const char *inject_args[16]; // base args + optional requires
             size_t inject_count = 0;
-            bool interpreter = false;
 #ifdef ISH_JIT
-            interpreter = !jitless && jit_aot_serves(filename);
+            if (!forced)
+                interpreter = jit_aot_serves(filename);
+#else
+            (void) forced;  // no images without the JIT: the tiers unless asked
 #endif
             if (jitless) {
                 for (size_t i = 0; i < sizeof(inject_args_jitless)/sizeof(inject_args_jitless[0]); i++)
