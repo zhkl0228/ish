@@ -153,6 +153,15 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
 
     [self _updateStyleFromPreferences:NO];
     
+    // Two fingers across the terminal: the next tab, or the previous one
+    for (NSNumber *direction in @[@(UISwipeGestureRecognizerDirectionLeft), @(UISwipeGestureRecognizerDirectionRight)]) {
+        UISwipeGestureRecognizer *swipe = [[UISwipeGestureRecognizer alloc] initWithTarget:self action:@selector(swipedAcrossTerminal:)];
+        swipe.direction = direction.unsignedIntegerValue;
+        swipe.numberOfTouchesRequired = 2;
+        swipe.delegate = self;
+        [self.termView addGestureRecognizer:swipe];
+    }
+
     self.barView.accessibilityCustomActions = @[[[UIAccessibilityCustomAction alloc] initWithName:@"Hide Keyboard" actionHandler:^BOOL(UIAccessibilityCustomAction *action) {
         return [self.termView resignFirstResponder];
     }]];
@@ -306,7 +315,12 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
 
 - (void)setSelectedSession:(TerminalSession *)session {
     NSAssert(session == nil || [self.tabs containsObject:session], @"selecting a session that is not a tab");
+    // What the tab left showed is seen, and what the one shown shows: its tab
+    // marks what it does from now on, while it is not looked at
+    TerminalSession *left = _selectedSession;
     _selectedSession = session;
+    [left markSeen];
+    [session markSeen];
     self.terminal = session.terminal;
     [self tabsDidChange];
 }
@@ -430,6 +444,29 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
 - (void)tabBarDidRequestNewTab:(TabBarView *)tabBar {
     [self startNewSession];
     [self.termView becomeFirstResponder];
+}
+
+- (void)tabBar:(TabBarView *)tabBar didRequestDuplicateTabAtIndex:(NSUInteger)index {
+    if (index >= self.tabs.count)
+        return;
+    [self duplicateSession:self.tabs[index]];
+    [self.termView becomeFirstResponder];
+}
+
+- (void)tabBar:(TabBarView *)tabBar didRequestRestartTabAtIndex:(NSUInteger)index {
+    if (index >= self.tabs.count)
+        return;
+    [self restartSession:self.tabs[index]];
+    [self.termView becomeFirstResponder];
+}
+
+- (void)tabBar:(TabBarView *)tabBar didMoveTabAtIndex:(NSUInteger)from toIndex:(NSUInteger)to {
+    if (from >= self.tabs.count || to >= self.tabs.count || from == to)
+        return;
+    TerminalSession *session = self.tabs[from];
+    [self.tabs removeObjectAtIndex:from];
+    [self.tabs insertObject:session atIndex:to];
+    [self tabsDidChange];
 }
 
 - (UIMenu *)commandsMenuForTabBar:(TabBarView *)tabBar {
@@ -806,12 +843,15 @@ static NSString *ShellQuoted(NSString *string) {
     [UIApplication.sharedApplication requestSceneSessionActivation:nil userActivity:nil options:nil errorHandler:nil];
 }
 
-// The new shell logs in at home like any other; it is then told to cd to where the
-// duplicated one was, visibly, since login leaves no other way to pick a directory.
 - (void)duplicateTab:(id)sender {
-    TerminalSession *session = self.selectedSession;
-    if (session == nil)
-        return;
+    if (self.selectedSession != nil)
+        [self duplicateSession:self.selectedSession];
+}
+
+// A new tab after session's, in its directory. The new shell logs in at home
+// like any other; it is then told to cd to where the duplicated one was,
+// visibly, since login leaves no other way to pick a directory.
+- (void)duplicateSession:(TerminalSession *)session {
     NSString *directory = session.currentDirectory;
     TerminalSession *copy = [self startNewSessionAtIndex:[self.tabs indexOfObject:session] + 1];
     if (copy != nil && directory != nil)
@@ -824,9 +864,13 @@ static NSString *ShellQuoted(NSString *string) {
         [self tabBar:self.tabBar didRequestRenameTabAtIndex:index];
 }
 
-// A fresh shell in the same tab: same position and name.
 - (void)restartShell:(id)sender {
-    TerminalSession *old = self.selectedSession;
+    if (self.selectedSession != nil)
+        [self restartSession:self.selectedSession];
+}
+
+// A fresh shell in old's tab: same position and name, selected.
+- (void)restartSession:(TerminalSession *)old {
     NSUInteger index = [self.tabs indexOfObject:old];
     if (index == NSNotFound)
         return;
@@ -863,7 +907,9 @@ static NSString *ShellQuoted(NSString *string) {
 }
 
 - (void)exportScrollback:(id)sender {
-    NSString *name = [self.selectedSession.displayTitle stringByAppendingPathExtension:@"txt"] ?: @"scrollback.txt";
+    // the title as a file's name: it can be a path (/)
+    NSString *title = [self.selectedSession.displayTitle stringByReplacingOccurrencesOfString:@"/" withString:@"-"];
+    NSString *name = [title stringByAppendingPathExtension:@"txt"] ?: @"scrollback.txt";
     [self.termView fetchTextWithCompletion:^(NSString *text) {
         // hterm pads the screen with empty rows below the cursor; drop them.
         NSString *trimmed = [text stringByTrimmingCharactersInSet:NSCharacterSet.newlineCharacterSet];
@@ -949,6 +995,15 @@ static NSString *ShellQuoted(NSString *string) {
 
 - (void)nextTab:(id)sender {
     [self selectNeighborTab:1];
+}
+
+- (void)swipedAcrossTerminal:(UISwipeGestureRecognizer *)swipe {
+    [self selectNeighborTab:swipe.direction == UISwipeGestureRecognizerDirectionLeft ? 1 : -1];
+}
+
+// The tab swipes go along with the terminal's own gestures (its scrolling)
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
+    return [gestureRecognizer isKindOfClass:UISwipeGestureRecognizer.class] && gestureRecognizer.view == self.termView;
 }
 - (void)previousTab:(id)sender {
     [self selectNeighborTab:-1];

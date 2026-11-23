@@ -24,7 +24,13 @@ NSNotificationName const TerminalSessionDidChangeNotification = @"TerminalSessio
 @property NSUInteger number;
 @property NSDate *startDate;
 @property (nullable) NSString *shownTitle; // displayTitle as last announced
-- (void)refreshTitle;
+@property TerminalSessionActivity shownActivity; // activity as last announced
+// What of it is seen: its output so far, and whether a job ended since
+@property NSUInteger seenOutputCount;
+@property BOOL finishedUnseen;
+// A job owned the terminal when last checked
+@property BOOL jobRan;
+- (void)refreshState;
 @end
 
 @implementation TerminalSession
@@ -42,16 +48,28 @@ NSNotificationName const TerminalSessionDidChangeNotification = @"TerminalSessio
     return [NSString stringWithFormat:@"Shell %lu", (unsigned long) self.number];
 }
 
-// What runs in the terminal: the title the job owning it set, else, while a
-// job rather than the shell owns it, the job's program. A title set by a job
-// that has since given the terminal back is that job's, not the shell's.
+// What runs in the terminal, and where: the title the job owning it set,
+// else, while a job rather than the shell owns it, the job's program and
+// the directory, else the directory. A title set by a job that has since
+// given the terminal back is that job's, not the shell's.
 - (nullable NSString *)runningTitle {
     if (self.state != TerminalSessionStateRunning)
         return nil;
     int fg_group = self.terminal.foregroundProcessGroup;
     if (self.terminal.windowTitle.length > 0 && self.terminal.windowTitleGroup == fg_group)
         return self.terminal.windowTitle;
+    NSString *program = self.foregroundProgram;
+    NSString *place = self.placeName;
+    if (program != nil && place != nil)
+        return [NSString stringWithFormat:@"%@ · %@", program, place];
+    return program ?: place;
+}
+
+- (nullable NSString *)foregroundProgram {
 #if !ISH_LINUX
+    if (self.state != TerminalSessionStateRunning)
+        return nil;
+    int fg_group = self.terminal.foregroundProcessGroup;
     if (fg_group == 0 || fg_group == self.terminal.sessionId)
         return nil;
     // The group's leader, else whichever of it is left (a pipeline's)
@@ -65,17 +83,61 @@ NSNotificationName const TerminalSessionDidChangeNotification = @"TerminalSessio
 #endif
 }
 
-// Announces displayTitle if it changed (TerminalSessionStore). Only while it
-// runs: a session that exited announced that already, and another change of
-// one would read as its exit again (a tab kept for a shell that died at once
+// The working directory as a tab shows it: ~ for root's home, else its last
+// component
+- (nullable NSString *)placeName {
+    NSString *directory = self.currentDirectory;
+    if (directory == nil)
+        return nil;
+    if ([directory isEqualToString:@"/root"])
+        return @"~";
+    if ([directory isEqualToString:@"/"])
+        return directory;
+    return directory.lastPathComponent;
+}
+
+- (TerminalSessionActivity)activity {
+    if (self.state != TerminalSessionStateRunning)
+        return TerminalSessionActivityNone;
+    if (self.finishedUnseen)
+        return TerminalSessionActivityFinished;
+    if (self.terminal.outputCount != self.seenOutputCount)
+        return TerminalSessionActivityOutput;
+    return TerminalSessionActivityNone;
+}
+
+- (void)markSeen {
+    self.seenOutputCount = self.terminal.outputCount;
+    self.finishedUnseen = NO;
+    [self announceChanges];
+}
+
+// Checks what runs (TerminalSessionStore): a job that owned the terminal and
+// no longer does has ended. Seen once a second, a job shorter than that may
+// go unnoticed: what ended at once needs no word.
+- (void)refreshState {
+    if (self.state != TerminalSessionStateRunning)
+        return;
+    BOOL jobRuns = self.foregroundProgram != nil;
+    if (self.jobRan && !jobRuns)
+        self.finishedUnseen = YES;
+    self.jobRan = jobRuns;
+    [self announceChanges];
+}
+
+// Announces displayTitle or activity if either changed. Only while it runs: a
+// session that exited announced that already, and another change of one
+// would read as its exit again (a tab kept for a shell that died at once
 // would close).
-- (void)refreshTitle {
+- (void)announceChanges {
     if (self.state != TerminalSessionStateRunning)
         return;
     NSString *title = self.displayTitle;
-    if ([title isEqualToString:self.shownTitle])
+    TerminalSessionActivity activity = self.activity;
+    if ([title isEqualToString:self.shownTitle] && activity == self.shownActivity)
         return;
     self.shownTitle = title;
+    self.shownActivity = activity;
     [self notifyChanged];
 }
 
@@ -208,7 +270,7 @@ NSNotificationName const TerminalSessionDidChangeNotification = @"TerminalSessio
         __weak typeof(self) weakSelf = self;
         NSTimer *titles = [NSTimer timerWithTimeInterval:1 repeats:YES block:^(NSTimer *_) {
             for (TerminalSession *session in [weakSelf.mutableSessions copy])
-                [session refreshTitle];
+                [session refreshState];
         }];
         [NSRunLoop.mainRunLoop addTimer:titles forMode:NSRunLoopCommonModes];
 #if !ISH_LINUX
@@ -366,7 +428,7 @@ static int start_process(NSArray<NSString *> *command, Terminal **terminalOut) {
 - (void)terminalTitleChanged:(NSNotification *)notification {
     for (TerminalSession *session in [self.mutableSessions copy]) {
         if (session.terminal == notification.object)
-            [session refreshTitle];
+            [session refreshState];
     }
 }
 

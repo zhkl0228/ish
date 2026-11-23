@@ -317,6 +317,8 @@ NSNotificationName const TerminalTitleDidChangeNotification = @"TerminalTitleDid
     }
 #endif
 
+    if (data.length > 0)
+        _outputCount++;
     NSString *dataString = [[NSString alloc] initWithBytes:data.bytes length:data.length encoding:NSISOLatin1StringEncoding];
     // escape for javascript. only have to worry about the first 256 codepoints, because of the latin-1 encoding.
     dataString = [dataString stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];

@@ -59,6 +59,10 @@ struct tty;
 // Each change posts TerminalTitleDidChangeNotification.
 @property (readonly) NSString *windowTitle; // nil until a program sets one
 @property (readonly) int windowTitleGroup;
+// Output rendered so far, counted in the pieces it was rendered in: a tab
+// tells from it that something was written while it was not looked at.
+// Main thread.
+@property (readonly) NSUInteger outputCount;
 
 @property (readonly) WKWebView *webView;
 @property (nonatomic) BOOL enableVoiceOverAnnounce;

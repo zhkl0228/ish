@@ -16,6 +16,13 @@ NS_ASSUME_NONNULL_BEGIN
 // sessions' processes run once it is there (TerminalSession.m)
 #define ISH_BOOT_DONE_PATH "/run/ish-sysinit.done"
 
+// What a session did since its tab was last looked at (markSeen)
+typedef NS_ENUM(NSInteger, TerminalSessionActivity) {
+    TerminalSessionActivityNone,
+    TerminalSessionActivityOutput,   // it wrote something
+    TerminalSessionActivityFinished, // the job that owned its terminal ended
+};
+
 typedef NS_ENUM(NSInteger, TerminalSessionState) {
     TerminalSessionStateRunning,
     TerminalSessionStateExited, // the shell exited; the terminal still shows its last output
@@ -35,11 +42,21 @@ typedef NS_ENUM(NSInteger, TerminalSessionState) {
 // Set by the user (tab rename). nil means use the default title.
 @property (nonatomic, copy, nullable) NSString *title;
 // The tab's title: the user's, else the title the job owning the terminal set
-// (OSC 0 or 2: claude, vim), else that job's program (top), else
-// "Shell <number>". It follows the terminal: TerminalSessionStore checks it
-// every second and on each title a program sets, and a change posts
-// TerminalSessionDidChangeNotification.
+// (OSC 0 or 2: claude, vim), else that job's program and the directory (top ·
+// ~), else the directory while the shell owns the terminal (~ for root's
+// home, else its last component), else "Shell <number>". It follows the
+// terminal: TerminalSessionStore checks it every second and on each title a
+// program sets, and a change posts TerminalSessionDidChangeNotification.
 @property (readonly) NSString *displayTitle;
+// What it did since its tab was last looked at: a job that owned the terminal
+// for a second or more ended, else it wrote something. Checked with the title,
+// a change posted the same way. None once it is not running.
+@property (readonly) TerminalSessionActivity activity;
+// Its tab is looked at: what it did so far is seen
+- (void)markSeen;
+// The program of the job that owns the terminal (top, claude), nil while the
+// shell does
+@property (readonly, nullable) NSString *foregroundProgram;
 
 // The shell's working directory, or nil if it cannot be determined (e.g. after
 // the shell exited).
