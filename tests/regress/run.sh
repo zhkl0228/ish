@@ -353,7 +353,7 @@ else
     echo "########## unix connections accepted after connect returns ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_unix_connect" \
             tests/regress/regress_unix_connect.c; then
-        out=$(timeout 150 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_unix_connect 2>&1 | grep -v '^NETDIAG')
+        out=$(timeout 150 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_unix_connect 2>&1)
         echo "$out"
         echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
         rm -f "$GUEST_ROOT/tmp/regress_unix_connect"
@@ -389,7 +389,7 @@ else
     echo "########## socket removed from an epoll set during a wait ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_poll_socket_removed" \
             tests/regress/regress_poll_socket_removed.c; then
-        out=$(timeout 120 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_poll_socket_removed 2>&1 | grep -v '^NETDIAG')
+        out=$(timeout 120 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_poll_socket_removed 2>&1)
         echo "$out" | grep -v '^sockrestart:'
         n=$(echo "$out" | grep -c '^sockrestart:')
         [ "$n" = 0 ] || echo "FAIL $n tasks exited with socket waits not ended"

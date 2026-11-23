@@ -132,7 +132,7 @@ static int netlink_stub_emit(void *opaque, const void *dgram, size_t len) {
 // Answer a request the guest just sent (by whatever syscall). Returns
 // req_len: as on Linux, sending a request succeeds whatever its answer is.
 static int netlink_stub_reply(struct fd *fd, const void *req, size_t req_len) {
-    static int logged_answer, logged_refuse, logged_overflow;
+    static int logged_refuse, logged_overflow;
     struct netlink_emit_ctx ctx = {.fd = fd};
     struct netlink_stub_req last = {0};
     netlink_stub_answer(fd->socket.protocol, req, req_len, netlink_stub_emit, &ctx, &last);
@@ -148,8 +148,6 @@ static int netlink_stub_reply(struct fd *fd, const void *req, size_t req_len) {
         netlink_stub_log_once(&logged_overflow, "reply queue full, dump cut short", last.type, last.seq);
     else if (ctx.refused)
         netlink_stub_log_once(&logged_refuse, "request refused with NLMSG_ERROR (not available on this host)", last.type, last.seq);
-    else if (ctx.count > 0)
-        netlink_stub_log_once(&logged_answer, "answered from the host's interfaces", last.type, last.seq);
     TRACE("NETLINK_STUB request type=%u seq=%u flags=%#x -> %u datagram(s)%s%s\n",
           last.type, last.seq, last.flags, ctx.count,
           ctx.refused ? " (refused)" : "", ctx.overflow ? " (queue full)" : "");
@@ -769,17 +767,8 @@ int_t sys_connect(fd_t sock_fd, addr_t sockaddr_addr, uint_t sockaddr_len) {
         return err;
 
     err = connect(sock->real_fd, (void *) &sockaddr, sockaddr_len);
-    if (err < 0) {
-        int ce = errno;
-        // Log connect failures except the routine nonblock in-progress case,
-        // so VPN / routing issues are visible in user-shared logs.
-        if (ce != EINPROGRESS && ce != EALREADY) {
-            printk("NETDIAG connect(pid=%d comm=%s fd=%d) errno=%d\n",
-                   current->pid, current->comm, sock_fd, ce);
-        }
-        errno = ce;
+    if (err < 0)
         return errno_map();
-    }
 
     if (sock->socket.domain == AF_LOCAL_) {
         fill_cred(&sock->socket.unix_cred);
@@ -1164,9 +1153,7 @@ static long monotonic_ms(void) {
 // or a negative errno on poll() error.
 static int sock_wait_for(int real_fd, short events, int timeout_opt) {
     long timeout_ms = sock_get_timeout_ms(real_fd, timeout_opt);
-    long start_ms = monotonic_ms();
-    long deadline_ms = (timeout_ms > 0) ? (start_ms + timeout_ms) : 0;
-    bool slow_logged = false;
+    long deadline_ms = (timeout_ms > 0) ? (monotonic_ms() + timeout_ms) : 0;
     for (;;) {
         if (current->sighand != NULL) {
             lock(&current->sighand->lock);
@@ -1179,11 +1166,8 @@ static int sock_wait_for(int real_fd, short events, int timeout_opt) {
         int poll_ms = 1000;
         if (deadline_ms > 0) {
             long remaining = deadline_ms - monotonic_ms();
-            if (remaining <= 0) {
-                printk("NETDIAG sock_wait(pid=%d comm=%s fd=%d ev=%#x) deadline-expired after %ldms\n",
-                       current->pid, current->comm, real_fd, events, timeout_ms);
-                return _EAGAIN;
-            }
+            if (remaining <= 0)
+                return _EAGAIN; // SO_RCVTIMEO / SO_SNDTIMEO ran out
             if (remaining < poll_ms)
                 poll_ms = (int)remaining;
         }
@@ -1196,15 +1180,8 @@ static int sock_wait_for(int real_fd, short events, int timeout_opt) {
 
         if (pr > 0)
             return 0;
-        if (pr == 0) {
-            // Log once if we're stuck > 3 seconds without any ready event
-            if (!slow_logged && (monotonic_ms() - start_ms) >= 3000) {
-                printk("NETDIAG sock_wait(pid=%d comm=%s fd=%d ev=%#x) no-event for 3s (timeout_opt_ms=%ld)\n",
-                       current->pid, current->comm, real_fd, events, timeout_ms);
-                slow_logged = true;
-            }
+        if (pr == 0)
             continue;
-        }
         if (saved_errno == EINTR)
             continue;
         errno = saved_errno;
@@ -1282,13 +1259,6 @@ int_t sys_recvfrom(fd_t sock_fd, addr_t buffer_addr, dword_t len, dword_t flags,
     // should wait do we fall back to the bounded-poll wait.
     ssize_t res;
     if (should_wait) {
-        // Diagnostic: a blocking recv is exceptional for most network
-        // programs (Node, Go, Python asyncio all use nonblock). Log it so
-        // we can see the guest/host fd state in user-shared logs.
-        printk("NETDIAG recvfrom-block(pid=%d comm=%s fd=%d real=%d len=%u gflags=%#x hflags=%#x sflags=%#x)\n",
-               current->pid, current->comm, sock_fd, sock->real_fd,
-               (unsigned)len, (unsigned)flags,
-               host_flags, sock->flags);
         for (;;) {
             res = recvfrom(sock->real_fd, buffer, len, real_flags | MSG_DONTWAIT,
                     sockaddr_addr != 0 ? (void *) sockaddr : NULL,
@@ -1868,9 +1838,6 @@ int_t sys_recvmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
     ssize_t res = -1;
     int err = 0;
     if (should_wait_rm) {
-        printk("NETDIAG recvmsg-block(pid=%d comm=%s fd=%d real=%d gflags=%#x hflags=%#x sflags=%#x)\n",
-               current->pid, current->comm, sock_fd, sock->real_fd,
-               (unsigned)flags, host_flags_rm, sock->flags);
         for (;;) {
             res = recvmsg(sock->real_fd, &msg, real_flags | MSG_DONTWAIT);
             if (res >= 0)
@@ -2125,12 +2092,10 @@ static ssize_t sock_read(struct fd *fd, void *buf, size_t size) {
         return (ssize_t) copy;
     }
     int err;
-    int eintr_count = 0;
     for (;;) {
         ssize_t res = read(fd->real_fd, buf, size);
         if (res >= 0) { err = (int)res; break; }
         if (errno != EINTR) { err = errno_map(); break; }
-        eintr_count++;
         // EINTR: only surface to guest if there is actually a pending signal
         // that the guest wants to handle. Otherwise retry (matches the
         // original realfs_read behavior for spurious EINTR).
@@ -2141,10 +2106,6 @@ static ssize_t sock_read(struct fd *fd, void *buf, size_t size) {
             if (pending) { err = _EINTR; break; }
         }
         // no guest signal — retry the host read
-    }
-    if (eintr_count >= 3) {
-        printk("NETDIAG sock_read-eintr(pid=%d comm=%s fd=%d) count=%d err=%d\n",
-               current->pid, current->comm, fd->real_fd, eintr_count, err);
     }
     sock_translate_err(fd, &err);
     return err;
@@ -2157,22 +2118,16 @@ static ssize_t sock_write(struct fd *fd, const void *buf, size_t size) {
     if (fd_is_netlink_stub(fd))
         return netlink_stub_reply(fd, buf, size);
     int err;
-    int eintr_count = 0;
     for (;;) {
         ssize_t res = write(fd->real_fd, buf, size);
         if (res >= 0) { err = (int)res; break; }
         if (errno != EINTR) { err = errno_map(); break; }
-        eintr_count++;
         if (current->sighand != NULL) {
             lock(&current->sighand->lock);
             bool pending = !!(current->pending & ~current->blocked);
             unlock(&current->sighand->lock);
             if (pending) { err = _EINTR; break; }
         }
-    }
-    if (eintr_count >= 3) {
-        printk("NETDIAG sock_write-eintr(pid=%d comm=%s fd=%d) count=%d err=%d\n",
-               current->pid, current->comm, fd->real_fd, eintr_count, err);
     }
     sock_translate_err(fd, &err);
     return err;

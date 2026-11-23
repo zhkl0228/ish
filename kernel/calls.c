@@ -66,6 +66,18 @@ static void gpf_use_precise_pc(struct cpu_state *cpu) {
 }
 #endif
 
+// Whether the task takes sig with a handler of its own (not blocked): a fault
+// raising it is then the program's business.
+static bool task_handles_signal(struct task *task, int sig) {
+    if (task->sighand == NULL)
+        return false;
+    lock(&task->sighand->lock);
+    addr_t handler = task->sighand->action[sig].handler;
+    bool handles = handler != SIG_DFL_ && handler != SIG_IGN_ && !sigset_has(task->blocked, sig);
+    unlock(&task->sighand->lock);
+    return handles;
+}
+
 void handle_interrupt(int interrupt) {
     struct cpu_state *cpu = &current->cpu;
     if (interrupt == INT_SYSCALL) {
@@ -503,28 +515,31 @@ void handle_interrupt(int interrupt) {
         gpf_use_precise_pc(cpu);
 #endif
     } else if (interrupt == INT_UNDEFINED) {
+        // As Linux (show_unhandled_signals): nothing when the program handles
+        // SIGILL itself, as one probing for a CPU feature does; one line when
+        // it is about to die of it. An instruction iSH does not implement
+        // lands here too, and this line is its sample.
+        if (!task_handles_signal(current, SIGILL_)) {
 #if defined(GUEST_X86) || !defined(GUEST_ARM64)
-        printk("%d illegal instruction at 0x%x: ", current->pid, cpu->eip);
-        for (int i = 0; i < 8; i++) {
-            uint8_t b;
-            if (user_get(cpu->eip + i, b))
-                break;
-            printk("%02x ", b);
-        }
-#elif defined(GUEST_ARM64)
-        {
-            uint32_t ill_insn = 0;
-            for (int i = 0; i < 4; i++) {
+            printk("%s[%d]: unhandled illegal instruction at %#x:", current->comm, current->pid, cpu->eip);
+            for (int i = 0; i < 8; i++) {
                 uint8_t b;
-                if (user_get(cpu->pc + i, b))
+                if (user_get(cpu->eip + i, b))
                     break;
-                ill_insn |= (uint32_t)b << (i * 8);
+                printk(" %02x", b);
             }
-            printk("%d illegal instruction at 0x%llx: insn=0x%08x\n", current->pid, (unsigned long long)cpu->pc, ill_insn);
-        }
+            printk("\n");
+#elif defined(GUEST_ARM64)
+            uint32_t ill_insn = 0;
+            bool readable = user_get(cpu->pc, ill_insn) == 0;
+            if (readable)
+                printk("%s[%d]: unhandled illegal instruction %#010x at %#llx\n",
+                       current->comm, current->pid, ill_insn, (unsigned long long) cpu->pc);
+            else
+                printk("%s[%d]: unhandled illegal instruction at %#llx (unreadable)\n",
+                       current->comm, current->pid, (unsigned long long) cpu->pc);
 #endif
-        printk("\n");
-        dump_stack(8);
+        }
         struct siginfo_ info = {
             .code = SI_KERNEL_,
 #if defined(GUEST_X86) || !defined(GUEST_ARM64)
