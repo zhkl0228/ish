@@ -1096,6 +1096,37 @@ dword_t sys_fchmodat(fd_t at_f, addr_t path_addr, dword_t mode) {
     return generic_setattrat(at, path, make_attr(mode, mode), true);
 }
 
+// fchmodat with flags (Linux 6.6): musl and apk try it first, and fall back
+// on fchmodat when it is missing.
+dword_t sys_fchmodat2(fd_t at_f, addr_t path_addr, dword_t mode, int_t flags) {
+    if (flags & ~(AT_SYMLINK_NOFOLLOW_ | AT_EMPTY_PATH_))
+        return _EINVAL;
+    char path[MAX_PATH];
+    if (user_read_string(path_addr, path, sizeof(path)))
+        return _EFAULT;
+    STRACE("fchmodat2(%d, \"%s\", %o, %#x)", at_f, path, mode, flags);
+    if ((flags & AT_EMPTY_PATH_) && path[0] == '\0') {
+        if (at_f != AT_FDCWD_)
+            return sys_fchmod(at_f, mode);
+        strcpy(path, ".");
+    }
+    struct fd *at = at_fd(at_f, path);
+    if (at == NULL)
+        return _EBADF;
+    mode &= ~S_IFMT;
+    bool follow_links = !(flags & AT_SYMLINK_NOFOLLOW_);
+    if (!follow_links) {
+        // As Linux: a symlink has no mode of its own to change.
+        struct statbuf stat;
+        int err = generic_statat(at, path, &stat, false);
+        if (err < 0)
+            return err;
+        if (S_ISLNK(stat.mode))
+            return _EOPNOTSUPP;
+    }
+    return generic_setattrat(at, path, make_attr(mode, mode), follow_links);
+}
+
 dword_t sys_chmod(addr_t path_addr, dword_t mode) {
     return sys_fchmodat(AT_FDCWD_, path_addr, mode);
 }

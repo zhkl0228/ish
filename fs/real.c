@@ -15,6 +15,8 @@
 #include <sys/file.h>
 #include <sys/statvfs.h>
 #include <poll.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 
 #include "debug.h"
 #include "misc.h"
@@ -501,8 +503,60 @@ int realfs_symlink(struct mount *mount, const char *target, const char *link) {
     return err;
 }
 
+// The name of a unix socket bound on this filesystem. iSH's socket itself is
+// a host one in /tmp (sockaddr_read_bind); this file only has to stat as a
+// socket, and on Darwin only bind() makes one (mknod would need root). A host
+// path can be longer than sun_path (104 bytes on Darwin), so it is bound by
+// its last component, from its directory.
+static int realfs_make_socket(struct mount *mount, const char *path, mode_t_ mode) {
+    const char *rel = fix_path(path);
+    const char *slash = strrchr(rel, '/');
+    const char *name = slash != NULL ? slash + 1 : rel;
+    struct sockaddr_un addr = {.sun_family = AF_UNIX};
+    if (strlen(name) >= sizeof(addr.sun_path))
+        return _ENAMETOOLONG;
+    strcpy(addr.sun_path, name);
+
+    int dirfd = mount->root_fd;
+    if (slash != NULL) {
+        char dir[MAX_PATH];
+        size_t len = (size_t) (slash - rel);
+        memcpy(dir, rel, len);
+        dir[len] = '\0';
+        dirfd = openat(mount->root_fd, dir, O_RDONLY | O_DIRECTORY);
+        if (dirfd < 0)
+            return errno_map();
+    }
+    int err = 0;
+    int sock = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (sock < 0) {
+        err = errno_map();
+        goto out;
+    }
+    lock_fchdir(dirfd);
+    int bound = bind(sock, (struct sockaddr *) &addr, sizeof(addr));
+    int bind_errno = errno;
+    unlock_fchdir();
+    close(sock);
+    if (bound < 0) {
+        // mknod's error for a name already there
+        errno = bind_errno == EADDRINUSE ? EEXIST : bind_errno;
+        err = errno_map();
+        goto out;
+    }
+    // bound with the host's umask: the mode asked for
+    if (fchmodat(dirfd, name, mode & 07777, 0) < 0)
+        err = errno_map();
+out:
+    if (dirfd != mount->root_fd)
+        close(dirfd);
+    return err;
+}
+
 int realfs_mknod(struct mount *mount, const char *path, mode_t_ mode, dev_t_ UNUSED(dev)) {
     int err;
+    if (S_ISSOCK(mode))
+        return realfs_make_socket(mount, path, mode);
     if (S_ISFIFO(mode)) {
         lock_fchdir(mount->root_fd);
         err = mkfifo(fix_path(path), mode & ~S_IFMT);

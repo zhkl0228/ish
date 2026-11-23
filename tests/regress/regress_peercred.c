@@ -60,8 +60,9 @@ static int is(struct ucred c, pid_t pid, uid_t uid, gid_t gid, char *detail) {
     return c.pid == pid && c.uid == uid && c.gid == gid;
 }
 
-// An abstract address: iSH cannot bind a path on a realfs mount, as run.sh's
-// rootfs is. Path and abstract names lead to the same listener lookup.
+// An abstract address, whose name is freed when its socket closes (one of the
+// cases). Path names lead to the same listener lookup; regress_unix_path
+// binds them.
 static struct sockaddr_un addr;
 static socklen_t addr_len;
 
