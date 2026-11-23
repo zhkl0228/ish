@@ -273,7 +273,11 @@ void create_some_device_nodes(void) {
 
 int create_stdio(const char *file, int major, int minor) {
     struct fd *fd = generic_open(file, O_RDWR_, 0);
-    if (!IS_ERR(fd) && !S_ISCHR(fd->stat.mode)) {
+    // fd->type, the file's type: fd->stat is an adhoc fd's alone, 0 here,
+    // which took every terminal for a regular file. Its stdio was then a
+    // device fd of no path: `tty` said "not a tty", and login recorded its
+    // session on "UNKNOWN".
+    if (!IS_ERR(fd) && !S_ISCHR(fd->type)) {
         // opened a regular file instead of a char device (e.g. realfs
         // can't create device nodes), so close it and use fallback
         fd_close(fd);
