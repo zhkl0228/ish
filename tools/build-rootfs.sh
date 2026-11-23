@@ -27,6 +27,8 @@ PACKAGES=(
     curl wget git vim jq xz openssh iputils bind-tools iproute2 net-tools procps-ng
     # telnet: busybox-extras has one too, but only as `busybox-extras telnet`
     inetutils-telnet
+    # user accounting (w, who, last): its daemons, which ish-sysinit starts
+    utmps
 )
 
 [ $# -eq 2 ] || { sed -n '2,16p' "$0"; exit 2; }

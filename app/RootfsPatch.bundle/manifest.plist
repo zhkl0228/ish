@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>version</key>
-    <integer>9</integer>
+    <integer>10</integer>
     <key>files</key>
     <array>
         <dict>
@@ -68,6 +68,23 @@
             <!-- 0755 -->
             <key>mode</key>
             <integer>493</integer>
+        </dict>
+        <!-- the boot OpenRC would do, which init runs (user accounting:
+             utmpd and the rest, for w and who) -->
+        <dict>
+            <key>src</key>
+            <string>files/usr/local/sbin/ish-sysinit</string>
+            <key>dst</key>
+            <string>/usr/local/sbin/ish-sysinit</string>
+            <!-- 0755 -->
+            <key>mode</key>
+            <integer>493</integer>
+        </dict>
+        <dict>
+            <key>src</key>
+            <string>files/etc/inittab</string>
+            <key>dst</key>
+            <string>/etc/inittab</string>
         </dict>
     </array>
 </dict>

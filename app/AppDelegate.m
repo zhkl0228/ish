@@ -243,6 +243,10 @@ static void ish_install_anon_cap(void) {
     debug_server_start(1234);
 #endif
 
+    // The last boot's: the first session waits for the socket utmpd makes
+    // (TerminalSession.m)
+    generic_unlinkat(AT_PWD, "/run/utmps/.utmpd-socket");
+
     NSArray<NSString *> *command;
     command = UserPreferences.shared.bootCommand;
     char argv[4096];

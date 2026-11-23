@@ -11,6 +11,7 @@
 #include "kernel/task.h"
 #include "kernel/calls.h"
 #include "fs/devices.h"
+#include "fs/path.h"
 
 NSNotificationName const TerminalSessionDidChangeNotification = @"TerminalSessionDidChangeNotification";
 
@@ -232,11 +233,33 @@ NSNotificationName const TerminalSessionDidChangeNotification = @"TerminalSessio
 }
 
 #if !ISH_LINUX
+// A login records itself with utmpd (w, who), which init starts at boot
+// (/usr/local/sbin/ish-sysinit), from the utmps the root has. As
+// Linux starts the logins after its boot services, the first session of a boot
+// waits for utmpd's socket, which the boot removes with the last one's, up to
+// 2 seconds; a later one finds it there.
+static void wait_for_utmpd(void) {
+    static BOOL waited;
+    if (waited)
+        return;
+    waited = YES;
+    struct statbuf stat;
+    if (generic_statat(AT_PWD, "/usr/bin/utmps-utmpd", &stat, true) < 0)
+        return;
+    for (int i = 0; i < 200; i++) {
+        if (generic_statat(AT_PWD, "/run/utmps/.utmpd-socket", &stat, true) == 0)
+            return;
+        usleep(10000);
+    }
+    NSLog(@"utmpd's socket did not appear in 2 seconds: the first session's login goes unrecorded");
+}
+
 // Creates the pty and the process, leaving it ready for task_start. Returns a negative errno.
 static int start_process(NSArray<NSString *> *command, Terminal **terminalOut) {
     int err = become_new_init_child();
     if (err < 0)
         return err;
+    wait_for_utmpd();
     struct tty *tty;
     Terminal *terminal = [Terminal createPseudoTerminal:&tty];
     if (terminal == nil) {

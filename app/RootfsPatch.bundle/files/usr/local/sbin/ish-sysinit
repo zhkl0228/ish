@@ -1,0 +1,73 @@
+#!/bin/sh
+# iSH's boot, which init runs (/etc/inittab's sysinit) before the terminal
+# sessions log in. OpenRC is not in the root, so what its boot services would
+# do is done here.
+#
+# Installed by the iSH app (RootfsPatch.bundle), which rewrites this file when
+# it updates the root.
+
+# User accounting (w, who, last): the utmps daemons, as Alpine's utmps-openrc
+# starts them (utmp-prepare, utmpd, wtmpd, btmpd, utmp-init). The root has them
+# (tools/build-rootfs.sh); one made before has them once `apk add utmps` has
+# installed them. busybox's login and init write the records, procps-ng's w
+# and busybox read them, at the daemons' sockets. (procps-ng's uptime and top
+# count no users: they get musl's getutxent, which has none, before libutmps's.)
+# Not if OpenRC is there to start them (setup-utmp).
+#
+# The app waits for utmpd's socket before the first session logs in, so that
+# its login is recorded: it removes the socket left from the last boot.
+start_utmps() {
+    command -v utmps-utmpd > /dev/null || return 0
+    [ ! -e /etc/runlevels/boot/utmpd ] || return 0
+
+    # utmp-prepare
+    for db in utmp:/run/utmps/utmp wtmp:wtmpd/wtmp btmp:btmpd/btmp; do
+        link=/var/log/${db%%:*}
+        target=${db#*:}
+        [ "$(readlink "$link")" = "$target" ] || { rm -f "$link"; ln -s "$target" "$link"; }
+    done
+    mkdir -p /run/utmps /var/log/wtmpd /var/log/btmpd
+    chown utmp:utmp /run/utmps /var/log/wtmpd /var/log/btmpd
+    chmod 0755 /run/utmps
+    chmod 2755 /var/log/wtmpd /var/log/btmpd
+
+    # utmp-init's empty utmp file: /run is no tmpfs here, so the records of
+    # the last boot are still in it
+    : > /run/utmps/utmp
+    chown utmp:utmp /run/utmps/utmp
+    chmod 0644 /run/utmps/utmp
+
+    # utmpd, wtmpd, btmpd: as utmp, in the directory of their file
+    uid=$(id -u utmp)
+    gid=$(id -g utmp)
+    for daemon in "utmpd /run/utmps utmps-utmpd" "wtmpd /var/log/wtmpd utmps-wtmpd wtmp" \
+            "btmpd /var/log/btmpd utmps-wtmpd btmp"; do
+        set -- $daemon
+        name=$1 dir=$2
+        shift 2
+        rm -f "/run/utmps/.$name-socket"
+        (cd "$dir" && exec s6-ipcserver -u "$uid" -g "$gid" "/run/utmps/.$name-socket" "$@" < /dev/null &)
+    done
+
+    # utmp-init's records, as sysvinit and busybox's init write them, once
+    # utmpd and wtmpd are there
+    tries=0
+    until [ -S /run/utmps/.utmpd-socket ] && [ -S /run/utmps/.wtmpd-socket ]; do
+        tries=$((tries + 1))
+        if [ $tries -gt 50 ]; then
+            echo "ish-sysinit: utmpd and wtmpd did not start" >&2
+            return 1
+        fi
+        sleep 0.1
+    done
+    # Their time given as a TAI64N label: utmps-write writes the label's
+    # seconds as they are (timeval_from_tain, not timeval_sysclock_from_tain),
+    # and its own reading of the clock is TAI, 37 seconds ahead of it with the
+    # leap seconds. A label of the clock's own seconds comes out right.
+    now=$(printf '@%016x%08x' $((0x4000000000000000 + $(date +%s))) 0)
+    # 20018 = 256 * 'N' + '2', runlevel 2 after none
+    utmps-write -t 2000 -T "$now" -uw -l reboot -p 0 -h "$(uname -r)" -- '~~' BOOT_TIME '~'
+    utmps-write -t 2000 -T "$now" -uw -l runlevel -p 20018 -h "$(uname -r)" -- '~~' RUN_LVL '~'
+}
+
+start_utmps
