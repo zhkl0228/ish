@@ -41,7 +41,7 @@ enum OverrideAppearance {
 @property (copy, nullable) BOOL (^pasteInterceptor)(void);
 
 // Screen housekeeping, for the menu commands.
-- (void)clearScreen; // screen and scrollback
+- (void)clearScreen; // the screen but for the line being typed (term.js)
 - (void)clearScrollback;
 - (void)resetTerminal; // full VT reset, then the theme is reapplied
 // Everything in the scrollback and on screen, as text.

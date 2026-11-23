@@ -160,6 +160,32 @@ const utf8 = (s) => Buffer.from(s, 'utf8').toString('latin1');
     msgs = await take();
     check('a resize is told', msgs.some(([n]) => n == 'resize'), JSON.stringify(msgs));
 
+    // clearScreen (the app's ⌘K): the line being typed stays, at the top, the
+    // cursor where it was on it; nothing else on the screen
+    const screen = () => page.evaluate(() => {
+        const b = term.buffer.active;
+        const rows = [];
+        for (let i = 0; i < term.rows; i++) rows.push(b.getLine(b.baseY + i).translateToString(true));
+        return { rows, x: b.cursorX, y: b.cursorY };
+    });
+    await page.evaluate(() => { exports.reset(); exports.clearScrollback(); });
+    await write('one\r\ntwo\r\n$ abc\x1b[2D');
+    await page.evaluate(() => exports.clearScreen());
+    await page.waitForTimeout(50);
+    let shown = await screen();
+    check('clearScreen keeps the prompt line at the top, the cursor on it',
+          shown.rows[0] == '$ abc' && shown.rows.slice(1).every((r) => r == '') && shown.x == 3 && shown.y == 0,
+          JSON.stringify(shown));
+    const width = await page.evaluate(() => term.cols);   // since the resize above
+    await write('\r\n\r\nx\r\n$ ' + 'a'.repeat(width + 5));
+    await page.evaluate(() => exports.clearScreen());
+    await page.waitForTimeout(50);
+    shown = await screen();
+    check('clearScreen keeps all the rows of a wrapped line',
+          shown.rows[0] == '$ ' + 'a'.repeat(width - 2) && shown.rows[1] == 'a'.repeat(7) &&
+          shown.rows.slice(2).every((r) => r == '') && shown.x == 7 && shown.y == 1,
+          JSON.stringify(shown));
+
     // serialize: what a restored tab shows, colors and all, not a full-screen
     // program's screen
     await page.evaluate(() => { exports.reset(); exports.clearScrollback(); });

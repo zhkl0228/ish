@@ -263,7 +263,27 @@ exports.updateStyle = ({foregroundColor, backgroundColor, fontFamily, fontSize, 
 };
 
 exports.clearScrollback = () => term.clear();
-exports.clearScreen = () => term.write('\x1b[H\x1b[2J');
+// The screen cleared but for the line being typed (the prompt and what follows
+// it, all its rows when it wraps), which goes to the top with the cursor where
+// it was on it: the program reading it is not told (^L would be its input, a
+// form feed in a file `cat >` writes), and a shell would draw its prompt again
+// only at the next line.
+exports.clearScreen = () => {
+    const buffer = term.buffer.active;
+    const y = buffer.cursorY;
+    let first = y, last = y;
+    while (first > 0 && buffer.getLine(buffer.baseY + first).isWrapped)
+        first--;
+    while (last + 1 < term.rows && buffer.getLine(buffer.baseY + last + 1).isWrapped)
+        last++;
+    let seq = '';
+    if (first > 0)
+        seq += `\x1b[${first}S`;                      // the rows above it scrolled away
+    if (last - first + 1 < term.rows)
+        seq += `\x1b[${last - first + 2};1H\x1b[J`;   // the rows below it erased
+    seq += `\x1b[${y - first + 1};${buffer.cursorX + 1}H`;
+    term.write(seq);
+};
 exports.reset = () => term.reset();
 exports.setAccessibilityEnabled = (enabled) => term.options.screenReaderMode = enabled;
 // hterm's, for VoiceOver's announcements: xterm.js's screen reader mode needs none
