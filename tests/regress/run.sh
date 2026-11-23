@@ -547,6 +547,15 @@ EOF
     rm -rf "$ttydir"
 
     echo
+    echo "########## /dev/shm emptied at boot ##########"
+    "$ISH" "$MOUNT_FLAG" "$ROOTFS" /bin/sh -c 'echo left > /dev/shm/regress_left'
+    if "$ISH" "$MOUNT_FLAG" "$ROOTFS" /bin/sh -c 'test ! -e /dev/shm/regress_left'; then
+        echo "PASS a file left in /dev/shm is gone at the next boot"
+    else
+        echo "FAIL a file left in /dev/shm is still there at the next boot"
+        status=1
+    fi
+    echo
     echo "########## /proc/stat: cpu line and btime ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_proc_stat" \
             tests/regress/regress_proc_stat.c; then

@@ -159,6 +159,45 @@ static void make_char_device(const char *path, int major, int minor) {
     generic_mknodat(AT_PWD, path, S_IFCHR|0666, dev_make(major, minor));
 }
 
+// Empties /dev/shm, as Linux's tmpfs is empty at each mount: a named
+// semaphore a program left there when it died kept the next from starting
+// (sem_open with O_EXCL). iSH's tmpfs has no unlink or mmap, so /dev/shm is
+// a directory of the root filesystem.
+static void empty_dev_shm(void) {
+    struct fd *dir = generic_open("/dev/shm", O_RDONLY_ | O_DIRECTORY_, 0);
+    if (IS_ERR(dir)) {
+        printk("/dev/shm: open: %ld\n", PTR_ERR(dir));
+        return;
+    }
+    // the names first: unlinking while reading the directory may skip some
+    size_t count = 0;
+    char (*names)[NAME_MAX + 1] = NULL;
+    struct dir_entry entry;
+    int err;
+    while ((err = dir->ops->readdir(dir, &entry)) > 0) {
+        if (strcmp(entry.name, ".") == 0 || strcmp(entry.name, "..") == 0)
+            continue;
+        char (*more)[NAME_MAX + 1] = realloc(names, (count + 1) * sizeof(*names));
+        if (more == NULL)
+            break;
+        names = more;
+        strcpy(names[count++], entry.name);
+    }
+    fd_close(dir);
+    if (err < 0)
+        printk("/dev/shm: readdir: %d\n", err);
+    for (size_t i = 0; i < count; i++) {
+        char path[sizeof("/dev/shm/") + NAME_MAX];
+        snprintf(path, sizeof(path), "/dev/shm/%s", names[i]);
+        err = generic_unlinkat(AT_PWD, path);
+        if (err == _EISDIR || err == _EPERM)
+            err = generic_rmdirat(AT_PWD, path);
+        if (err < 0)
+            printk("/dev/shm: removing %s: %d\n", names[i], err);
+    }
+    free(names);
+}
+
 void create_some_device_nodes(void) {
     // create some device nodes
     // this will do nothing if they already exist
@@ -184,12 +223,14 @@ void create_some_device_nodes(void) {
     // POSIX shared memory and named semaphores (shm_open, sem_open) are files
     // in /dev/shm, a tmpfs on Linux that programs take for granted: without
     // it, Python's multiprocessing could make no lock, queue or pool. Here it
-    // is a directory of the root filesystem, so what a program leaves there
-    // outlives a restart. Its mode is set every boot, as tmpfs gets it at each
-    // mount: mkdir's would be cut by the host's umask on realfs.
+    // is a directory of the root filesystem, emptied every boot and its mode
+    // set, as a tmpfs is at each mount: mkdir's would be cut by the host's
+    // umask on realfs.
     int err = generic_mkdirat(AT_PWD, "/dev/shm", 01777);
-    if (err == 0 || err == _EEXIST)
+    if (err == 0 || err == _EEXIST) {
         generic_setattrat(AT_PWD, "/dev/shm", make_attr(mode, 01777), false);
+        empty_dev_shm();
+    }
 }
 
 int create_stdio(const char *file, int major, int minor) {
