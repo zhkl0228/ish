@@ -1063,7 +1063,7 @@ static bool emit_insn(struct em *e, uint32_t x, uint64_t pc, unsigned spos, bool
     return true;
 }
 
-// Loop blocks, for jit_crash_sync(): inside [lo, hi) guest register promo_g[i]
+// Loop blocks, for sync_pinned(): inside [lo, hi) guest register promo_g[i]
 // lives in host register promo_h[i] and donor_g[i] is in cpu_state.
 struct loopmap { uintptr_t lo, hi; uint8_t n; int8_t g[8], d[8], h[8]; };
 static struct loopmap *loopmaps;
@@ -2908,24 +2908,93 @@ static void jit_translate(struct fiber_block *b, const struct jit_units *U, stru
     pthread_mutex_unlock(&reg_lock);
 }
 
-// Host fault inside native code: the pinned guest registers only live in host
-// registers, so copy them from the signal context into cpu_state before the
-// crash-recovery path re-runs the block.
-bool jit_crash_sync(void *ucontext) {
-    if (!region || n_pinned <= 0)
+// ================================================================ host faults
+//
+// A host fault (SIGSEGV, SIGBUS) in native code. Native code reaches guest
+// memory only through tlb_lookup(), and the emitters lay every access out the
+// same way:
+//   b.hi  exit                          the TLB check: a miss goes to the unit's exit
+//   ldr   x11, [x10, #data_minus_addr]
+//   add   x9, x11, x9                   the host address
+//   ldr   xN or qN, [x1, #...]          0 to 2: registers loaded on first use
+//   a load or store with base x9        the access
+// so a fault there is the access's: its TLB entry was valid and the host
+// memory behind it was not (another thread unmapped it between the check and
+// the access). Up to the access nothing the guest sees has changed, and going
+// on at its exit is what a TLB miss there does: back to the unit's gadget,
+// which runs the access again (and should that fault too, the gadget engine's
+// precise path takes it). Anywhere else nothing tells where to retry from:
+// the run loop kills the process (INT_JIT_NATIVE_FAULT) and logs what was
+// recorded here, a sample to extend access_exit() with.
+
+static _Atomic uint64_t st_fault_resumed, st_fault_unknown;
+
+// ISH_JIT_FAULT_TEST=resume|unknown, for tests/regress/regress_jit_fault.c:
+// madvise(addr, len, JIT_FAULT_TEST_ADVICE) takes the host memory behind guest
+// [addr, addr + len) away (jit_fault_test_arm()) and leaves the TLB as it is,
+// so that the next access through the TLB faults on the host; the fault gives
+// it back. With "unknown" that fault, in native code, is taken for one not at
+// an access.
+enum { FAULT_TEST_OFF, FAULT_TEST_RESUME, FAULT_TEST_UNKNOWN };
+static int fault_test;
+static void *volatile fault_test_host;
+static volatile size_t fault_test_len;
+
+bool jit_fault_test_arm(void *host, size_t len) {
+    if (fault_test == FAULT_TEST_OFF || fault_test_host != NULL)
         return false;
-    ucontext_t *uc = ucontext;
-    uintptr_t pc = uc->uc_mcontext->__ss.__pc;
-    const struct aot_module *img = NULL;
-    bool in_region = pc >= (uintptr_t) region && pc < (uintptr_t) region + REGION_SIZE;
-    if (!in_region && !in_aot_text(pc, &img))
+    if (mprotect(host, len, PROT_NONE) < 0)
         return false;
+    fault_test_len = len;
+    fault_test_host = host;
+    return true;
+}
+
+// Whether the fault at addr was the test's; its memory is back.
+static bool fault_test_restore(uintptr_t addr) {
+    void *host = fault_test_host;
+    if (host == NULL || addr - (uintptr_t) host >= fault_test_len)
+        return false;
+    mprotect(host, fault_test_len, PROT_READ | PROT_WRITE);
+    fault_test_host = NULL;
+    return true;
+}
+
+// The exit of the guest access whose host instruction is at pc, in code
+// [lo, hi); 0 if pc is not one.
+static uintptr_t access_exit(uintptr_t pc, uintptr_t lo, uintptr_t hi) {
+    const uint32_t *p = (const uint32_t *) pc;
+    if ((p[0] & 0x0A000000u) != 0x08000000u || ((p[0] >> 5) & 31) != T_A)   // a load or store, base x9
+        return 0;
+    unsigned k = 1;
+    while (k <= 2 && pc - 4 * k >= lo &&
+           ((p[-(int) k] & 0xFFC003E0u) == 0xF9400020u ||                     // ldr xN, [x1, #imm]
+            (p[-(int) k] & 0xFFC003E0u) == 0x3DC00020u))                      // ldr qN, [x1, #imm]
+        k++;
+    if (pc - 4 * (k + 2) < lo)
+        return 0;
+    uint32_t add = 0x8B000000u | (T_A << 16) | (T_E << 5) | T_A;
+    uint32_t dma = 0xF9400000u | ((offsetof(struct tlb_entry, data_minus_addr) / 8) << 10) | (T_I << 5) | T_E;
+    uint32_t bhi = p[-(int) (k + 2)];
+    if (p[-(int) k] != add || p[-(int) (k + 1)] != dma || (bhi & 0xFF00001Fu) != 0x54000008u)
+        return 0;
+    uintptr_t at = pc - 4 * (k + 2);
+    uintptr_t target = at + (uintptr_t) (4 * sext((bhi >> 5) & 0x7ffff, 19));
+    return target >= lo && target < hi ? target : 0;
+}
+
+// Pinned guest registers live only in host registers inside native code:
+// copy them from the signal context into cpu_state. img: the AOT image pc is
+// in, NULL for the code region.
+static void sync_pinned(ucontext_t *uc, uintptr_t pc, const struct aot_module *img) {
+    if (n_pinned <= 0)
+        return;
     char *cpu = (char *) uc->uc_mcontext->__ss.__x[1];
     // Faults only happen at guest accesses, which in a loop block are all in
     // the promoted body. (Blocking lock: this runs in a signal handler, but
     // only for faults inside native code, never from within loopmap_add.)
     struct loopmap lm = {0};
-    if (in_region) {
+    if (img == NULL) {
         pthread_mutex_lock(&loopmap_lock);
         for (unsigned k = 0; k < nloopmaps; k++)
             if (pc >= loopmaps[k].lo && pc < loopmaps[k].hi) { lm = loopmaps[k]; break; }
@@ -2948,7 +3017,77 @@ bool jit_crash_sync(void *ucontext) {
     }
     for (unsigned k = 0; k < lm.n; k++)
         *(uint64_t *) (cpu + greg_off(lm.g[k])) = uc->uc_mcontext->__ss.__x[lm.h[k]];
-    return true;
+}
+
+// The last fault in native code not at an access, until the run loop takes it
+// (jit_take_unknown_fault()) on the same thread.
+static __thread struct {
+    bool pending;
+    uintptr_t pc, addr, lo;
+    const char *area;          // the AOT image's guest path, NULL for the code region
+    uint32_t words[8];         // from pc - 4 * before
+    unsigned before, n;
+} unknown_fault;
+
+enum jit_fault jit_native_fault(void *ucontext, uintptr_t addr, uintptr_t *resume) {
+    ucontext_t *uc = ucontext;
+    bool test = fault_test_restore(addr);
+    uintptr_t pc = uc->uc_mcontext->__ss.__pc;
+    const struct aot_module *img = NULL;
+    uintptr_t lo, hi;
+    if (region != NULL && pc >= (uintptr_t) region && pc < (uintptr_t) region + REGION_SIZE) {
+        lo = (uintptr_t) region;
+        hi = lo + REGION_SIZE;
+    } else if (in_aot_text(pc, &img)) {
+        lo = (uintptr_t) img->text_start;
+        hi = (uintptr_t) img->text_end;
+    } else {
+        return JIT_FAULT_NONE;
+    }
+    uintptr_t target = test && fault_test == FAULT_TEST_UNKNOWN ? 0 : access_exit(pc, lo, hi);
+    if (target != 0) {
+        atomic_fetch_add_explicit(&st_fault_resumed, 1, memory_order_relaxed);
+        *resume = target;
+        return JIT_FAULT_RESUME;
+    }
+    atomic_fetch_add_explicit(&st_fault_unknown, 1, memory_order_relaxed);
+    sync_pinned(uc, pc, img);
+    unknown_fault.pc = pc;
+    unknown_fault.addr = addr;
+    unknown_fault.lo = lo;
+    unknown_fault.area = img != NULL ? img->path : NULL;
+    unknown_fault.before = 0;
+    while (unknown_fault.before < 6 && pc - 4 * (unknown_fault.before + 1) >= lo)
+        unknown_fault.before++;
+    unknown_fault.n = 0;
+    for (uintptr_t a = pc - 4 * unknown_fault.before; a < hi && unknown_fault.n < 8; a += 4)
+        unknown_fault.words[unknown_fault.n++] = *(const uint32_t *) a;
+    unknown_fault.pending = true;
+    return JIT_FAULT_UNKNOWN;
+}
+
+bool jit_unknown_fault_pending(void) {
+    return unknown_fault.pending;
+}
+
+size_t jit_take_unknown_fault(char *buf, size_t size, const struct cpu_state *cpu) {
+    unknown_fault.pending = false;
+    size_t n = 0;
+#define OUT(...) do { if (n < size) n += (size_t) snprintf(buf + n, size - n, __VA_ARGS__); } while (0)
+    OUT("JIT: host fault in native code, not at a guest access: nothing tells where to retry from, so the "
+        "process is killed (SIGSEGV). A sample for access_exit() in asbestos/guest-arm64/jit.c:\n");
+    OUT("  host pc %#lx = %s+%#lx, fault address %#lx\n", (unsigned long) unknown_fault.pc,
+        unknown_fault.area != NULL ? unknown_fault.area : "code region", (unsigned long) (unknown_fault.pc - unknown_fault.lo),
+        (unsigned long) unknown_fault.addr);
+    OUT("  host code from pc-%u:", 4 * unknown_fault.before);
+    for (unsigned i = 0; i < unknown_fault.n; i++)
+        OUT(i == unknown_fault.before ? " [%08x]" : " %08x", unknown_fault.words[i]);
+    OUT("\n  guest: block pc %#llx sp %#llx", (unsigned long long) cpu->pc, (unsigned long long) cpu->sp);
+    for (int r = 0; r < 31; r++)
+        OUT("%sx%d %#llx", r % 4 == 0 ? "\n   " : " ", r, (unsigned long long) cpu->regs[r]);
+    OUT("\n");
+#undef OUT
+    return n;
 }
 
 
@@ -3389,6 +3528,8 @@ size_t jit_describe(char *buf, size_t size) {
     OUT("image lookups: %.1f ms (%llu answered from the memo; %llu searches of other versions: %.1f ms)\n",
         jit_ticks_ms(st_find_ticks), (unsigned long long) st_memo_hits,
         (unsigned long long) st_search_n, jit_ticks_ms(st_search_ticks));
+    OUT("host faults in native code: %llu went on at the access's TLB-miss exit, %llu elsewhere (process killed)\n",
+        (unsigned long long) st_fault_resumed, (unsigned long long) st_fault_unknown);
     OUT("images: %u in use, %u rejected (abi %08x)\n", aot_nimages, aot_nrejected, jit_abi());
     for (unsigned i = 0; i < aot_nimages; i++)
         OUT("  ok        %s (%u translations, family %s)\n", aot_images[i]->path, aot_images[i]->ntrans,
@@ -3485,6 +3626,9 @@ static void jit_init(void) {
         pic_on = true;
     pin_init(pin_on);
     cm_on = getenv("ISH_JIT_MAP") != NULL;
+    const char *ft = getenv("ISH_JIT_FAULT_TEST");
+    fault_test = ft == NULL ? FAULT_TEST_OFF : strcmp(ft, "resume") == 0 ? FAULT_TEST_RESUME :
+                 strcmp(ft, "unknown") == 0 ? FAULT_TEST_UNKNOWN : FAULT_TEST_OFF;
     rec_file = pic_on && have_region ? getenv("ISH_JIT_RECORD") : NULL;
     rec_mod = getenv("ISH_JIT_RECORD_MOD") ? getenv("ISH_JIT_RECORD_MOD") : "ld-musl";
     if (have_region) {

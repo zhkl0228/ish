@@ -136,12 +136,17 @@ static void crash_handler(int sig, siginfo_t *info, void *ctx) {
     if ((sig == SIGSEGV || sig == SIGBUS) && in_jit) {
         ucontext_t *uc = (ucontext_t *)ctx;
 #ifdef ISH_JIT
-        // Pinned guest registers live only in host registers inside native code.
-        // There x28 is the code-stream position only at exits, so clear it:
-        // fiber_exit records it as the fault's position, and the run loop then
-        // retries from the block it entered rather than from a wrong
-        // instruction.
-        if (jit_crash_sync(uc))
+        // In native code: a fault at a guest access goes on at its TLB-miss
+        // exit, as a miss there would. Anywhere else there is no position to
+        // retry from, and the run loop kills the process; x28 is the
+        // code-stream position only at exits, so it is cleared for fiber_exit.
+        uintptr_t resume;
+        enum jit_fault fault = jit_native_fault(uc, (uintptr_t) info->si_addr, &resume);
+        if (fault == JIT_FAULT_RESUME) {
+            UC_PC(uc) = resume;
+            return;
+        }
+        if (fault == JIT_FAULT_UNKNOWN)
             UC_X(uc, 28) = 0;
 #endif
 

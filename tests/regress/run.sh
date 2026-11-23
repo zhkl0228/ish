@@ -598,6 +598,28 @@ EOF
         status=1
     fi
     echo
+    echo "########## JIT: a host fault in native code (ish -Djit=true; skips otherwise) ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_jit_fault" tests/regress/regress_jit_fault.c; then
+        for mode in resume unknown; do
+            out=$(ISH_JIT_FAULT_TEST=$mode timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_jit_fault $mode 2>&1)
+            echo "$out"
+            if echo "$out" | grep -q '^SKIP'; then
+                :
+            elif [ "$mode" = resume ]; then
+                echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+            # killed at the fault, with the sample iSH logs for it
+            elif echo "$out" | grep -q '^FAIL' ||
+                    ! echo "$out" | grep -q 'host fault in native code, not at a guest access'; then
+                echo "regress_jit_fault unknown: not killed with a sample in the log" >&2
+                status=1
+            fi
+        done
+        rm -f "$GUEST_ROOT/tmp/regress_jit_fault"
+    else
+        echo "failed to build regress_jit_fault" >&2
+        status=1
+    fi
+    echo
     echo "########## System V shared memory: shmget, shmat, shmdt, shmctl ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_sysv_shm" tests/regress/regress_sysv_shm.c; then
         out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_sysv_shm 2>&1)

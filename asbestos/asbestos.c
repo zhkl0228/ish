@@ -1111,6 +1111,14 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
 #endif
 
 
+#ifdef ISH_JIT
+        // A host fault in native code that was not at a guest access
+        // (jit_native_fault()): retrying would run again what already ran,
+        // so handle_interrupt kills the process.
+        if (interrupt == INT_JIT_CRASH && jit_unknown_fault_pending())
+            interrupt = INT_JIT_NATIVE_FAULT;
+#endif
+
         // Check if fiber_enter returned due to a JIT crash (signal handler
         // redirected PC to jit_crash_trampoline which returns INT_JIT_CRASH).
         // The signal handler already set cpu->segfault_addr, cpu->pc, etc.
@@ -1129,7 +1137,8 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
             // popped another frame until it returned to garbage. cpu->pc is
             // the current block's start (chained branches keep it), and
             // fiber_exit stored the code-stream position of the fault. Without
-            // a position (a fault in native code), fall back to the block the
+            // a position (a fault in native code; those at a guest access go on
+            // at its exit, the others end above), fall back to the block the
             // run loop entered.
             fiber_fix_fault_pc(asbestos, frame, tlb);
             if (frame->cpu.segfault_precise_pc != 0)

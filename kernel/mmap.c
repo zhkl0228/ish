@@ -10,6 +10,9 @@
 #include "kernel/memory.h"
 #include "util/verbosetrace.h"
 #include "kernel/mm.h"
+#ifdef ISH_JIT
+#include "asbestos/guest-arm64/jit.h"
+#endif
 
 #if ANON_MMAP_LIMIT_PAGES > 0
 _Atomic long anon_page_count;
@@ -623,6 +626,19 @@ int_t sys_mprotect(addr_t addr, addr_t len, int_t prot) {
 
 dword_t sys_madvise(addr_t addr, dword_t len, dword_t advice) {
     STRACE("madvise(0x%llx, 0x%x, %d)", (unsigned long long)addr, len, advice);
+#ifdef ISH_JIT
+    // tests/regress/regress_jit_fault.c, with ISH_JIT_FAULT_TEST set: the host
+    // memory behind [addr, addr + len) goes away until an access faults on
+    // it, the TLB left as it is. len is whole host pages.
+    if (advice == JIT_FAULT_TEST_ADVICE) {
+        read_wrlock(&current->mem->lock);
+        void *host = mem_ptr(current->mem, addr, MEM_READ);
+        read_wrunlock(&current->mem->lock);
+        if (host == NULL || (uintptr_t) host % real_page_size != 0 || len % real_page_size != 0)
+            return _EINVAL;
+        return jit_fault_test_arm(host, len) ? 0 : _EINVAL;
+    }
+#endif
     if (advice == 4 && vma_trace_hits_file(addr, len))
         fprintf(stderr, "[vma] madvise(0x%llx, 0x%x, DONTNEED) [file-backed] pid=%d\n",
                 (unsigned long long)addr, len, current->pid);

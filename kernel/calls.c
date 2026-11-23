@@ -16,6 +16,9 @@
 #include "fs/fd.h"
 #include "fs/dev.h"
 #include "fs/real.h"
+#ifdef ISH_JIT
+#include "asbestos/guest-arm64/jit.h"
+#endif
 
 dword_t syscall_stub(void) {
     return _ENOSYS;
@@ -580,6 +583,15 @@ void handle_interrupt(int interrupt) {
         ish_timer_tick_hook_t hook =
             atomic_load_explicit(&g_timer_tick_hook, memory_order_acquire);
         if (hook) hook();
+#ifdef ISH_JIT
+    } else if (interrupt == INT_JIT_NATIVE_FAULT) {
+        // A host fault in native code not at a guest access: no position to
+        // retry from. Killed as by a SIGSEGV no handler can take for its own.
+        char text[2048];
+        jit_take_unknown_fault(text, sizeof(text), cpu);
+        printk("%d(%s): %s", current->pid, current->comm, text);
+        do_exit_group(SIGSEGV_);
+#endif
     } else {
         printk("EXIT[unhandled-int]: pid=%d interrupt=%d\n", current->pid, interrupt);
         sys_exit(interrupt);

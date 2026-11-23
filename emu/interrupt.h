@@ -14,5 +14,8 @@
 #define INT_TIMER 32
 #define INT_SYSCALL 0x80
 #define INT_JIT_CRASH 0x100  // JIT SIGSEGV recovery (stale TLB after CoW)
+// A host fault in native code with no position to retry from: the process is
+// killed (asbestos/guest-arm64/jit.c, jit_native_fault())
+#define INT_JIT_NATIVE_FAULT 0x101
 #define INT_PREBUILT_RET 0x200  // nested guest call from a prebuilt-gadget spec_fn
                                  // returned to its sentinel LR (ARM64 only)
