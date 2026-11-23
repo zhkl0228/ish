@@ -196,7 +196,10 @@ Enables AI agents to share files between the host app and the Linux guest withou
 
 ### 5. Rootfs Management
 
-- **Alpine 3.24 aarch64** with full apk package manager (`tools/build-rootfs.sh`)
+- **Alpine 3.24 aarch64** with full apk package manager (`tools/build-rootfs.sh`), with
+  only everyday tools preinstalled; `ish-install` installs the development tools when wanted
+  (Python, Node.js and Claude Code, Go, Java, C/C++, clang, Redis and MariaDB), all of them
+  or by group (`ish-install go python`; `ish-install -l` lists the groups)
 - **RootfsPatch.bundle**: Versioned overlay system for incremental rootfs updates
 - **Polyfills**: WebAssembly polyfill for undici/llhttp, fetch polyfill for HTTP downloads
 - No environment variables injected: a program sees the environment it was started with
@@ -232,7 +235,8 @@ ninja -C build-arm64-release
 tests/regress/run.sh -i build-arm64-release/ish -r ./alpine-arm64-plain
 
 # Smoke test: python/pip, node/npm, go, git and Claude Code doing real work in
-# a rootfs made by tools/build-rootfs.sh. Needs the network.
+# a rootfs made by tools/build-rootfs.sh (installed first with ish-install).
+# Needs the network.
 tests/smoke/run.sh -i build-arm64-release/ish -f ./alpine-arm64-fakefs
 ```
 

@@ -186,7 +186,9 @@ fakefs_bind_mount("/host/path/to/data", "/mnt/data", /*read_only=*/true);
 
 ### 5. Rootfs 管理
 
-- **Alpine 3.24 aarch64**，自带完整 apk 包管理器（`tools/build-rootfs.sh`）
+- **Alpine 3.24 aarch64**，自带完整 apk 包管理器（`tools/build-rootfs.sh`），只预装日常工具；
+  开发工具需要时用 `ish-install` 安装（Python、Node.js 和 Claude Code、Go、Java、C/C++、clang、
+  Redis 和 MariaDB），可以全装，也可以按组装（`ish-install go python`；`ish-install -l` 列出分组）
 - **RootfsPatch.bundle**: 增量 rootfs 更新的版本化 overlay 系统
 - **Polyfills**: undici/llhttp 的 WebAssembly polyfill、HTTP 下载的 fetch polyfill
 - 不注入任何环境变量：程序看到的就是启动它时给的环境
@@ -221,7 +223,7 @@ ninja -C build-arm64-release
 tests/regress/run.sh -i build-arm64-release/ish -r ./alpine-arm64-plain
 
 # 冒烟测试：python/pip、node/npm、go、git、Claude Code 在 tools/build-rootfs.sh
-# 做出的 rootfs 里干真活。需要联网。
+# 做出的 rootfs 里干真活（先用 ish-install 装上）。需要联网。
 tests/smoke/run.sh -i build-arm64-release/ish -f ./alpine-arm64-fakefs
 ```
 

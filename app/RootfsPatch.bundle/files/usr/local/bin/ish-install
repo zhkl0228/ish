@@ -1,0 +1,102 @@
+#!/bin/sh
+# Install the development tools the root leaves out.
+#
+#   ish-install              install every group
+#   ish-install go python    install those groups
+#   ish-install -l           list the groups, and which are installed
+#
+# A group already installed is skipped. Packages come from Alpine's
+# repositories (apk) and Claude Code from npm, so this needs the network.
+#
+# Installed by the iSH app (RootfsPatch.bundle), which rewrites this file when
+# it updates the root.
+set -e
+
+ALL_GROUPS="python node claude go java c clang db tools"
+
+describe() {
+    case $1 in
+        python) echo "Python 3, pip, cryptography, PyYAML      ~55 MB" ;;
+        node)   echo "Node.js and npm                          ~60 MB" ;;
+        claude) echo "Claude Code (and node)                   ~410 MB" ;;
+        go)     echo "Go                                       ~175 MB" ;;
+        java)   echo "OpenJDK 25 and Maven                     ~360 MB" ;;
+        c)      echo "gcc, g++, make, musl-dev (build-base)    ~225 MB" ;;
+        clang)  echo "clang 21 (and build-base)                ~475 MB" ;;
+        db)     echo "Redis, MariaDB server and client         ~230 MB" ;;
+        tools)  echo "GitHub CLI, ShellCheck, 7-Zip            ~65 MB" ;;
+    esac
+}
+
+packages() {
+    case $1 in
+        python) echo "python3 py3-pip py3-pysocks py3-cryptography py3-yaml" ;;
+        node)   echo "nodejs npm" ;;
+        claude) echo "nodejs npm" ;;
+        go)     echo "go" ;;
+        # openjdk25-jdk first, so it is the java-jdk maven depends on
+        java)   echo "openjdk25-jdk maven" ;;
+        c)      echo "build-base" ;;
+        clang)  echo "build-base clang21" ;;
+        db)     echo "redis mariadb mariadb-client" ;;
+        tools)  echo "github-cli shellcheck 7zip" ;;
+    esac
+}
+
+# apk info -e names the packages given that are installed
+installed() {
+    # shellcheck disable=SC2046
+    [ "$(apk info -e $(packages "$1") | wc -l)" -eq "$(packages "$1" | wc -w)" ] || return 1
+    [ "$1" != claude ] || command -v claude > /dev/null
+}
+
+list() {
+    for group in $ALL_GROUPS; do
+        if installed "$group"; then state=installed; else state=; fi
+        printf '  %-8s %s  %s\n' "$group" "$(describe "$group")" "$state"
+    done
+}
+
+case $1 in
+    -l|--list)
+        list
+        exit 0 ;;
+    -h|--help)
+        echo "usage: ish-install [group...]   (every group if none is given)"
+        echo "       ish-install -l           (the groups, and which are installed)"
+        echo
+        list
+        exit 0 ;;
+esac
+
+wanted=
+for arg in "$@"; do
+    if [ -z "$(packages "$arg")" ]; then
+        echo "ish-install: no group $arg; groups: $ALL_GROUPS" >&2
+        exit 2
+    fi
+    wanted="$wanted $arg"
+done
+[ -n "$wanted" ] || wanted=$ALL_GROUPS
+
+todo='' pkgs='' claude=''
+for group in $wanted; do
+    if installed "$group"; then
+        echo "$group: already installed"
+        continue
+    fi
+    todo="$todo $group"
+    pkgs="$pkgs $(packages "$group")"
+    [ "$group" = claude ] && claude=1
+done
+[ -n "$todo" ] || exit 0
+
+echo "installing:$todo"
+# shellcheck disable=SC2086
+apk add --no-cache $pkgs
+if [ -n "$claude" ] && ! command -v claude > /dev/null; then
+    # with npm -g, the way Claude Code's own updater expects to update it
+    npm install -g --no-audit --no-fund @anthropic-ai/claude-code
+    npm cache clean --force 2> /dev/null
+fi
+echo "installed:$todo"

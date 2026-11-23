@@ -4,9 +4,11 @@
 # Usage:
 #   tests/smoke/run.sh -i <ish binary> -f <fakefs rootfs>
 #
-# The rootfs is one tools/build-rootfs.sh made (python3, node and npm, go and
-# git preinstalled), imported with fakefsify; the checks need the network.
-# It copies the script to the rootfs's /tmp and runs it in a login shell.
+# The rootfs is one tools/build-rootfs.sh made, imported with fakefsify; the
+# checks need the network. The tools they use (python3, node and npm, Claude
+# Code, go) are installed first with ish-install, copied in from the app's
+# RootfsPatch.bundle as the app would; one already installed is skipped. Then
+# the script goes to the rootfs's /tmp and runs in a login shell.
 #
 # Given an iSH built with AddressSanitizer (tools/build-asan.sh), the run
 # fails on any ASan report, which it prints at the end: a corrupted host
@@ -37,6 +39,9 @@ if grep -qa __asan_init "$ISH"; then
     echo "$ISH is built with AddressSanitizer: reports go to $ASAN_REPORTS"
 fi
 
+"$ISH" -f "$ROOTFS" /bin/sh -c 'cat > /usr/local/bin/ish-install && chmod 755 /usr/local/bin/ish-install' \
+    < app/RootfsPatch.bundle/files/usr/local/bin/ish-install || exit 1
+"$ISH" -f "$ROOTFS" /bin/sh -l -c 'ish-install python claude go' || exit 1
 "$ISH" -f "$ROOTFS" /bin/sh -c 'cat > /tmp/guest-smoke.sh' < tests/smoke/guest-smoke.sh || exit 1
 out=$("$ISH" -f "$ROOTFS" /bin/sh -l -c 'sh /tmp/guest-smoke.sh' 2>&1)
 rc=$?

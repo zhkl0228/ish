@@ -3,6 +3,11 @@
 # up to date, with the packages the app preinstalls. The result is the tarball
 # the app imports on first launch (root.tar.gz in the app bundle).
 #
+# Only everyday tools are preinstalled, to keep the root small. The development
+# tools (Python, Node.js and Claude Code, Go, Java, C/C++, clang, databases)
+# are installed when wanted with ish-install, which the app puts in the root
+# (app/RootfsPatch.bundle/files/usr/local/bin/ish-install).
+#
 # usage: tools/build-rootfs.sh <meson build dir> <out.tar.gz>
 #
 # The ARM64 app targets copy deps/rootfs/arm64-root.tar.gz (ROOTFS_FILE in
@@ -18,17 +23,11 @@ set -euo pipefail
 
 ALPINE_BRANCH=v3.24
 ALPINE_RELEASE=3.24.4
-# openjdk25-jdk comes before maven so it is the java-jdk maven depends on.
 PACKAGES=(
-    python3 py3-pip py3-pysocks py3-cryptography py3-yaml
-    nodejs npm go openjdk25-jdk maven build-base clang21 git github-cli
-    redis mariadb mariadb-client
-    curl wget vim jq shellcheck 7zip xz openssh iputils bind-tools iproute2 net-tools procps-ng
+    curl wget git vim jq xz openssh iputils bind-tools iproute2 net-tools procps-ng
     # telnet: busybox-extras has one too, but only as `busybox-extras telnet`
     inetutils-telnet
 )
-# Installed with npm -g, the way Claude Code's own updater expects to update it.
-NPM_PACKAGES=(@anthropic-ai/claude-code)
 
 [ $# -eq 2 ] || { sed -n '2,16p' "$0"; exit 2; }
 build=$(cd "$1" && pwd)
@@ -56,7 +55,6 @@ guest() { "$build/ish" -f "$work/fs" "$@" < /dev/null; }
 grep '^nameserver' /etc/resolv.conf | "$build/ish" -f "$work/fs" /bin/sh -c 'cat > /etc/resolv.conf'
 guest /sbin/apk upgrade --no-cache
 guest /sbin/apk add --no-cache "${PACKAGES[@]}"
-guest /bin/sh -l -c "npm install -g --no-audit --no-fund ${NPM_PACKAGES[*]} && npm cache clean --force"
 guest /bin/rm /etc/resolv.conf
 # A fakefs keeps regular files' contents under data/, so the package database
 # can be read from here.
@@ -66,4 +64,3 @@ awk '/^P:/ { name = substr($0, 3) } /^V:/ { print name "-" substr($0, 3) }' \
 "$build/tools/unfakefsify" "$work/fs" "$out"
 echo "wrote $out ($(du -h "$out" | cut -f1)), $(wc -l < "$work/packages.txt") packages:"
 grep -E "^($(IFS='|'; echo "${PACKAGES[*]}"))-[0-9]" "$work/packages.txt" | sed 's/^/  /'
-"$build/ish" -f "$work/fs" /bin/sh -l -c 'npm ls -g --depth=0' < /dev/null | sed 's/^/  /'

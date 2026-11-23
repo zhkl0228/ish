@@ -1,8 +1,8 @@
 #!/bin/sh
 # Smoke test for the arm64 guest: real programs doing real work, inside iSH.
-# Run by tests/smoke/run.sh, which copies it into the rootfs. Needs the tools
-# tools/build-rootfs.sh preinstalls (python3, node and npm, go, git) and the
-# network. Prints one "PASS name" or "FAIL name" line per check, then a
+# Run by tests/smoke/run.sh, which copies it into the rootfs after installing
+# what it needs with ish-install (python3, node and npm, Claude Code, go; git
+# is preinstalled). Needs the network. Prints one "PASS name" or "FAIL name" line per check, then a
 # summary line.
 pass=0; fail=0
 check() {

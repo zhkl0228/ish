@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>version</key>
-    <integer>7</integer>
+    <integer>8</integer>
     <key>files</key>
     <array>
         <dict>
@@ -29,6 +29,23 @@
             <string>files/etc/profile.d/ish-aliases.sh</string>
             <key>dst</key>
             <string>/etc/profile.d/ish-aliases.sh</string>
+        </dict>
+        <!-- says how to install them, until one is installed -->
+        <dict>
+            <key>src</key>
+            <string>files/etc/profile.d/ish-install.sh</string>
+            <key>dst</key>
+            <string>/etc/profile.d/ish-install.sh</string>
+        </dict>
+        <!-- installs the development tools the root leaves out -->
+        <dict>
+            <key>src</key>
+            <string>files/usr/local/bin/ish-install</string>
+            <key>dst</key>
+            <string>/usr/local/bin/ish-install</string>
+            <!-- 0755 -->
+            <key>mode</key>
+            <integer>493</integer>
         </dict>
     </array>
 </dict>

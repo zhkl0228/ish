@@ -184,10 +184,21 @@ void FsApplyOverlay(void) {
         if (written < 0) {
             NSLog(@"[RootfsPatch] FAIL %@ -> %@ (error %zd)", src, dst, written);
             failed++;
-        } else {
-            NSLog(@"[RootfsPatch] OK %@ -> %@ (%lu bytes)", src, dst, (unsigned long)data.length);
-            applied++;
+            continue;
         }
+        // write_file creates a file 0644; one to run (ish-install) gives its
+        // mode in the manifest
+        NSNumber *fileMode = entry[@"mode"];
+        if (fileMode != nil) {
+            int err = generic_setattrat(AT_PWD, dst.UTF8String, make_attr(mode, fileMode.unsignedIntValue), false);
+            if (err < 0) {
+                NSLog(@"[RootfsPatch] FAIL %@: mode %o (error %d)", dst, fileMode.unsignedIntValue, err);
+                failed++;
+                continue;
+            }
+        }
+        NSLog(@"[RootfsPatch] OK %@ -> %@ (%lu bytes)", src, dst, (unsigned long)data.length);
+        applied++;
     }
 
     // Record installed version
