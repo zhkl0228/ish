@@ -67,6 +67,7 @@ static NSString *BundledRootVersion(void) {
 - (instancetype)init {
     if (self = [super init]) {
         NSError *error = nil;
+        [self removeResetLeftovers];
         NSArray<NSString *> *rootNames = [NSFileManager.defaultManager contentsOfDirectoryAtPath:RootsDir().path error:&error];
         NSAssert(error == nil, @"couldn't list roots: %@", error);
         self.roots = [rootNames mutableCopy];
@@ -151,30 +152,42 @@ void root_progress_callback(void *cookie, double progress, const char *message, 
         *should_cancel = true;
 }
 
+// The error a fakefs tool failed with, nil if it was cancelled
+static NSError *_Nullable FakefsError(struct fakefsify_error *fs_err) {
+    NSError *error = nil;
+    if (fs_err->type != ERR_CANCELLED) {
+        NSString *domain = fs_err->type == ERR_SQLITE ? @"SQLite" : NSPOSIXErrorDomain;
+        error = [NSError errorWithDomain:domain
+                                    code:fs_err->code
+                                userInfo:@{NSLocalizedDescriptionKey:
+                                               [NSString stringWithFormat:@"%s, line %d", fs_err->message, fs_err->line]}];
+    }
+    free(fs_err->message);
+    return error;
+}
+
+// A root made from archive at destination, which must not exist
+- (BOOL)importArchive:(NSURL *)archive toURL:(NSURL *)destination error:(NSError **)error progressReporter:(id<ProgressReporter> _Nullable)progress {
+    struct fakefsify_error fs_err;
+    if (!fakefs_import(archive.fileSystemRepresentation,
+                       destination.fileSystemRepresentation,
+                       &fs_err, (struct progress) {(__bridge void *) progress, root_progress_callback})) {
+        *error = FakefsError(&fs_err);
+        [NSFileManager.defaultManager removeItemAtURL:destination error:nil];
+        return NO;
+    }
+    return YES;
+}
+
 - (BOOL)importRootFromArchive:(NSURL *)archive name:(NSString *)name error:(NSError **)error progressReporter:(id<ProgressReporter> _Nullable)progress {
     NSAssert(![self.roots containsObject:name], @"root already exists: %@", name);
-    struct fakefsify_error fs_err;
     NSURL *destination = [self rootUrl:name];
     NSURL *tempDestination = [NSFileManager.defaultManager.temporaryDirectory
                               URLByAppendingPathComponent:[NSProcessInfo.processInfo globallyUniqueString]];
     if (tempDestination == nil)
         return NO;
-    if (!fakefs_import(archive.fileSystemRepresentation,
-                       tempDestination.fileSystemRepresentation,
-                       &fs_err, (struct progress) {(__bridge void *) progress, root_progress_callback})) {
-        NSString *domain = NSPOSIXErrorDomain;
-        if (fs_err.type == ERR_SQLITE)
-            domain = @"SQLite";
-        *error = [NSError errorWithDomain:domain
-                                     code:fs_err.code
-                                 userInfo:@{NSLocalizedDescriptionKey:
-                                                [NSString stringWithFormat:@"%s, line %d", fs_err.message, fs_err.line]}];
-        if (fs_err.type == ERR_CANCELLED)
-            *error = nil;
-        free(fs_err.message);
-        [NSFileManager.defaultManager removeItemAtURL:tempDestination error:nil];
+    if (![self importArchive:archive toURL:tempDestination error:error progressReporter:progress])
         return NO;
-    }
     if (![NSFileManager.defaultManager moveItemAtURL:tempDestination toURL:destination error:error])
         return NO;
 
@@ -226,16 +239,69 @@ void root_progress_callback(void *cookie, double progress, const char *message, 
         NSLog(@"Failed to write %@: %@", url.path, error);
 }
 
+// What a reset keeps: the home directories, with the user's files, keys and
+// settings
+static const char *const kResetKeeps[] = {"/root", "/home", NULL};
+static NSString *const kResetNewPrefix = @"reset-new-";
+static NSString *const kResetOldPrefix = @"reset-old-";
+
+// The bundled root takes the default root's place, with the default root's
+// home directories. It is imported beside the roots, on their volume, so the
+// homes are moved, not copied; the old root is set aside only once the new
+// one has them, and if anything fails it is put back as it was.
 - (BOOL)resetDefaultRoot:(NSError **)error {
+    NSFileManager *files = NSFileManager.defaultManager;
     NSString *name = self.defaultRoot;
-    if (![NSFileManager.defaultManager removeItemAtURL:[self rootUrl:name] error:error])
+    NSURL *old = [self rootUrl:name];
+    NSString *unique = NSProcessInfo.processInfo.globallyUniqueString;
+    NSURL *fresh = [ContainerURL() URLByAppendingPathComponent:[kResetNewPrefix stringByAppendingString:unique]];
+    NSURL *setAside = [ContainerURL() URLByAppendingPathComponent:[kResetOldPrefix stringByAppendingString:unique]];
+
+    NSURL *bundled = [NSBundle.mainBundle URLForResource:@"root" withExtension:@"tar.gz"];
+    if (![self importArchive:bundled toURL:fresh error:error progressReporter:nil])
         return NO;
-    // The import asserts that no root of that name exists
-    [[self mutableOrderedSetValueForKey:@"roots"] removeObject:name];
-    if (![self importBundledRootNamed:name error:error])
+    NSString *version = BundledRootVersion();
+    if (version != nil && ![version writeToURL:[fresh URLByAppendingPathComponent:kRootVersionFile]
+                                    atomically:YES encoding:NSUTF8StringEncoding error:error]) {
+        [files removeItemAtURL:fresh error:nil];
         return NO;
+    }
+    struct fakefsify_error fs_err;
+    if (!fakefs_carry_over(old.fileSystemRepresentation, fresh.fileSystemRepresentation, kResetKeeps, &fs_err)) {
+        *error = FakefsError(&fs_err);
+        [files removeItemAtURL:fresh error:nil];
+        return NO;
+    }
+
+    BOOL setOldAside = [files moveItemAtURL:old toURL:setAside error:error];
+    if (!setOldAside || ![files moveItemAtURL:fresh toURL:old error:error]) {
+        if (setOldAside)
+            [files moveItemAtURL:setAside toURL:old error:nil];
+        // the homes back where they were
+        if (!fakefs_carry_over(fresh.fileSystemRepresentation, old.fileSystemRepresentation, kResetKeeps, &fs_err)) {
+            NSLog(@"Reset failed, and putting the home directories back in %@ failed too: %@", old.path, FakefsError(&fs_err));
+            return NO;
+        }
+        [files removeItemAtURL:fresh error:nil];
+        return NO;
+    }
+    NSError *removeError = nil;
+    if (![files removeItemAtURL:setAside error:&removeError])
+        NSLog(@"Reset: could not remove the old filesystem at %@: %@", setAside.path, removeError);
     self.defaultRoot = name;
     return YES;
+}
+
+// What a reset that did not finish (the app killed in it) left beside the roots
+- (void)removeResetLeftovers {
+    NSFileManager *files = NSFileManager.defaultManager;
+    for (NSString *entry in [files contentsOfDirectoryAtPath:ContainerURL().path error:nil]) {
+        if (![entry hasPrefix:kResetNewPrefix] && ![entry hasPrefix:kResetOldPrefix])
+            continue;
+        NSError *error = nil;
+        if (![files removeItemAtURL:[ContainerURL() URLByAppendingPathComponent:entry] error:&error])
+            NSLog(@"Could not remove %@: %@", entry, error);
+    }
 }
 
 - (BOOL)exportRootNamed:(NSString *)name toArchive:(NSURL *)archive error:(NSError **)error progressReporter:(id<ProgressReporter> _Nullable)progress {
@@ -244,16 +310,7 @@ void root_progress_callback(void *cookie, double progress, const char *message, 
     if (!fakefs_export([self rootUrl:name].fileSystemRepresentation,
                        archive.fileSystemRepresentation,
                        &fs_err, (struct progress) {(__bridge void *) progress, root_progress_callback})) {
-        // TODO: dedup with above method
-        NSString *domain = NSPOSIXErrorDomain;
-        if (fs_err.type == ERR_SQLITE)
-            domain = @"SQLite";
-        *error = [NSError errorWithDomain:domain
-                                     code:fs_err.code
-                                 userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithUTF8String:fs_err.message]}];
-        if (fs_err.type == ERR_CANCELLED)
-            *error = nil;
-        free(fs_err.message);
+        *error = FakefsError(&fs_err);
         return NO;
     }
     return YES;

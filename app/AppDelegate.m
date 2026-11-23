@@ -321,7 +321,7 @@ void SyncHostname(void) {
     offered = YES;
     NSString *message = [NSString stringWithFormat:
                          @"This version of iSH comes with a new built-in filesystem. Your filesystem \"%@\" was set up from an earlier one, or from somewhere else.\n\n"
-                         @"Resetting replaces it with the new one and deletes everything in it, including your files. iSH then quits; open it again to use the new filesystem.",
+                         @"Resetting replaces it with the new one. Your files in /root and /home are kept; everything else is replaced, including the packages you installed. iSH then quits; open it again to use the new filesystem.",
                          Roots.instance.defaultRoot];
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"New Built-in Filesystem"
                                                                    message:message

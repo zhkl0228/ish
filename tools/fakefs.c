@@ -1,6 +1,8 @@
 #include <errno.h>
 #include <fcntl.h>
+#include <dirent.h>
 #include <limits.h>
+#include <stdio.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -392,5 +394,128 @@ bool fakefs_export(const char *fs, const char *archive_path, struct fakefsify_er
     if (archive_write_close(archive) != ARCHIVE_OK)
         ARCHIVE_ERR(archive);
     archive_write_free(archive);
+    return true;
+}
+
+// rm -r of name in dirfd, not following symlinks; 0 or -1 with errno
+static int remove_tree(int dirfd, const char *name) {
+    if (unlinkat(dirfd, name, 0) == 0)
+        return 0;
+    if (errno != EISDIR && errno != EPERM)
+        return -1;
+    int fd = openat(dirfd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    if (fd < 0)
+        return -1;
+    DIR *dir = fdopendir(fd);
+    if (dir == NULL) {
+        close(fd);
+        return -1;
+    }
+    struct dirent *ent;
+    int result = 0;
+    while ((ent = readdir(dir)) != NULL) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
+            continue;
+        if (remove_tree(fd, ent->d_name) < 0) {
+            result = -1;
+            break;
+        }
+    }
+    int error = errno;
+    closedir(dir);
+    if (result < 0) {
+        errno = error;
+        return -1;
+    }
+    return unlinkat(dirfd, name, AT_REMOVEDIR);
+}
+
+bool fakefs_carry_over(const char *old_fs, const char *new_fs, const char *const dirs[], struct fakefsify_error *err_out) {
+    char path_tmp[PATH_MAX];
+    snprintf(path_tmp, sizeof(path_tmp), "%s/meta.db", new_fs);
+    sqlite3 *db;
+    int err = sqlite3_open_v2(path_tmp, &db, SQLITE_OPEN_READWRITE, NULL);
+    CHECK_ERR();
+    snprintf(path_tmp, sizeof(path_tmp), "%s/meta.db", old_fs);
+    sqlite3_stmt *attach = PREPARE("attach ? as old");
+    sqlite3_bind_text(attach, 1, path_tmp, -1, SQLITE_TRANSIENT);
+    STEP(attach);
+    FINALIZE(attach);
+    EXEC("begin");
+
+    // A dir's own path and those below it: [dir, dir], then [dir + "/", dir + "0"),
+    // '0' following '/'. Paths are blobs, which only compare in order with blobs.
+#define BIND_SUBTREE(stmt) \
+    sqlite3_bind_blob(stmt, 1, dir, (int) strlen(dir), SQLITE_TRANSIENT); \
+    sqlite3_bind_blob(stmt, 2, below_lo, (int) strlen(below_lo), SQLITE_TRANSIENT); \
+    sqlite3_bind_blob(stmt, 3, below_hi, (int) strlen(below_hi), SQLITE_TRANSIENT)
+#define SUBTREE "(path = ?1 or (path >= ?2 and path < ?3))"
+
+    const char *carried[16];
+    int ncarried = 0;
+    for (int i = 0; dirs[i] != NULL && ncarried < (int) (sizeof(carried) / sizeof(carried[0])); i++) {
+        const char *dir = dirs[i];
+        char below_lo[MAX_PATH], below_hi[MAX_PATH];
+        snprintf(below_lo, sizeof(below_lo), "%s/", dir);
+        snprintf(below_hi, sizeof(below_hi), "%s0", dir);
+
+        sqlite3_stmt *has = PREPARE("select 1 from old.paths where path = ?1");
+        sqlite3_bind_blob(has, 1, dir, (int) strlen(dir), SQLITE_TRANSIENT);
+        bool present = STEP(has);
+        FINALIZE(has);
+        if (!present)
+            continue;
+
+        // the new root's go, with the stats no path names any more
+        sqlite3_stmt *drop = PREPARE("delete from main.paths where " SUBTREE);
+        BIND_SUBTREE(drop);
+        STEP(drop);
+        FINALIZE(drop);
+        EXEC("delete from main.stats where inode not in (select inode from main.paths)");
+
+        // the old root's come, numbered past the new root's inodes: two paths
+        // of one inode (a hard link) still share one
+        sqlite3_stmt *top = PREPARE("select coalesce(max(inode), 0) from main.stats");
+        STEP(top);
+        sqlite3_int64 offset = sqlite3_column_int64(top, 0);
+        FINALIZE(top);
+        sqlite3_stmt *stats = PREPARE("insert into main.stats (inode, stat) select inode + ?4, stat from old.stats"
+                                      " where inode in (select inode from old.paths where " SUBTREE ")");
+        BIND_SUBTREE(stats);
+        sqlite3_bind_int64(stats, 4, offset);
+        STEP(stats);
+        FINALIZE(stats);
+        sqlite3_stmt *paths = PREPARE("insert into main.paths (path, inode) select path, inode + ?4 from old.paths"
+                                      " where " SUBTREE);
+        BIND_SUBTREE(paths);
+        sqlite3_bind_int64(paths, 4, offset);
+        STEP(paths);
+        FINALIZE(paths);
+
+        carried[ncarried++] = dir;
+    }
+#undef BIND_SUBTREE
+#undef SUBTREE
+    EXEC("commit");
+    EXEC("detach old");
+    sqlite3_close(db);
+
+    // The files, moved. One that cannot be puts back those moved, so that
+    // old_fs is whole: the caller keeps it and drops new_fs.
+    for (int i = 0; i < ncarried; i++) {
+        char from[PATH_MAX], to[PATH_MAX];
+        snprintf(from, sizeof(from), "%s/data/%s", old_fs, fix_path(carried[i]));
+        snprintf(to, sizeof(to), "%s/data/%s", new_fs, fix_path(carried[i]));
+        if ((remove_tree(AT_FDCWD, to) == 0 || errno == ENOENT) && rename(from, to) == 0)
+            continue;
+        int error = errno;
+        while (--i >= 0) {
+            snprintf(from, sizeof(from), "%s/data/%s", old_fs, fix_path(carried[i]));
+            snprintf(to, sizeof(to), "%s/data/%s", new_fs, fix_path(carried[i]));
+            rename(to, from);
+        }
+        errno = error;
+        POSIX_ERR();
+    }
     return true;
 }

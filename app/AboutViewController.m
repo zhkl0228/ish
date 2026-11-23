@@ -180,7 +180,7 @@
 
 - (void)confirmResetRootfs {
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Reset Rootfs"
-                                                                   message:@"This will delete the current filesystem and re-import from the built-in rootfs. All data in the current filesystem will be lost."
+                                                                   message:@"This will replace the current filesystem with the built-in one. Your files in /root and /home are kept; everything else is lost, including the packages you installed."
                                                             preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
                                               style:UIAlertActionStyleCancel
