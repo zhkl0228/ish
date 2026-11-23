@@ -85,6 +85,13 @@ extern NSNotificationName const TerminalSessionDidChangeNotification;
 // Starts the configured launch command in a new pseudo terminal. Returns nil
 // and sets *error (a negative errno) on failure. Main thread only.
 - (nullable TerminalSession *)startSessionWithError:(int *_Nullable)error;
+// The same, for a tab restored when the app starts again: its shell goes back
+// to directory (nil: home, as any shell), through /ish/session/<pts>, which
+// /etc/profile.d/ish-session.sh reads; and the terminal shows output (nil:
+// nothing) before anything the shell writes.
+- (nullable TerminalSession *)startSessionInDirectory:(nullable NSString *)directory
+                                        restoredOutput:(nullable NSData *)output
+                                                 error:(int *_Nullable)error;
 
 - (nullable TerminalSession *)sessionWithUUID:(NSUUID *)uuid;
 

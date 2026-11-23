@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>version</key>
-    <integer>17</integer>
+    <integer>18</integer>
     <key>files</key>
     <array>
         <dict>
@@ -36,6 +36,13 @@
             <string>files/etc/profile.d/ish-node.sh</string>
             <key>dst</key>
             <string>/etc/profile.d/ish-node.sh</string>
+        </dict>
+        <!-- a restored tab's directory; bash history kept as commands run -->
+        <dict>
+            <key>src</key>
+            <string>files/etc/profile.d/ish-session.sh</string>
+            <key>dst</key>
+            <string>/etc/profile.d/ish-session.sh</string>
         </dict>
         <!-- imported Claude global memory, synchronized without overwriting edits -->
         <dict>

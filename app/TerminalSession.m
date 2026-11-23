@@ -334,8 +334,28 @@ static void wait_for_boot(void) {
     NSLog(@"the boot did not say it was done in 30 seconds (%s): the sessions start without it", ISH_BOOT_DONE_PATH);
 }
 
+// The directory a shell on the pts goes back to (/etc/profile.d/ish-session.sh):
+// written for a restored tab; one an earlier session there left removed, so
+// that no other shell takes it. Returns a negative errno.
+static int set_start_directory(int pts, NSString *directory) {
+    char path[64];
+    snprintf(path, sizeof(path), "/ish/session/pts-%d", pts);
+    generic_unlinkat(AT_PWD, path);
+    if (directory == nil)
+        return 0;
+    generic_mkdirat(AT_PWD, "/ish", 0755);
+    generic_mkdirat(AT_PWD, "/ish/session", 0755);
+    struct fd *fd = generic_open(path, O_WRONLY_|O_CREAT_|O_TRUNC_, 0644);
+    if (IS_ERR(fd))
+        return (int) PTR_ERR(fd);
+    const char *dir = directory.fileSystemRepresentation;
+    ssize_t written = fd->ops->write(fd, dir, strlen(dir));
+    fd_close(fd);
+    return written < 0 ? (int) written : 0;
+}
+
 // Creates the pty and the process, leaving it ready for task_start. Returns a negative errno.
-static int start_process(NSArray<NSString *> *command, Terminal **terminalOut) {
+static int start_process(NSArray<NSString *> *command, NSString *directory, Terminal **terminalOut) {
     int err = become_new_init_child();
     if (err < 0)
         return err;
@@ -350,6 +370,9 @@ static int start_process(NSArray<NSString *> *command, Terminal **terminalOut) {
     err = create_stdio(stdioFile.fileSystemRepresentation, TTY_PSEUDO_SLAVE_MAJOR, tty->num);
     if (err < 0)
         return err;
+    err = set_start_directory(tty->num, directory);
+    if (err < 0)
+        return err;
     tty_release(tty);
 
     char argv[4096];
@@ -361,7 +384,8 @@ static int start_process(NSArray<NSString *> *command, Terminal **terminalOut) {
     return current->pid;
 }
 #else
-static int start_process(NSArray<NSString *> *command, Terminal **terminalOut) {
+// A session of the Linux kernel starts at home: directory is not used.
+static int start_process(NSArray<NSString *> *command, NSString *directory, Terminal **terminalOut) {
     const char *argv_arr[command.count + 1];
     for (NSUInteger i = 0; i < command.count; i++)
         argv_arr[i] = command[i].UTF8String;
@@ -393,9 +417,13 @@ static int start_process(NSArray<NSString *> *command, Terminal **terminalOut) {
 #endif
 
 - (TerminalSession *)startSessionWithError:(int *)errorOut {
+    return [self startSessionInDirectory:nil restoredOutput:nil error:errorOut];
+}
+
+- (TerminalSession *)startSessionInDirectory:(NSString *)directory restoredOutput:(NSData *)output error:(int *)errorOut {
     NSAssert(NSThread.isMainThread, @"sessions are started from the main thread");
     Terminal *terminal = nil;
-    int pid = start_process(UserPreferences.shared.launchCommand, &terminal);
+    int pid = start_process(UserPreferences.shared.launchCommand, directory, &terminal);
     if (pid < 0) {
         if (terminal != nil)
             [terminal destroy];
@@ -413,6 +441,9 @@ static int start_process(NSArray<NSString *> *command, Terminal **terminalOut) {
     // Register before the process can run, so an immediately exiting command is still matched.
     [self.mutableSessions addObject:session];
     [self.livePids addObject:@(pid)];
+    // Before the process runs: ahead of anything it writes
+    if (output != nil)
+        [terminal sendOutput:output.bytes length:(int) output.length];
 #if !ISH_LINUX
     if (boot_is_awaited())
         current->before_run = wait_for_boot;

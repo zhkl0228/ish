@@ -7,6 +7,7 @@
 
 #import "SceneDelegate.h"
 #import "AboutViewController.h"
+#import "TerminalSession.h"
 
 TerminalViewController *currentTerminalViewController = NULL;
 
@@ -58,6 +59,11 @@ NSArray<NSUUID *> *SceneTerminalUUIDs(NSUserActivity *activity) {
 
     TerminalViewController *vc = (TerminalViewController *) self.window.rootViewController;
     vc.sceneSession = session;
+    // The app started again, no session left from before: the tabs it had.
+    // Not through the window's restoration state, which iOS drops with a
+    // window closed from the app switcher.
+    if (TerminalSessionStore.shared.sessions.count == 0 && [vc restoreSavedTabs])
+        return;
     NSUserActivity *activity = session.stateRestorationActivity;
     if (activity == nil) {
         // A window opened by "Move Tab to New Window" brings its tab along.
@@ -88,6 +94,10 @@ NSArray<NSUUID *> *SceneTerminalUUIDs(NSUserActivity *activity) {
         [activity addUserInfoEntriesFromDictionary:@{SceneTerminalUUIDsKey: uuids}];
     }
     return activity;
+}
+
+- (void)sceneDidEnterBackground:(UIScene *)scene {
+    [TerminalViewController saveTabs];
 }
 
 - (void)sceneDidBecomeActive:(UIScene *)scene {

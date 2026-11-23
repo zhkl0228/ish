@@ -160,6 +160,17 @@ const utf8 = (s) => Buffer.from(s, 'utf8').toString('latin1');
     msgs = await take();
     check('a resize is told', msgs.some(([n]) => n == 'resize'), JSON.stringify(msgs));
 
+    // serialize: what a restored tab shows, colors and all, not a full-screen
+    // program's screen
+    await page.evaluate(() => { exports.reset(); exports.clearScrollback(); });
+    await write('plain \x1b[31mred\x1b[0m line\r\n$ ');
+    let saved = await page.evaluate(() => exports.serialize());
+    check('serialize keeps the text and its colors', saved.includes('plain') && saved.includes('red') && /\x1b\[[0-9;]*31m/.test(saved), JSON.stringify(saved));
+    await write('\x1b[?1049hFULLSCREEN');
+    saved = await page.evaluate(() => exports.serialize());
+    check("serialize leaves out a full-screen program's screen", saved.includes('plain') && !saved.includes('FULLSCREEN'), JSON.stringify(saved));
+    await write('\x1b[?1049l');
+
     await page.evaluate(() => { exports.setFocused(true); exports.setFocused(false); exports.reset(); exports.clearScreen(); exports.setAccessibilityEnabled(true); });
     msgs = await take();
     check('no errors', !msgs.some(([n, b]) => n == 'log' && /error/i.test(b)), JSON.stringify(msgs.filter(([n]) => n == 'log')));

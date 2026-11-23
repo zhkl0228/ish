@@ -19,6 +19,13 @@
 - (void)reconnectSessionsFromTerminalUUIDs:(NSArray<NSUUID *> *)uuids selected:(NSUUID *)selected;
 // UUIDs of this window's tabs, in order, and of the selected one (nil if none).
 @property (readonly) NSArray<NSUUID *> *tabTerminalUUIDs;
+// The tabs of every window, kept for the app's next start: their order, names
+// and directories, and what each showed. Called as the app goes to the
+// background, where it may end without warning.
++ (void)saveTabs;
+// The tabs saved last, opened again here: each a new shell in the directory
+// it was in, under what it showed. NO if none were saved.
+- (BOOL)restoreSavedTabs;
 @property (readonly) NSUUID *sessionTerminalUUID;
 @property UISceneSession *sceneSession API_AVAILABLE(ios(13.0));
 
