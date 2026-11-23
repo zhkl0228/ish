@@ -68,6 +68,9 @@ struct fd {
             uint8_t unix_name_len;
             char unix_name[108];
             struct fd *unix_peer; // locked by peer_lock, for simplicity
+            // A connection the other end has not accepted yet (sys_connect),
+            // or NULL. Locked by peer_lock.
+            struct unix_pending *unix_pending;
             // AF_NETLINK stub: the write end of the backing socketpair
             // (-1 for every non-netlink socket), the groups bind() asked
             // for, and whether a dump whose replies did not all fit the

@@ -350,6 +350,18 @@ else
         status=1
     fi
     echo
+    echo "########## unix connections accepted after connect returns ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_unix_connect" \
+            tests/regress/regress_unix_connect.c; then
+        out=$(timeout 150 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_unix_connect 2>&1 | grep -v '^NETDIAG')
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_unix_connect"
+    else
+        echo "failed to build regress_unix_connect" >&2
+        status=1
+    fi
+    echo
     echo "########## device nodes from a Darwin import ##########"
     # A fakefs of its own: a tarball with the test as /init and three device
     # nodes, imported with fakefsify, two of them then rewritten in meta.db to
@@ -399,7 +411,7 @@ EOF
     echo "########## /proc/net/tcp, udp and socket:[inode] links ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_proc_net" \
             tests/regress/regress_proc_net.c; then
-        out=$("$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_proc_net 2>&1)
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_proc_net 2>&1)
         echo "$out"
         echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
         rm -f "$GUEST_ROOT/tmp/regress_proc_net"

@@ -52,8 +52,8 @@ static int proc_show_net_if_inet6(struct proc_entry *UNUSED(entry), struct proc_
     return 0;
 }
 
-// /proc/net/tcp, tcp6, udp and udp6: the sockets the guest has open, in
-// Linux's format, which netstat and ss parse.
+// /proc/net/tcp, tcp6, udp, udp6, raw and raw6: the sockets the guest has
+// open, in Linux's format, which netstat and ss parse.
 //
 // An address prints as Linux prints it: each 32-bit word of it in network
 // byte order, read as a host integer, so 127.0.0.1 is 0100007F; the port in
@@ -69,22 +69,27 @@ static void proc_net_addr(struct proc_data *buf, int family, const uint8_t ip[16
 
 // Fields iSH has no source for print as 0: the retransmit timer and count, the
 // zero-window probes, and the kernel's socket pointer. The reference count is
-// 1 for TCP and 2 for UDP, as Linux shows an idle socket.
+// 1 for TCP and 2 for UDP and raw, as Linux shows an idle socket. Rows number
+// from 0, but a raw socket's is its hash bucket, its protocol, as on Linux;
+// IPv4 TCP and raw rows number in 4 columns, the rest in 5.
 static int proc_show_net_inet(struct proc_data *buf, int family, int type) {
     struct sock_inet_entry *entries;
     int n = sock_inet_list(family, type, &entries);
     if (n < 0)
         return n;
     bool tcp = type == SOCK_STREAM_;
+    bool raw = type == SOCK_RAW_;
     if (family == AF_INET_)
         proc_printf(buf, tcp ? "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
-                             : "   sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode ref pointer drops\n");
+                    : raw ? "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode ref pointer drops\n"
+                          : "   sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode ref pointer drops\n");
     else
         proc_printf(buf, tcp ? "  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
                              : "  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode ref pointer drops\n");
     for (int i = 0; i < n; i++) {
         const struct sock_inet_entry *e = &entries[i];
-        proc_printf(buf, tcp || family == AF_INET6_ ? "%4d: " : "%5d: ", i);
+        bool narrow = tcp || (raw && family == AF_INET_);
+        proc_printf(buf, narrow ? "%4d: " : "%5d: ", raw ? (int) (e->local_port & 0xff) : i);
         proc_net_addr(buf, family, e->local, e->local_port);
         proc_printf(buf, " ");
         proc_net_addr(buf, family, e->remote, e->remote_port);
@@ -107,6 +112,43 @@ static int proc_show_net_udp(struct proc_entry *UNUSED(entry), struct proc_data 
 static int proc_show_net_udp6(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
     return proc_show_net_inet(buf, AF_INET6_, SOCK_DGRAM_);
 }
+static int proc_show_net_raw(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    return proc_show_net_inet(buf, AF_INET_, SOCK_RAW_);
+}
+static int proc_show_net_raw6(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    return proc_show_net_inet(buf, AF_INET6_, SOCK_RAW_);
+}
+
+// /proc/net/unix, which netstat -x reads. The kernel's socket pointer prints as
+// 0; the reference count is 2, or 3 when connected, as Linux shows an idle
+// socket. Flags is __SO_ACCEPTCON for a listener; St is SS_CONNECTED (3) or
+// SS_UNCONNECTED (1). The path is the bound address (an accepted socket has its
+// listener's), an abstract one as @ and its bytes with NULs as @.
+static int proc_show_net_unix(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    struct sock_unix_entry *entries;
+    int n = sock_unix_list(&entries);
+    if (n < 0)
+        return n;
+    proc_printf(buf, "Num       RefCount Protocol Flags    Type St Inode Path\n");
+    for (int i = 0; i < n; i++) {
+        const struct sock_unix_entry *e = &entries[i];
+        proc_printf(buf, "0000000000000000: %08X %08X %08X %04X %02X %5lu",
+                    e->connected ? 3 : 2, 0, e->listening ? 0x10000 : 0, e->type,
+                    e->connected ? 3 : 1, e->inode);
+        if (e->name_len > 0) {
+            proc_printf(buf, " ");
+            if (e->name[0] != '\0') {
+                proc_printf(buf, "%.*s", (int) strnlen(e->name, e->name_len), e->name);
+            } else {
+                for (int c = 0; c < e->name_len; c++)
+                    proc_printf(buf, "%c", c == 0 || e->name[c] == '\0' ? '@' : e->name[c]);
+            }
+        }
+        proc_printf(buf, "\n");
+    }
+    free(entries);
+    return 0;
+}
 
 // There is deliberately no /proc/net/route: the host's routing table is not
 // available to us, and a made-up one would be read as the truth.
@@ -119,6 +161,9 @@ struct proc_dir_entry proc_net_entries[] = {
     {"tcp6", .show = proc_show_net_tcp6},
     {"udp", .show = proc_show_net_udp},
     {"udp6", .show = proc_show_net_udp6},
+    {"raw", .show = proc_show_net_raw},
+    {"raw6", .show = proc_show_net_raw6},
+    {"unix", .show = proc_show_net_unix},
 };
 #define PROC_NET_LEN (sizeof(proc_net_entries)/sizeof(proc_net_entries[0]))
 
@@ -139,4 +184,7 @@ struct proc_children proc_net_children = PROC_CHILDREN({
     {"tcp6", .show = proc_show_net_tcp6},
     {"udp", .show = proc_show_net_udp},
     {"udp6", .show = proc_show_net_udp6},
+    {"raw", .show = proc_show_net_raw},
+    {"raw6", .show = proc_show_net_raw6},
+    {"unix", .show = proc_show_net_unix},
 });

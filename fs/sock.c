@@ -347,6 +347,33 @@ static bool fd_is_netlink_stub(struct fd *fd) {
 
 static lock_t peer_lock = LOCK_INITIALIZER;
 
+// A unix stream connection the other end has not accepted yet. As on Linux,
+// connect returns once the connection is queued; the two ends' peer pointers
+// are linked when accept takes it. connect writes the id first thing on the
+// connection, and accept reads it to find this. File descriptors the
+// connecting end sends meanwhile wait here for the accepted socket. Every
+// field and the list are locked by peer_lock.
+struct unix_pending {
+    uint64_t id;
+    struct fd *client; // NULL once it has closed
+    struct list scm;
+    struct list links;
+};
+static struct list unix_pending_list = LIST_INITIALIZER(unix_pending_list);
+static uint64_t unix_pending_next_id = 1;
+
+static void scm_free(struct scm *scm);
+
+static void unix_pending_free(struct unix_pending *pending) {
+    list_remove(&pending->links);
+    struct scm *scm, *tmp;
+    list_for_each_entry_safe(&pending->scm, scm, tmp, queue) {
+        list_remove(&scm->queue);
+        scm_free(scm);
+    }
+    free(pending);
+}
+
 // [T-ish-host-fd-double-close] Owns sock_fd from here on: on any failure it is
 // already closed (f_install() closes the fd it could not install, and with it
 // real_fd). Callers used to close() it again, which closes whatever the app
@@ -493,30 +520,34 @@ out:
 }
 
 // Dan Bernstein's simple and decently effective hash function
-static uint32_t str_hash(const char *str) {
+static uint32_t bytes_hash(const char *bytes, size_t len) {
     uint32_t hash = 5381;
-    for (int i = 0; str[i] != '\0'; i++) {
-        hash = 33 * hash ^ str[i];
+    for (size_t i = 0; i < len; i++) {
+        hash = 33 * hash ^ bytes[i];
     }
     return hash;
 }
 
 // The abstract socket namespace is a lot simpler than it sounds: if the first
 // byte of the path is a null byte, then it gets looked up in this hashtable
-// instead of the filesystem.
+// instead of the filesystem. As on Linux, a name is the bytes after that null
+// byte up to the address length, null bytes included: it is not a C string,
+// and two names are the same only byte for byte.
 
 struct unix_abstract {
     unsigned refcount;
     uint32_t hash;
     uint32_t socket_id;
     struct list links;
+    size_t name_len;
+    char name[];
 };
 #define ABSTRACT_HASH_SIZE 1024
 static struct list abstract_hash[ABSTRACT_HASH_SIZE];
 static lock_t unix_abstract_lock = LOCK_INITIALIZER;
 
-static int unix_abstract_get(const char *name, struct fd *bind_fd, uint32_t *socket_id) {
-    uint32_t hash = str_hash(name);
+static int unix_abstract_get(const char *name, size_t name_len, struct fd *bind_fd, uint32_t *socket_id) {
+    uint32_t hash = bytes_hash(name, name_len);
     lock(&unix_abstract_lock);
     struct unix_abstract *sock_tmp;
     struct unix_abstract *sock = NULL;
@@ -524,7 +555,8 @@ static int unix_abstract_get(const char *name, struct fd *bind_fd, uint32_t *soc
     if (list_null(bucket))
         list_init(bucket);
     list_for_each_entry(bucket, sock_tmp, links) {
-        if (sock_tmp->hash == hash) {
+        if (sock_tmp->hash == hash && sock_tmp->name_len == name_len &&
+                memcmp(sock_tmp->name, name, name_len) == 0) {
             sock = sock_tmp;
             break;
         }
@@ -540,9 +572,11 @@ static int unix_abstract_get(const char *name, struct fd *bind_fd, uint32_t *soc
     }
 
     if (sock == NULL) {
-        sock = malloc(sizeof(struct unix_abstract));
+        sock = malloc(sizeof(struct unix_abstract) + name_len);
         sock->refcount = 0;
         sock->hash = hash;
+        sock->name_len = name_len;
+        memcpy(sock->name, name, name_len);
         sock->socket_id = unix_socket_next_id();
         list_add(bucket, &sock->links);
     }
@@ -605,7 +639,7 @@ static int sockaddr_read_bind(addr_t sockaddr_addr, void *sockaddr, uint_t *sock
                 err = unix_socket_get(path, bind_fd, &socket_id);
             } else {
                 STRACE(" unix abstract socket %s", path + 1);
-                err = unix_abstract_get(path + 1, bind_fd, &socket_id);
+                err = unix_abstract_get(path + 1, path_size - 1, bind_fd, &socket_id);
             }
             if (err < 0)
                 return err;
@@ -639,6 +673,11 @@ static int sockaddr_read(addr_t sockaddr_addr, void *sockaddr, uint_t *sockaddr_
 }
 
 static int sockaddr_write(addr_t sockaddr_addr, void *sockaddr, uint_t buffer_len, uint_t *sockaddr_len) {
+    // No address: the host gives none for a message from an unnamed unix
+    // socket (a socketpair, a connection whose end was never bound). As on
+    // Linux, the length is 0 and nothing is written.
+    if (*sockaddr_len == 0)
+        return 0;
     struct sockaddr *real_addr = sockaddr;
     struct sockaddr_ *fake_addr = sockaddr;
     fake_addr->family = sock_family_from_real(real_addr->sa_family);
@@ -744,15 +783,31 @@ int_t sys_connect(fd_t sock_fd, addr_t sockaddr_addr, uint_t sockaddr_len) {
 
     if (sock->socket.domain == AF_LOCAL_) {
         fill_cred(&sock->socket.unix_cred);
-        assert(sock->socket.unix_peer == NULL);
-        // Send a pointer to ourselves to the other end so they can set up the peer pointers.
-        ssize_t res = write(sock->real_fd, &sock, sizeof(struct fd *));
-        if (res == sizeof(struct fd *)) {
-            // Wait for acknowledgement that it happened.
+    }
+    // A datagram socket has no other end to accept it: it only names where
+    // its datagrams go.
+    if (sock->socket.domain == AF_LOCAL_ && sock->socket.type != SOCK_DGRAM_) {
+        assert(sock->socket.unix_peer == NULL && sock->socket.unix_pending == NULL);
+        struct unix_pending *pending = malloc(sizeof(struct unix_pending));
+        if (pending == NULL)
+            return _ENOMEM;
+        list_init(&pending->scm);
+        pending->client = sock;
+        lock(&peer_lock);
+        pending->id = unix_pending_next_id++;
+        list_add(&unix_pending_list, &pending->links);
+        sock->socket.unix_pending = pending;
+        unlock(&peer_lock);
+        uint64_t id = pending->id;
+        ssize_t res = write(sock->real_fd, &id, sizeof(id));
+        if (res != sizeof(id)) {
+            printk("unix connect(pid=%d comm=%s): writing connection id %llu returned %zd (errno %d)\n",
+                   current->pid, current->comm, (unsigned long long) id, res, errno);
             lock(&peer_lock);
-            while (sock->socket.unix_peer == NULL)
-                wait_for_ignore_signals(&sock->socket.unix_got_peer, &peer_lock, NULL);
+            sock->socket.unix_pending = NULL;
+            unix_pending_free(pending);
             unlock(&peer_lock);
+            return _ECONNREFUSED;
         }
     }
 
@@ -816,15 +871,62 @@ int_t sys_accept(fd_t sock_fd, addr_t sockaddr_addr, addr_t sockaddr_len_addr) {
         return client_f;
 
     if (sock->socket.domain == AF_LOCAL_) {
+        // The connecting end writes its id as soon as its connect is done,
+        // maybe just after this accept returned: wait for it, even on a
+        // non-blocking socket (Darwin's accept inherits O_NONBLOCK), so it is
+        // never left for the program to read as data.
+        uint64_t id = 0;
+        size_t got = 0;
+        int flags = fcntl(client, F_GETFL);
+        fcntl(client, F_SETFL, flags & ~O_NONBLOCK);
+        while (got < sizeof(id)) {
+            ssize_t res = read(client, (char *) &id + got, sizeof(id) - got);
+            if (res < 0 && errno == EINTR)
+                continue;
+            if (res <= 0) {
+                printk("unix accept(pid=%d comm=%s): reading connection id returned %zd (errno %d) after %zu bytes\n",
+                       current->pid, current->comm, res, errno, got);
+                break;
+            }
+            got += res;
+        }
+        fcntl(client, F_SETFL, flags);
+
         lock(&peer_lock);
         struct fd *client_fd = f_get(client_f);
         fill_cred(&client_fd->socket.unix_cred);
-        struct fd *peer;
-        ssize_t res = read(client, &peer, sizeof(peer));
-        if (res == sizeof(peer)) {
-            client_fd->socket.unix_peer = peer;
-            peer->socket.unix_peer = client_fd;
-            notify(&peer->socket.unix_got_peer);
+        // As on Linux, the accepted socket has the listener's address, for
+        // getsockname and /proc/net/unix.
+        client_fd->socket.unix_name_len = sock->socket.unix_name_len;
+        memcpy(client_fd->socket.unix_name, sock->socket.unix_name, sock->socket.unix_name_len);
+        // None is found when the connecting end closed before this accept
+        // without sending file descriptors (sock_close frees it then); with
+        // some, it is kept for this socket to receive them.
+        struct unix_pending *pending = NULL, *p;
+        if (got == sizeof(id)) {
+            list_for_each_entry(&unix_pending_list, p, links) {
+                if (p->id == id) {
+                    pending = p;
+                    break;
+                }
+            }
+        }
+        if (pending != NULL) {
+            struct fd *peer = pending->client;
+            if (peer != NULL) {
+                client_fd->socket.unix_peer = peer;
+                peer->socket.unix_peer = client_fd;
+                peer->socket.unix_pending = NULL;
+                notify(&peer->socket.unix_got_peer);
+            }
+            lock(&client_fd->lock);
+            struct scm *scm, *tmp;
+            list_for_each_entry_safe(&pending->scm, scm, tmp, queue) {
+                list_remove(&scm->queue);
+                list_add_tail(&client_fd->socket.unix_scm, &scm->queue);
+            }
+            unlock(&client_fd->lock);
+            unix_pending_free(pending);
         }
         unlock(&peer_lock);
     }
@@ -1390,6 +1492,11 @@ int_t sys_getsockopt(fd_t sock_fd, dword_t level, dword_t option, addr_t value_a
         if (value_len != sizeof(*cred))
             return _EINVAL;
         lock(&peer_lock);
+        // On Linux a connecting socket's peer credentials are the listener's,
+        // which iSH does not keep: before the other end accepts, wait for it
+        // and give the accepting process's.
+        while (sock->socket.domain == AF_LOCAL_ && sock->socket.unix_pending != NULL)
+            wait_for_ignore_signals(&sock->socket.unix_got_peer, &peer_lock, NULL);
         if (sock->socket.domain != AF_LOCAL_ || sock->socket.unix_peer == NULL) {
             cred->pid = 0;
             cred->uid = cred->gid = -1;
@@ -1609,14 +1716,18 @@ int_t sys_sendmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
             }
             lock(&peer_lock);
             struct fd *peer = sock->socket.unix_peer;
-            if (peer == NULL) {
+            if (peer != NULL) {
+                lock(&peer->lock);
+                list_add_tail(&peer->socket.unix_scm, &scm->queue);
+                unlock(&peer->lock);
+            } else if (sock->socket.unix_pending != NULL) {
+                // not accepted yet: accept hands them to the accepted socket
+                list_add_tail(&sock->socket.unix_pending->scm, &scm->queue);
+            } else {
                 unlock(&peer_lock);
                 err = _EPIPE;
                 goto out_free_scm;
             }
-            lock(&peer->lock);
-            list_add_tail(&peer->socket.unix_scm, &scm->queue);
-            unlock(&peer->lock);
             unlock(&peer_lock);
         }
     }
@@ -1644,6 +1755,8 @@ out_free_scm:
             lock(&peer->lock);
             list_remove_safe(&scm->queue);
             unlock(&peer->lock);
+        } else {
+            list_remove_safe(&scm->queue); // on its unix_pending, or on none
         }
         unlock(&peer_lock);
         scm_free(scm);
@@ -1696,8 +1809,10 @@ int_t sys_recvmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
     }
 
     char real_msg_control[CMSG_SPACE(sizeof(int))] = {}; // only used if needed
-    if (msg_fake.msg_controllen != 0) {
-        // msg_control, include room for one (1) fd
+    // msg_control, with room for the one fd that stands for the ones sent
+    // (sys_sendmsg). On a unix socket always: without it the host drops that
+    // fd, and the batch it stands for would be taken by the next message.
+    if (msg_fake.msg_controllen != 0 || sock->socket.domain == AF_LOCAL_) {
         msg.msg_control = real_msg_control;
         msg.msg_controllen = sizeof(real_msg_control);
     } else {
@@ -1800,8 +1915,12 @@ int_t sys_recvmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
         free(msg_iov[i].iov_base);
     }
 
-    // msg_control (changed)
+    // msg_control (changed). As Linux's scm_detach_fds: as many of the file
+    // descriptors as fit in the guest's buffer, the rest closed and
+    // MSG_CTRUNC set; msg_controllen is the space the message took.
+    size_t control_room = msg_fake.msg_controllen;
     msg_fake.msg_controllen = 0;
+    bool control_truncated = false;
     struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
     if (sock->socket.domain == AF_LOCAL_ && cmsg != NULL &&
             cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_RIGHTS) {
@@ -1819,19 +1938,35 @@ int_t sys_recvmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
             return err;
         }
 
-        uint8_t msg_control[sizeof(struct cmsghdr_) + scm->num_fds * sizeof(fd_t)];
-        struct cmsghdr_ *cmsg = (void *) msg_control;
-        cmsg->len = sizeof(msg_control);
-        cmsg->level = SOL_SOCKET_;
-        cmsg->type = SCM_RIGHTS_;
-        fd_t *fds = (void *) cmsg->data;
-        for (unsigned i = 0; i < scm->num_fds; i++) {
-            fds[i] = f_install(scm->fds[i], 0);
-            STRACE(" receiving fd %d", fds[i]);
+        unsigned fit = control_room < sizeof(struct cmsghdr_) ? 0 :
+            (control_room - sizeof(struct cmsghdr_)) / sizeof(fd_t);
+        if (fit > scm->num_fds)
+            fit = scm->num_fds;
+        uint8_t msg_control[sizeof(struct cmsghdr_) + fit * sizeof(fd_t)];
+        struct cmsghdr_ *ctl = (void *) msg_control;
+        fd_t *fds = (void *) ctl->data;
+        unsigned installed = 0;
+        for (; installed < fit; installed++) {
+            fd_t f = f_install(scm->fds[installed], (flags & MSG_CMSG_CLOEXEC_) ? O_CLOEXEC_ : 0);
+            if (f < 0)
+                break; // out of descriptors: f_install closed this one
+            fds[installed] = f;
+            STRACE(" receiving fd %d", f);
         }
-        if (user_write(msg_fake.msg_control, cmsg, cmsg->len))
-            return _EFAULT;
-        msg_fake.msg_controllen = msg.msg_controllen;
+        unsigned next = installed < fit ? installed + 1 : installed;
+        for (unsigned i = next; i < scm->num_fds; i++)
+            fd_close(scm->fds[i]);
+        control_truncated = installed < scm->num_fds;
+        free(scm);
+        if (installed > 0) {
+            ctl->len = sizeof(struct cmsghdr_) + installed * sizeof(fd_t);
+            ctl->level = SOL_SOCKET_;
+            ctl->type = SCM_RIGHTS_;
+            if (user_write(msg_fake.msg_control, ctl, ctl->len))
+                return _EFAULT;
+            size_t space = CMSG_SPACE_(installed * sizeof(fd_t));
+            msg_fake.msg_controllen = space < control_room ? space : control_room;
+        }
     }
 
     // by now the iovecs and scm have been freed so we can return
@@ -1848,6 +1983,8 @@ int_t sys_recvmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
 
     // msg_flags (changed)
     msg_fake.msg_flags = sock_flags_from_real(msg.msg_flags);
+    if (control_truncated)
+        msg_fake.msg_flags |= MSG_CTRUNC_;
 
     // Write back the updated msghdr to guest memory
 #ifdef GUEST_ARM64
@@ -2056,6 +2193,13 @@ static int sock_close(struct fd *fd) {
     struct fd *peer = fd->socket.unix_peer;
     if (peer != NULL)
         peer->socket.unix_peer = NULL;
+    struct unix_pending *pending = fd->socket.unix_pending;
+    if (pending != NULL) {
+        // Not accepted yet. Keep what it sent for the accepting end.
+        pending->client = NULL;
+        if (list_empty(&pending->scm))
+            unix_pending_free(pending);
+    }
     unlock(&peer_lock);
     if (fd->socket.domain == AF_LOCAL_) {
         lock(&fd->lock);
@@ -2163,7 +2307,15 @@ static bool sock_inet_query(struct fd *sock, struct sock_inet_entry *e) {
     return true;
 }
 
-int sock_inet_list(int family, int type, struct sock_inet_entry **entries) {
+struct sock_open {
+    struct fd *fd;
+    uid_t_ uid; // effective uid of a process that has it open
+};
+
+// The open sockets of family and type (any type if type < 0), each once
+// however many descriptors share it, retained: fd_close each. Returns how
+// many (free() *socks) or a negative errno.
+static int sock_collect(int family, int type, struct sock_open **socks_out) {
     // Collect the descriptor tables under pids_lock, then look into each with
     // only its own lock held: other paths take a table's lock before
     // pids_lock (see proc_pid_fd_readdir).
@@ -2191,15 +2343,15 @@ int sock_inet_list(int family, int type, struct sock_inet_entry **entries) {
     }
     unlock(&pids_lock);
 
-    struct sock_open { struct fd *fd; uid_t_ uid; } *socks = NULL;
+    struct sock_open *socks = NULL;
     size_t n_socks = 0;
     for (size_t t = 0; t < n_tables; t++) {
         struct fdtable *files = tables[t].files;
         lock(&files->lock);
         for (unsigned f = 0; f < files->size && err == 0; f++) {
             struct fd *fd = files->files[f];
-            if (fd == NULL || fd->ops != &socket_fdops ||
-                    fd->socket.domain != family || fd->socket.type != type)
+            if (fd == NULL || fd->ops != &socket_fdops || fd->socket.domain != family ||
+                    (type >= 0 && fd->socket.type != type))
                 continue;
             bool seen = false;
             for (size_t i = 0; i < n_socks && !seen; i++)
@@ -2218,13 +2370,32 @@ int sock_inet_list(int family, int type, struct sock_inet_entry **entries) {
         fdtable_release(files);
     }
     free(tables);
+    if (err < 0) {
+        for (size_t i = 0; i < n_socks; i++)
+            fd_close(socks[i].fd);
+        free(socks);
+        return err;
+    }
+    *socks_out = socks;
+    return (int) n_socks;
+}
 
-    struct sock_inet_entry *list = err == 0 && n_socks > 0 ? calloc(n_socks, sizeof(*list)) : NULL;
-    if (err == 0 && n_socks > 0 && list == NULL)
+int sock_inet_list(int family, int type, struct sock_inet_entry **entries) {
+    struct sock_open *socks = NULL;
+    int n_socks = sock_collect(family, type, &socks);
+    if (n_socks < 0)
+        return n_socks;
+    int err = 0;
+    struct sock_inet_entry *list = n_socks > 0 ? calloc(n_socks, sizeof(*list)) : NULL;
+    if (n_socks > 0 && list == NULL)
         err = _ENOMEM;
-    size_t n = 0;
-    for (size_t i = 0; i < n_socks; i++) {
+    int n = 0;
+    for (int i = 0; i < n_socks; i++) {
         if (err == 0 && sock_inet_query(socks[i].fd, &list[n])) {
+            if (type == SOCK_RAW_) {
+                list[n].local_port = socks[i].fd->socket.protocol;
+                list[n].remote_port = 0;
+            }
             list[n].uid = socks[i].uid;
             list[n].inode = socks[i].fd->stat.inode;
             n++;
@@ -2237,7 +2408,44 @@ int sock_inet_list(int family, int type, struct sock_inet_entry **entries) {
         return err;
     }
     *entries = list;
-    return (int) n;
+    return n;
+}
+
+int sock_unix_list(struct sock_unix_entry **entries) {
+    struct sock_open *socks = NULL;
+    int n_socks = sock_collect(AF_LOCAL_, -1, &socks);
+    if (n_socks < 0)
+        return n_socks;
+    int err = 0;
+    struct sock_unix_entry *list = n_socks > 0 ? calloc(n_socks, sizeof(*list)) : NULL;
+    if (n_socks > 0 && list == NULL)
+        err = _ENOMEM;
+    for (int i = 0; i < n_socks; i++) {
+        struct fd *sock = socks[i].fd;
+        if (err == 0) {
+            struct sock_unix_entry *e = &list[i];
+            e->type = sock->socket.type;
+            int listening = 0;
+            socklen_t len = sizeof(listening);
+            e->listening = getsockopt(sock->real_fd, SOL_SOCKET, SO_ACCEPTCONN, &listening, &len) == 0 &&
+                listening;
+            struct sockaddr_storage addr;
+            len = sizeof(addr);
+            e->connected = !e->listening &&
+                getpeername(sock->real_fd, (struct sockaddr *) &addr, &len) == 0;
+            e->inode = sock->stat.inode;
+            e->name_len = sock->socket.unix_name_len;
+            memcpy(e->name, sock->socket.unix_name, e->name_len);
+        }
+        fd_close(sock);
+    }
+    free(socks);
+    if (err < 0) {
+        free(list);
+        return err;
+    }
+    *entries = list;
+    return n_socks;
 }
 
 const struct fd_ops socket_fdops = {
