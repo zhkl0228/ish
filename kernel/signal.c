@@ -784,6 +784,8 @@ void receive_signals(void) {
         current->syscall_restartable = false;
     }
     current->syscall_restart_nohandler = false;
+#else
+    (void) handler_ran;   // x86 restarts nothing without a handler
 #endif
 
     unlock(&sighand->lock);
