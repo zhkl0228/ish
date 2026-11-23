@@ -653,6 +653,25 @@ void eor3_helper(uint8_t *vd, uint8_t *vn, uint8_t *vm, uint8_t *va) {
 }
 
 /*
+ * BCAX: bit clear and XOR, Vn ^ (Vm & ~Va)
+ */
+void bcax_helper(uint8_t *vd, uint8_t *vn, uint8_t *vm, uint8_t *va) {
+    for (int i = 0; i < 16; i++) {
+        vd[i] = vn[i] ^ (vm[i] & ~va[i]);
+    }
+}
+
+/*
+ * XAR: XOR and rotate, each 64-bit lane of Vn ^ Vm rotated right by imm6
+ */
+void xar_helper(uint64_t *vd, uint64_t *vn, uint64_t *vm, uint64_t imm6) {
+    for (int i = 0; i < 2; i++) {
+        uint64_t x = vn[i] ^ vm[i];
+        vd[i] = imm6 == 0 ? x : x >> imm6 | x << (64 - imm6);
+    }
+}
+
+/*
  * SM3PARTW1: SM3 message schedule update (part 1)
  */
 void sm3partw1_helper(uint32_t *vd, uint32_t *vn, uint32_t *vm) {

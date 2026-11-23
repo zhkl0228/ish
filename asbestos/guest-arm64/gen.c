@@ -476,6 +476,8 @@ extern void gadget_sha512su1(void);        // SHA512SU1 Vd.2D, Vn.2D, Vm.2D
 extern void gadget_sha512h(void);          // SHA512H Qd, Qn, Vm.2D
 extern void gadget_sha512h2(void);         // SHA512H2 Qd, Qn, Vm.2D
 extern void gadget_eor3(void);             // EOR3 Vd.16B, Vn.16B, Vm.16B, Va.16B
+extern void gadget_bcax(void);             // BCAX Vd.16B, Vn.16B, Vm.16B, Va.16B
+extern void gadget_xar(void);              // XAR Vd.2D, Vn.2D, Vm.2D, #imm6
 extern void gadget_sm3partw1(void);        // SM3PARTW1 Vd.4S, Vn.4S, Vm.4S
 extern void gadget_sm4e(void);             // SM4E Vd.4S, Vn.4S
 extern void gadget_sve_eor_d(void);        // SVE EOR Zd.D, Zn.D, Zm.D (128-bit modeled)
@@ -6475,6 +6477,30 @@ skip_three_different:
         uint32_t rm = (insn >> 16) & 0x1f;
         gen(state, (unsigned long) gadget_eor3);
         gen(state, rd | (rn << 8) | (rm << 16) | (ra << 24));
+        return 1;
+    }
+
+    // BCAX: Vn ^ (Vm & ~Va) (FEAT_SHA3, as EOR3)
+    // Pattern: 1100 1110 001 Rm 0 Ra Rn Rd (0xce200000)
+    if ((insn & 0xffe08000) == 0xce200000) {
+        uint32_t rd = insn & 0x1f;
+        uint32_t rn = (insn >> 5) & 0x1f;
+        uint32_t ra = (insn >> 10) & 0x1f;
+        uint32_t rm = (insn >> 16) & 0x1f;
+        gen(state, (unsigned long) gadget_bcax);
+        gen(state, rd | (rn << 8) | (rm << 16) | (ra << 24));
+        return 1;
+    }
+
+    // XAR: each 64-bit lane of Vn ^ Vm rotated right by imm6 (FEAT_SHA3)
+    // Pattern: 1100 1110 100 Rm imm6 Rn Rd (0xce800000)
+    if ((insn & 0xffe00000) == 0xce800000) {
+        uint32_t rd = insn & 0x1f;
+        uint32_t rn = (insn >> 5) & 0x1f;
+        uint32_t imm6 = (insn >> 10) & 0x3f;
+        uint32_t rm = (insn >> 16) & 0x1f;
+        gen(state, (unsigned long) gadget_xar);
+        gen(state, rd | (rn << 8) | (rm << 16) | (imm6 << 24));
         return 1;
     }
 

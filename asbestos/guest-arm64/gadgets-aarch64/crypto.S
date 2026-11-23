@@ -609,6 +609,91 @@ sha512h2_soft:
     gret
 
 /*
+ * BCAX Vd.16B, Vn.16B, Vm.16B, Va.16B: Vn ^ (Vm & ~Va) (FEAT_SHA3)
+ * Code stream: [gadget addr][rd | rn<<8 | rm<<16 | ra<<24]
+ */
+.gadget bcax
+    ldr x8, [_pc]
+    add _pc, _pc, #8
+
+    and x9, x8, #0x1f
+    ubfx x10, x8, #8, #5
+    ubfx x11, x8, #16, #5
+    ubfx x12, x8, #24, #5
+
+    add x13, _cpu, #CPU_fp
+
+    stp x19, x20, [sp, #-0x60]!
+    stp x21, x22, [sp, #0x10]
+    stp x23, x24, [sp, #0x20]
+    stp x25, x26, [sp, #0x30]
+    stp x27, x28, [sp, #0x40]
+    str lr, [sp, #0x50]
+
+    save_c
+    lsl x0, x9, #4
+    add x0, x13, x0         // rd_ptr
+    lsl x1, x10, #4
+    add x1, x13, x1         // rn_ptr
+    lsl x2, x11, #4
+    add x2, x13, x2         // rm_ptr
+    lsl x3, x12, #4
+    add x3, x13, x3         // ra_ptr
+    bl NAME(bcax_helper)
+    restore_c
+
+    ldr lr, [sp, #0x50]
+    ldp x27, x28, [sp, #0x40]
+    ldp x25, x26, [sp, #0x30]
+    ldp x23, x24, [sp, #0x20]
+    ldp x21, x22, [sp, #0x10]
+    ldp x19, x20, [sp], #0x60
+
+    gret
+
+/*
+ * XAR Vd.2D, Vn.2D, Vm.2D, #imm6: each lane of Vn ^ Vm rotated right (FEAT_SHA3)
+ * Code stream: [gadget addr][rd | rn<<8 | rm<<16 | imm6<<24]
+ */
+.gadget xar
+    ldr x8, [_pc]
+    add _pc, _pc, #8
+
+    and x9, x8, #0x1f
+    ubfx x10, x8, #8, #5
+    ubfx x11, x8, #16, #5
+    ubfx x12, x8, #24, #6
+
+    add x13, _cpu, #CPU_fp
+
+    stp x19, x20, [sp, #-0x60]!
+    stp x21, x22, [sp, #0x10]
+    stp x23, x24, [sp, #0x20]
+    stp x25, x26, [sp, #0x30]
+    stp x27, x28, [sp, #0x40]
+    str lr, [sp, #0x50]
+
+    save_c
+    lsl x0, x9, #4
+    add x0, x13, x0         // rd_ptr
+    lsl x1, x10, #4
+    add x1, x13, x1         // rn_ptr
+    lsl x2, x11, #4
+    add x2, x13, x2         // rm_ptr
+    mov x3, x12             // imm6
+    bl NAME(xar_helper)
+    restore_c
+
+    ldr lr, [sp, #0x50]
+    ldp x27, x28, [sp, #0x40]
+    ldp x25, x26, [sp, #0x30]
+    ldp x23, x24, [sp, #0x20]
+    ldp x21, x22, [sp, #0x10]
+    ldp x19, x20, [sp], #0x60
+
+    gret
+
+/*
  * SM3PARTW1 Vd.4S, Vn.4S, Vm.4S
  * Code stream: [gadget addr][rd | rn<<8 | rm<<16]
  */
