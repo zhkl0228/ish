@@ -18,6 +18,7 @@
 #include <unistd.h>
 #include <dlfcn.h>
 #include <fnmatch.h>
+#include <limits.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stddef.h>
@@ -3619,6 +3620,47 @@ size_t jit_describe(char *buf, size_t size) {
             seen = mod_aot_known[m] && ((mod_same[m] | mod_family[m]) >> i & 1);
         if (!seen)
             OUT("  %-40s not loaded by any process yet\n", aot_images[i]->path);
+    }
+    // Where the other blocks are, for picking the next images to record: the
+    // modules without an image with the most. [anon] is code the guest wrote
+    // at run time (JIT compilers': HotSpot's interpreter and compiled
+    // methods, V8's), which no image can serve. Blocks count compilations,
+    // not time: code a JIT compiler rewrites is compiled again.
+    if (pic_on) {
+        uint64_t total = 0;
+        for (unsigned m = 0; m < mod_next_cap; m++)
+            total += mod_blocks[m];
+        OUT("modules without an image, most blocks first (blocks, %% of the %llu in modules):\n",
+            (unsigned long long) total);
+        uint64_t prev = UINT64_MAX;
+        unsigned prev_m = 0, shown = 0, rest = 0;
+        uint64_t rest_blocks = 0;
+        for (unsigned m = 0; m < mod_next_cap; m++)
+            if (!mod_aot[m] && mod_blocks[m])
+                rest++, rest_blocks += mod_blocks[m];
+        // the 15 with the most, in order: each round the most below the last one shown
+        // (ties in index order)
+        for (; shown < 15 && shown < rest; shown++) {
+            unsigned best = UINT_MAX;
+            for (unsigned m = 0; m < mod_next_cap; m++) {
+                if (mod_aot[m] || !mod_blocks[m])
+                    continue;
+                bool below = mod_blocks[m] < prev || (mod_blocks[m] == prev && m > prev_m);
+                if (below && (best == UINT_MAX || mod_blocks[m] > mod_blocks[best]))
+                    best = m;
+            }
+            prev = mod_blocks[best], prev_m = best;
+            rest_blocks -= mod_blocks[best];
+            pthread_mutex_lock(&cm_lock);
+            const char *path = best < cm_nmods ? cm_mods[best].path : "?";
+            OUT("  %-40s %8llu  %4.1f%%%s\n", path, (unsigned long long) mod_blocks[best],
+                100.0 * (double) mod_blocks[best] / (double) total,
+                strcmp(path, "[anon]") == 0 ? "  (written at run time: no image can serve it)" : "");
+            pthread_mutex_unlock(&cm_lock);
+        }
+        if (rest > shown)
+            OUT("  %u more modules                         %8llu  %4.1f%%\n", rest - shown,
+                (unsigned long long) rest_blocks, 100.0 * (double) rest_blocks / (double) total);
     }
     pthread_mutex_unlock(&reg_lock);
 #undef OUT
