@@ -396,18 +396,33 @@ static void poll_spin_report(struct poll *poll_, unsigned spurious,
 // ready by the fd's own poll took none of them, so the edge of data already
 // reported came out of the next wait's host wait as if new, and reported the
 // data again (epoll ET: one report per write). poll_->lock held.
+//
+// One round of the registrations: each gives a host wait at most an event per
+// filter (two, read and write) and the notify pipe one, and one ready and
+// level-triggered comes out of every wait, put back behind the rest. Taking
+// edges until a wait returned less than the buffer never ended with 16 of
+// those ready (Claude Code's runtime polls dozens of sockets): the thread spun
+// in the host holding this lock, deaf to SIGKILL, and whatever would wake the
+// poll (a key typed, on the main thread) waited for it, until the watchdog
+// killed the app.
 static void poll_take_host_edges(struct poll *poll_) {
+    int round = 1;
+    struct poll_fd *pfd;
+    list_for_each_entry(&poll_->poll_fds, pfd, fds)
+        round += 2;
     struct real_poll_event e[16];
+    const int size = sizeof(e) / sizeof(e[0]);
     struct timespec now = {0, 0};
-    int n;
+    int n, taken = 0;
     do {
-        n = real_poll_wait(&poll_->real, e, sizeof(e) / sizeof(e[0]), &now);
+        n = real_poll_wait(&poll_->real, e, size, &now);
         for (int i = 0; i < n; i++) {
-            struct poll_fd *pfd = rpe_data(&e[i]);
+            pfd = rpe_data(&e[i]);
             if (pfd != NULL && pfd->poll != NULL && (pfd->types & POLL_EDGETRIGGERED))
                 pfd->triggered_types &= ~rpe_events(&e[i]);
         }
-    } while (n == (int) (sizeof(e) / sizeof(e[0])));
+        taken += n;
+    } while (n == size && taken < round);
 }
 
 int poll_wait(struct poll *poll_, poll_callback_t callback, void *context, struct timespec *timeout) {
