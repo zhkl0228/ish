@@ -58,13 +58,25 @@ struct stat_arm64 stat_convert_arm64(struct statbuf stat) {
 
 int generic_statat(struct fd *at, const char *path_raw, struct statbuf *stat, bool follow_links) {
     char path[MAX_PATH];
-    int err = path_normalize(at, path_raw, path, follow_links ? N_SYMLINK_FOLLOW : N_SYMLINK_NOFOLLOW);
-    if (err < 0)
+    bool via_procfs;
+    int err = path_normalize_via(at, path_raw, path, follow_links ? N_SYMLINK_FOLLOW : N_SYMLINK_NOFOLLOW,
+                                 &via_procfs);
+    if (err >= 0) {
+        struct mount *mount = find_mount_and_trim_path(path);
+        memset(stat, 0, sizeof(*stat));
+        err = mount->fs->stat(mount, path, stat);
+        mount_release(mount);
+    }
+    if (err >= 0 || !via_procfs)
         return err;
-    struct mount *mount = find_mount_and_trim_path(path);
+    // a /proc/<pid>/fd/N link to a pipe (/dev/fd/N): the pipe's. Only when
+    // the path did not stat through a procfs link: no cost to the others.
+    struct fd *file = generic_fd_link(at, path_raw);
+    if (file == NULL || IS_ERR(file))
+        return file != NULL ? PTR_ERR(file) : err;
     memset(stat, 0, sizeof(*stat));
-    err = mount->fs->stat(mount, path, stat);
-    mount_release(mount);
+    err = file->mount->fs->fstat(file, stat);
+    fd_close(file);
     return err;
 }
 

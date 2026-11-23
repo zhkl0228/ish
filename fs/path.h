@@ -24,6 +24,9 @@
 // at is the file descriptor to use as a base to interpret relative paths. If
 // at is AT_PWD, uses current->pwd (with appropriate locking).
 int path_normalize(struct fd *at, const char *path, char *out, int flags);
+// The same, and whether the walk followed a procfs symlink (self, fd/N), which
+// the result is never cached for, whether it succeeded or not
+int path_normalize_via(struct fd *at, const char *path, char *out, int flags, bool *via_procfs);
 bool path_is_normalized(const char *path);
 
 // [T-ish-pathcache-global] Drop every cached normalization. Call after any

@@ -1,3 +1,4 @@
+#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -32,19 +33,79 @@ bool contains_mount_point(const char *path) {
     return false;
 }
 
+static struct fd *generic_openat_path(struct fd *at, const char *path_raw, int flags, int mode, bool *via_procfs);
+
+// Linux's MAXSYMLINKS
+#define FD_LINK_MAX_LINKS 40
+
+struct fd *generic_fd_link(struct fd *at, const char *path_raw) {
+    char cur[MAX_PATH];
+    if (strlen(path_raw) >= sizeof(cur))
+        return NULL;
+    strcpy(cur, path_raw);
+    for (int links = 0; links < FD_LINK_MAX_LINKS; links++) {
+        char path[MAX_PATH];
+        if (path_normalize(at, cur, path, N_SYMLINK_NOFOLLOW) < 0)
+            return NULL;
+        char dir[MAX_PATH];
+        strcpy(dir, path);
+        *strrchr(dir, '/') = '\0';
+        struct mount *mount = find_mount_and_trim_path(path);
+        struct fd *file = mount->fs == &procfs ? proc_fd_link_file(path) : NULL;
+        char target[MAX_PATH];
+        ssize_t n = _EINVAL;
+        if (file == NULL && mount->fs->readlink != NULL)
+            n = mount->fs->readlink(mount, path, target, sizeof(target) - 1);
+        mount_release(mount);
+        if (file != NULL)
+            return file;
+        // not a link: no fd link on the way
+        if (n < 0)
+            return NULL;
+        target[n] = '\0';
+        if (target[0] == '/')
+            strcpy(cur, target);
+        else if ((size_t) snprintf(cur, sizeof(cur), "%s/%s", dir, target) >= sizeof(cur))
+            return NULL;
+        at = AT_PWD;
+    }
+    return NULL;
+}
+
 struct fd *generic_openat(struct fd *at, const char *path_raw, int flags, int mode) {
     if (flags & O_RDWR_ && flags & O_WRONLY_)
         return ERR_PTR(_EINVAL);
+    bool via_procfs;
+    struct fd *fd = generic_openat_path(at, path_raw, flags, mode, &via_procfs);
+    if (!IS_ERR(fd) || !via_procfs)
+        return fd;
+    // only when the path did not open, through a procfs link: no cost to
+    // the others
+    struct fd *file = generic_fd_link(at, path_raw);
+    if (file == NULL || IS_ERR(file))
+        return file != NULL ? file : fd;
+    // a pipe (the only file there is here): the end the access mode asks
+    // for, shared. Linux opens the pipe anew, either end.
+    int end = fcntl(file->real_fd, F_GETFL) & O_ACCMODE;
+    int want = flags & O_RDWR_ ? O_RDWR : flags & O_WRONLY_ ? O_WRONLY : O_RDONLY;
+    if (end == want)
+        return file;
+    FIXME("open of %s, a pipe's %s end, with flags %#x not implemented", path_raw, end == O_RDONLY ? "read" : "write",
+          flags);
+    fd_close(file);
+    return fd;
+}
 
+static struct fd *generic_openat_path(struct fd *at, const char *path_raw, int flags, int mode, bool *via_procfs) {
     // TODO really, really, seriously reconsider what I'm doing with the strings
     char path[MAX_PATH];
     // O_NOFOLLOW has to be honored here rather than by handing the flag to the
     // host open(): path_normalize resolves the final component itself, so by
     // the time the fs open() runs the symlink is already gone. Leaving it
     // unresolved makes the S_ISLNK check below return ELOOP, as Linux does.
-    int err = path_normalize(at, path_raw, path,
+    int err = path_normalize_via(at, path_raw, path,
             (flags & O_NOFOLLOW_ ? N_SYMLINK_NOFOLLOW : N_SYMLINK_FOLLOW) |
-            (flags & O_CREAT_ ? N_PARENT_DIR_WRITE : 0));
+            (flags & O_CREAT_ ? N_PARENT_DIR_WRITE : 0), via_procfs);
     if (err < 0)
         return ERR_PTR(err);
     struct mount *mount = find_mount_and_trim_path(path);

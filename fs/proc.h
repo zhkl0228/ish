@@ -69,6 +69,11 @@ mode_t_ proc_entry_mode(struct proc_entry *entry);
 void proc_entry_getname(struct proc_entry *entry, char *buf);
 int proc_entry_stat(struct proc_entry *entry, struct statbuf *stat);
 void proc_entry_cleanup(struct proc_entry *entry);
+// /proc/<pid>/fd/N's file, if it has no path to be followed to
+// (fs/proc/pid.c); NULL if not
+struct fd *proc_pid_fd_file(struct proc_entry *entry);
+// The same for path, procfs's
+struct fd *proc_fd_link_file(const char *path);
 
 void free_string_array(char **array);
 

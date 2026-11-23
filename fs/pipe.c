@@ -1,4 +1,5 @@
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 #include "kernel/calls.h"
 #include "fs/fd.h"
@@ -9,7 +10,7 @@
 // is already closed (f_install() closes the fd it could not install, and with
 // it real_fd), so a caller must never close() it again - by then the number
 // may belong to another thread of the app (CFNetwork, boringssl, AVAudio).
-static fd_t pipe_f_create(int pipe_fd, int flags) {
+static fd_t pipe_f_create(int pipe_fd, unsigned long inode, int flags) {
     struct fd *fd = adhoc_fd_create(&realfs_fdops);
     if (fd == NULL) {
         close(pipe_fd);
@@ -18,6 +19,13 @@ static fd_t pipe_f_create(int pipe_fd, int flags) {
     fd->real_fd = pipe_fd;
     fd->type = S_IFIFO; // realfs_read and _write wait for a signal on it too
     fd->stat.mode = S_IFIFO | 0660;
+    // the pipe's, both ends': fstat, /proc/<pid>/fd's pipe:[inode], and
+    // diff, which takes two of the same as one file
+    fd->stat.inode = inode;
+    // the rest as Linux's pipefs has them
+    fd->stat.nlink = 1;
+    fd->stat.blksize = 4096;
+    fd->stat.atime = fd->stat.mtime = fd->stat.ctime = time(NULL);
     fd->stat.uid = current->uid;
     fd->stat.gid = current->gid;
     return f_install(fd, flags);
@@ -39,12 +47,13 @@ int_t sys_pipe2(addr_t pipe_addr, int_t flags) {
     // by pipe_f_create() when it fails, by f_close() once it is installed,
     // and here only while it has no guest fd yet.
     int fp[2];
-    err = fp[0] = pipe_f_create(p[0], flags);
+    unsigned long inode = adhoc_new_inode();
+    err = fp[0] = pipe_f_create(p[0], inode, flags);
     if (fp[0] < 0) {
         close(p[1]);
         return err;
     }
-    err = fp[1] = pipe_f_create(p[1], flags);
+    err = fp[1] = pipe_f_create(p[1], inode, flags);
     if (fp[1] < 0)
         goto close_fake_0;
 

@@ -274,7 +274,13 @@ static int __path_normalize(const char *at_path, const char *path, char *out, in
 }
 
 int path_normalize(struct fd *at, const char *path, char *out, int flags) {
+    bool via_procfs;
+    return path_normalize_via(at, path, out, flags, &via_procfs);
+}
+
+int path_normalize_via(struct fd *at, const char *path, char *out, int flags, bool *via_procfs) {
     assert(at != NULL);
+    *via_procfs = false;
     if (strcmp(path, "") == 0)
         return _ENOENT;
 
@@ -312,6 +318,7 @@ int path_normalize(struct fd *at, const char *path, char *out, int flags) {
 
     bool uncacheable = false;
     int result = __path_normalize(at != NULL ? at_path : NULL, path, out, flags, 0, &uncacheable);
+    *via_procfs = uncacheable;
 
     // Only successful results are cached; an error must be re-derived.
     if (result == 0 && !uncacheable)

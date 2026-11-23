@@ -698,8 +698,10 @@ static inline int fast_fstat64(struct cpu_state *cpu) {
     if (fd == NULL)
         return -1;  // Fall back to slow path
 
-    // Fast path condition: fd is realfs (not adhoc, not procfs, etc.)
-    if (fd->ops != &realfs_fdops)
+    // Fast path condition: fd is realfs (not adhoc, not procfs, etc.). A
+    // pipe has realfs's ops but a stat of its own (fs/pipe.c): its inode,
+    // which /proc/<pid>/fd links to, and the guest's owner.
+    if (fd->ops != &realfs_fdops || (is_adhoc_fd(fd) && S_ISFIFO(fd->stat.mode)))
         return -1;  // Fall back to slow path
 
     // Direct host fstat call (bypass generic layers)

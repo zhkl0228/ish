@@ -243,6 +243,13 @@ void create_some_device_nodes(void) {
     make_char_device("/dev/random", MEM_MAJOR, DEV_RANDOM_MINOR);
     make_char_device("/dev/urandom", MEM_MAJOR, DEV_URANDOM_MINOR);
 
+    // the links Linux's /dev has (udev's, OpenRC's devfs's): bash's process
+    // substitution, <(...), opens /dev/fd/N. Left alone if there.
+    generic_symlinkat("/proc/self/fd", AT_PWD, "/dev/fd");
+    generic_symlinkat("/proc/self/fd/0", AT_PWD, "/dev/stdin");
+    generic_symlinkat("/proc/self/fd/1", AT_PWD, "/dev/stdout");
+    generic_symlinkat("/proc/self/fd/2", AT_PWD, "/dev/stderr");
+
     generic_mkdirat(AT_PWD, "/dev/pts", 0755);
     // POSIX shared memory and named semaphores (shm_open, sem_open) are files
     // in /dev/shm, a tmpfs on Linux that programs take for granted: without

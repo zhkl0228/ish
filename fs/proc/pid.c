@@ -550,6 +550,42 @@ static int proc_pid_fd_readlink(struct proc_entry *entry, char *buf) {
     return err;
 }
 
+// The file a /proc/<pid>/fd/N link is to, when it has no path the link's
+// text could be followed to: a pipe ("pipe:[N]"), which bash's process
+// substitution, <(...) and >(...), opens as /dev/fd/N. Linux's links are to
+// the file itself (generic_fd_link). NULL if the entry is no such link, or
+// its file has a path (or is none here: logged).
+struct fd *proc_pid_fd_file(struct proc_entry *entry) {
+    if (entry->meta != &proc_pid_fd)
+        return NULL;
+    struct task *task = proc_get_task(entry);
+    if (task == NULL)
+        return NULL;
+    // another user's only to root, as Linux's ptrace access check
+    if (!superuser() && task->uid != current->euid) {
+        proc_put_task(task);
+        return ERR_PTR(_EACCES);
+    }
+    lock(&task->files->lock);
+    struct fd *fd = fdtable_get(task->files, entry->fd);
+    if (fd != NULL)
+        fd = fd_retain(fd);
+    unlock(&task->files->lock);
+    proc_put_task(task); // releases pids_lock
+    if (fd == NULL)
+        return NULL;
+    if (is_adhoc_fd(fd) && fd->type == S_IFIFO)
+        return fd;
+    if (is_adhoc_fd(fd)) {
+        char link[MAX_PATH];
+        if (generic_getpath(fd, link) < 0)
+            strcpy(link, "?");
+        FIXME("/proc/%d/fd/%d (%s) as its file not implemented", entry->pid, entry->fd, link);
+    }
+    fd_close(fd);
+    return NULL;
+}
+
 static int proc_pid_exe_readlink(struct proc_entry *entry, char *buf) {
     struct task *task = proc_get_task(entry);
     if (task == NULL)

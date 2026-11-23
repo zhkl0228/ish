@@ -297,12 +297,9 @@ static int netlink_stub_recvmsg(struct fd *sock, addr_t msghdr_addr, int flags) 
 
 // Sockets get inode numbers of their own, as from Linux's sockfs: fstat
 // reports one, /proc/<pid>/fd shows socket:[inode], and /proc/net/tcp and udp
-// list it, which is how netstat -p and ss -p find a socket's process. They
-// start at 10000, as Linux's are never short: net-tools' netstat ignores a
-// link shorter than "socket:[NN]".
-static _Atomic unsigned long sock_last_inode = 9999;
+// list it, which is how netstat -p and ss -p find a socket's process.
 static unsigned long sock_new_inode(void) {
-    return atomic_fetch_add(&sock_last_inode, 1) + 1;
+    return adhoc_new_inode();
 }
 
 static fd_t netlink_stub_socket(dword_t type, dword_t protocol) {

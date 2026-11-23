@@ -1,3 +1,4 @@
+#include <stdatomic.h>
 #include <string.h>
 #include <sys/stat.h>
 #include "debug.h"
@@ -37,6 +38,12 @@ static int adhoc_fsetattr(struct fd *fd, struct attr attr) {
             return _EINVAL;
     }
     return 0;
+}
+
+static _Atomic unsigned long adhoc_last_inode = 9999;
+
+unsigned long adhoc_new_inode(void) {
+    return atomic_fetch_add(&adhoc_last_inode, 1) + 1;
 }
 
 // What /proc/<pid>/fd links to: socket:[inode] and pipe:[inode] as on Linux,

@@ -47,6 +47,15 @@ found:
 
 extern const struct fd_ops procfs_fdops;
 
+struct fd *proc_fd_link_file(const char *path) {
+    struct proc_entry entry = {0};
+    if (proc_lookup(path, &entry) < 0)
+        return NULL;
+    struct fd *fd = proc_pid_fd_file(&entry);
+    proc_entry_cleanup(&entry);
+    return fd;
+}
+
 static struct fd *proc_open(struct mount *UNUSED(mount), const char *path, int UNUSED(flags), int UNUSED(mode)) {
     struct proc_entry entry = {0};
     int err = proc_lookup(path, &entry);

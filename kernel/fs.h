@@ -66,6 +66,11 @@ int generic_statat(struct fd *at, const char *path, struct statbuf *stat, bool f
 int generic_setattrat(struct fd *at, const char *path, struct attr attr, bool follow_links);
 int generic_utime(struct fd *at, const char *path, struct timespec atime, struct timespec mtime, bool follow_links);
 ssize_t generic_readlinkat(struct fd *at, const char *path, char *buf, size_t bufsize);
+// The file path is, through links, a /proc/<pid>/fd/N link to (/dev/fd/N,
+// /dev/stdin), when it has no path the link's text could be followed to: a
+// pipe's "pipe:[N]" (fs/proc/pid.c). Retained; NULL if path is no such link.
+// Linux's links are to the file itself.
+struct fd *generic_fd_link(struct fd *at, const char *path);
 int generic_mkdirat(struct fd *at, const char *path, mode_t_ mode);
 
 int access_check(struct statbuf *stat, int check);
@@ -186,6 +191,10 @@ struct mount *find_mount_and_trim_path(char *path);
 
 // adhoc fs
 struct fd *adhoc_fd_create(const struct fd_ops *ops);
+// An inode number for a socket or a pipe, as Linux's sockfs and pipefs take
+// theirs from one counter (get_next_ino). From 10000, as Linux's are never
+// short: net-tools' netstat ignores a link shorter than "socket:[NN]".
+unsigned long adhoc_new_inode(void);
 // this is for the "wtf is apple smoking" section
 bool is_adhoc_fd(struct fd *fd);
 
