@@ -484,7 +484,7 @@ bool (*remove_user_default)(const char *name);
     return _value >= __CursorStyleFirst && _value < __CursorStyleLast;
 }
 
-- (NSString *)htermCursorShape {
+- (NSString *)cursorShapeName {
     switch (self.cursorStyle) {
         case CursorStyleBlock:
             return @"BLOCK";

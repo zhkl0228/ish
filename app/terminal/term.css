@@ -2,10 +2,20 @@ body {
     margin: 0;
     background: transparent;
     overflow: hidden;
+    /* The app selects (a long press), not the page: no selection or callout of its own */
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
 }
 
 #terminal {
     position: absolute;
-    top: 0; bottom: 0;
-    left: 0; right: 0;
+    top: 4px; bottom: 4px;
+    left: 4px; right: 4px;
+}
+
+/* The app's scroll view stands for xterm.js's, and shows the scroll bar */
+.xterm .xterm-scrollable-element > .scrollbar,
+.xterm .xterm-scrollable-element > .shadow {
+    display: none !important;
 }

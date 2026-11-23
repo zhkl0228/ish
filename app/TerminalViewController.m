@@ -911,7 +911,7 @@ static NSString *ShellQuoted(NSString *string) {
     NSString *title = [self.selectedSession.displayTitle stringByReplacingOccurrencesOfString:@"/" withString:@"-"];
     NSString *name = [title stringByAppendingPathExtension:@"txt"] ?: @"scrollback.txt";
     [self.termView fetchTextWithCompletion:^(NSString *text) {
-        // hterm pads the screen with empty rows below the cursor; drop them.
+        // The text ends with the screen's empty rows below the cursor; drop them.
         NSString *trimmed = [text stringByTrimmingCharactersInSet:NSCharacterSet.newlineCharacterSet];
         NSURL *url = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:name]];
         NSError *error = nil;

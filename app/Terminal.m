@@ -114,7 +114,7 @@ static NSMapTable<NSUUID *, Terminal *> *terminalsByUUID;
     }
 }
 
-static NSString *const TERMINAL_HANDLERS[] = {@"load", @"log", @"sendInput", @"resize", @"propUpdate", @"setTitle"};
+static NSString *const TERMINAL_HANDLERS[] = {@"load", @"log", @"sendInput", @"sendBinary", @"resize", @"propUpdate", @"setTitle", @"copyText"};
 
 NSNotificationName const TerminalTitleDidChangeNotification = @"TerminalTitleDidChangeNotification";
 
@@ -172,6 +172,13 @@ NSNotificationName const TerminalTitleDidChangeNotification = @"TerminalTitleDid
     } else if ([message.name isEqualToString:@"sendInput"]) {
         NSData *data = [message.body dataUsingEncoding:NSUTF8StringEncoding];
         [self sendInput:data];
+    } else if ([message.name isEqualToString:@"sendBinary"]) {
+        // bytes, one to a character (xterm.js's onBinary: old mouse reports)
+        NSData *data = [message.body dataUsingEncoding:NSISOLatin1StringEncoding];
+        [self sendInput:data];
+    } else if ([message.name isEqualToString:@"copyText"]) {
+        // a program's copy (OSC 52)
+        UIPasteboard.generalPasteboard.string = message.body;
     } else if ([message.name isEqualToString:@"resize"]) {
         [self syncWindowSize];
     } else if ([message.name isEqualToString:@"propUpdate"]) {
@@ -203,7 +210,7 @@ NSNotificationName const TerminalTitleDidChangeNotification = @"TerminalTitleDid
 
 - (void)setEnableVoiceOverAnnounce:(BOOL)enableVoiceOverAnnounce {
     _enableVoiceOverAnnounce = enableVoiceOverAnnounce;
-    [self.webView evaluateJavaScript:[NSString stringWithFormat:@"term.setAccessibilityEnabled(%@)",
+    [self.webView evaluateJavaScript:[NSString stringWithFormat:@"exports.setAccessibilityEnabled(%@)",
                                       enableVoiceOverAnnounce ? @"true" : @"false"]
                    completionHandler:nil];
 }
@@ -266,6 +273,14 @@ NSNotificationName const TerminalTitleDidChangeNotification = @"TerminalTitleDid
     [self.scrollToBottomTask schedule];
 }
 
+- (void)pasteText:(NSString *)text {
+    [self.webView callAsyncJavaScript:@"exports.paste(text)"
+                            arguments:@{@"text": text}
+                              inFrame:nil
+                       inContentWorld:WKContentWorld.pageWorld
+                    completionHandler:nil];
+}
+
 - (void)scrollToBottom {
     [self.webView evaluateJavaScript:@"exports.scrollToBottom()" completionHandler:nil];
 }
@@ -319,14 +334,14 @@ NSNotificationName const TerminalTitleDidChangeNotification = @"TerminalTitleDid
 
     if (data.length > 0)
         _outputCount++;
+    // The bytes, one to a character, as an argument: no escaping. The page
+    // answers once xterm.js has parsed them, and only then is more sent.
     NSString *dataString = [[NSString alloc] initWithBytes:data.bytes length:data.length encoding:NSISOLatin1StringEncoding];
-    // escape for javascript. only have to worry about the first 256 codepoints, because of the latin-1 encoding.
-    dataString = [dataString stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
-    dataString = [dataString stringByReplacingOccurrencesOfString:@"\r" withString:@"\\r"];
-    dataString = [dataString stringByReplacingOccurrencesOfString:@"\n" withString:@"\\n"];
-    dataString = [dataString stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""];
-    NSString *jsToEvaluate = [NSString stringWithFormat:@"exports.write(\"%@\")", dataString];
-    [self.webView evaluateJavaScript:jsToEvaluate completionHandler:^(id result, NSError *error) {
+    [self.webView callAsyncJavaScript:@"return exports.write(data)"
+                            arguments:@{@"data": dataString}
+                              inFrame:nil
+                       inContentWorld:WKContentWorld.pageWorld
+                    completionHandler:^(id result, NSError *error) {
 #if !ISH_LINUX
         lock(&self->_dataLock);
         self->_outputInProgress = NO;

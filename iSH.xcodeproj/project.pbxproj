@@ -142,7 +142,7 @@
 		AA000044AF96D90D00FFB7A4 /* Icons.plist in Resources */ = {isa = PBXBuildFile; fileRef = BB0F552D239F8A790032A2A1 /* Icons.plist */; };
 		AA000045AF96D90D00FFB7A4 /* About.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = BBBCE7E521D2F02200CA00B3 /* About.storyboard */; };
 		AA000046AF96D90D00FFB7A4 /* Roots.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = BB10E5CF248DC21D009C7A74 /* Roots.storyboard */; };
-		AA000047AF96D90D00FFB7A4 /* hterm_all.js in Resources */ = {isa = PBXBuildFile; fileRef = BB2B4DAB231D94C300CB578B /* hterm_all.js */; };
+		AA000047AF96D90D00FFB7A4 /* xterm_all.js in Resources */ = {isa = PBXBuildFile; fileRef = BB2B4DAB231D94C300CB578B /* xterm_all.js */; };
 		AA000048AF96D90D00FFB7A4 /* term.js in Resources */ = {isa = PBXBuildFile; fileRef = BB4A539C1FAA490C00A72ACE /* term.js */; };
 		AA000049AF96D90D00FFB7A4 /* term.css in Resources */ = {isa = PBXBuildFile; fileRef = BB4A53AF1FAA787900A72ACE /* term.css */; };
 		AA00004AAF96D90D00FFB7A4 /* term.html in Resources */ = {isa = PBXBuildFile; fileRef = BB4A53A91FAA496700A72ACE /* term.html */; };
@@ -257,7 +257,7 @@
 		BB28C7BB268975AE00BDC834 /* LocationDevice.m in Sources */ = {isa = PBXBuildFile; fileRef = BB235533235D488400139E00 /* LocationDevice.m */; };
 		BB28C7BC268975B000BDC834 /* PasteboardDevice.m in Sources */ = {isa = PBXBuildFile; fileRef = 650B337322EA235C00B4C03E /* PasteboardDevice.m */; };
 		BB28C7BF2689799800BDC834 /* Roots.m in Sources */ = {isa = PBXBuildFile; fileRef = BB10E5CD248DBE66009C7A74 /* Roots.m */; };
-		BB2B4DAC231D94C300CB578B /* hterm_all.js in Resources */ = {isa = PBXBuildFile; fileRef = BB2B4DAB231D94C300CB578B /* hterm_all.js */; };
+		BB2B4DAC231D94C300CB578B /* xterm_all.js in Resources */ = {isa = PBXBuildFile; fileRef = BB2B4DAB231D94C300CB578B /* xterm_all.js */; };
 		BB2B4DAD231D998300CB578B /* term.js in Resources */ = {isa = PBXBuildFile; fileRef = BB4A539C1FAA490C00A72ACE /* term.js */; };
 		BB2B4DAE231D998300CB578B /* term.css in Resources */ = {isa = PBXBuildFile; fileRef = BB4A53AF1FAA787900A72ACE /* term.css */; };
 		BB2B4DAF231D998300CB578B /* term.html in Resources */ = {isa = PBXBuildFile; fileRef = BB4A53A91FAA496700A72ACE /* term.html */; };
@@ -347,7 +347,7 @@
 		BBEF198D268066D1001225BD /* reworked.png in Resources */ = {isa = PBXBuildFile; fileRef = BB0B88172589662A00208600 /* reworked.png */; };
 		BBEF198E268066D1001225BD /* Roots.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = BB10E5CF248DC21D009C7A74 /* Roots.storyboard */; };
 		BBEF198F268066D1001225BD /* idollarhash.png in Resources */ = {isa = PBXBuildFile; fileRef = BBC8297D24EDAC11009D042C /* idollarhash.png */; };
-		BBEF1990268066D1001225BD /* hterm_all.js in Resources */ = {isa = PBXBuildFile; fileRef = BB2B4DAB231D94C300CB578B /* hterm_all.js */; };
+		BBEF1990268066D1001225BD /* xterm_all.js in Resources */ = {isa = PBXBuildFile; fileRef = BB2B4DAB231D94C300CB578B /* xterm_all.js */; };
 		BBEF1991268066D1001225BD /* icon1337.png in Resources */ = {isa = PBXBuildFile; fileRef = BB4A922D24EDA461002F5A96 /* icon1337.png */; };
 		BBEF1992268066D1001225BD /* rgb.png in Resources */ = {isa = PBXBuildFile; fileRef = BB0B88052589661A00208600 /* rgb.png */; };
 		BBEF1993268066D1001225BD /* term.css in Resources */ = {isa = PBXBuildFile; fileRef = BB4A53AF1FAA787900A72ACE /* term.css */; };
@@ -799,7 +799,7 @@
 		BB28C7522689522700BDC834 /* ProjectReleaseLinux.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = ProjectReleaseLinux.xcconfig; sourceTree = "<group>"; };
 		BB28C7532689522C00BDC834 /* ProjectDebugLinux.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = ProjectDebugLinux.xcconfig; sourceTree = "<group>"; };
 		BB28C755268956C900BDC834 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS15.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
-		BB2B4DAB231D94C300CB578B /* hterm_all.js */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.javascript; name = hterm_all.js; path = ../../deps/libapps/hterm/dist/js/hterm_all.js; sourceTree = "<group>"; };
+		BB2B4DAB231D94C300CB578B /* xterm_all.js */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.javascript; path = xterm_all.js; sourceTree = "<group>"; };
 		BB38597627BCEC70000A1082 /* circular.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = circular.png; sourceTree = "<group>"; };
 		BB38597927BCEC78000A1082 /* dollarblock1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = dollarblock1.png; sourceTree = "<group>"; };
 		BB38597A27BCEC78000A1082 /* dollarblock2.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = dollarblock2.png; sourceTree = "<group>"; };
@@ -1194,7 +1194,7 @@
 				BB4A53A91FAA496700A72ACE /* term.html */,
 				BB4A539C1FAA490C00A72ACE /* term.js */,
 				BB4A53AF1FAA787900A72ACE /* term.css */,
-				BB2B4DAB231D94C300CB578B /* hterm_all.js */,
+				BB2B4DAB231D94C300CB578B /* xterm_all.js */,
 			);
 			path = terminal;
 			sourceTree = "<group>";
@@ -1646,7 +1646,6 @@
 				AA0000091F96D90D00FFB7A4 /* Frameworks */,
 				AA000011AF96D90D00FFB7A4 /* Copy Root */,
 				AA000012AF96D90D00FFB7A4 /* Generate APK Repositories File */,
-				AA000013AF96D90D00FFB7A4 /* Compile JavaScript */,
 				AA000010AF96D90D00FFB7A4 /* Resources */,
 				AA000014AF96D90D00FFB7A4 /* Embed Foundation Extensions */,
 			);
@@ -1671,7 +1670,6 @@
 				AA0000091F96D90D00FFB7A4 /* Frameworks */,
 				AA000011AF96D90D00FFB7A4 /* Copy Root */,
 				AA000012AF96D90D00FFB7A4 /* Generate APK Repositories File */,
-				AA000013AF96D90D00FFB7A4 /* Compile JavaScript */,
 				AA000010AF96D90D00FFB7A4 /* Resources */,
 				AAF20070AF96D90D00FFB7A4 /* Embed Foundation Extensions */,
 			);
@@ -1746,7 +1744,6 @@
 				BB792B4D1F96D90D00FFB7A4 /* Frameworks */,
 				BBF1248B1FA7BF530088FB50 /* Download Root */,
 				BB034E8C263643C10000A498 /* Generate APK Repositories File */,
-				BB4A53AC1FAA49CA00A72ACE /* Compile JavaScript */,
 				BB792B4E1F96D90D00FFB7A4 /* Resources */,
 			);
 			buildRules = (
@@ -1869,7 +1866,6 @@
 				BBEF196F268066D1001225BD /* Frameworks */,
 				BBEF1979268066D1001225BD /* Download Root */,
 				BBEF197A268066D1001225BD /* Generate APK Repositories File */,
-				BBEF197B268066D1001225BD /* Compile JavaScript */,
 				BBEF197C268066D1001225BD /* Resources */,
 				BBEF1997268066D1001225BD /* Embed Foundation Extensions */,
 			);
@@ -2039,7 +2035,7 @@
 				AA000044AF96D90D00FFB7A4 /* Icons.plist in Resources */,
 				AA000045AF96D90D00FFB7A4 /* About.storyboard in Resources */,
 				AA000046AF96D90D00FFB7A4 /* Roots.storyboard in Resources */,
-				AA000047AF96D90D00FFB7A4 /* hterm_all.js in Resources */,
+				AA000047AF96D90D00FFB7A4 /* xterm_all.js in Resources */,
 				AA000048AF96D90D00FFB7A4 /* term.js in Resources */,
 				AA000049AF96D90D00FFB7A4 /* term.css in Resources */,
 				AA00004AAF96D90D00FFB7A4 /* term.html in Resources */,
@@ -2127,7 +2123,7 @@
 				BB2B4DAF231D998300CB578B /* term.html in Resources */,
 				BB3859A027BCEE6B000A1082 /* 3d.png in Resources */,
 				BB10E5D0248DC21D009C7A74 /* Roots.storyboard in Resources */,
-				BB2B4DAC231D94C300CB578B /* hterm_all.js in Resources */,
+				BB2B4DAC231D94C300CB578B /* xterm_all.js in Resources */,
 				BB3859A327BCEE6B000A1082 /* ihash1.png in Resources */,
 				BB2B4DAE231D998300CB578B /* term.css in Resources */,
 				BB38599827BCEE6B000A1082 /* metal.png in Resources */,
@@ -2174,7 +2170,7 @@
 				BBEF198F268066D1001225BD /* idollarhash.png in Resources */,
 				BB3859A827BCEE6C000A1082 /* is.png in Resources */,
 				BB38597F27BCEC78000A1082 /* dollarblock2.png in Resources */,
-				BBEF1990268066D1001225BD /* hterm_all.js in Resources */,
+				BBEF1990268066D1001225BD /* xterm_all.js in Resources */,
 				BB38597827BCEC70000A1082 /* circular.png in Resources */,
 				BBEF1991268066D1001225BD /* icon1337.png in Resources */,
 				BBEF1992268066D1001225BD /* rgb.png in Resources */,
@@ -2230,25 +2226,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "python3 $SRCROOT/app/gen_apk_repositories.py\n";
-		};
-		AA000013AF96D90D00FFB7A4 /* Compile JavaScript */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-			);
-			name = "Compile JavaScript";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-				"$(SRCROOT)/deps/hterm/dist/js/hterm_all.js",
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "cd $SRCROOT/deps/libapps && ./hterm/bin/mkdist\n";
 		};
 		AA000300AF96D90D00FFB7A4 /* Build Meson (ARM64) */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -2334,23 +2311,6 @@
 			shellPath = /bin/sh;
 			shellScript = "mkdir -p \"$CONFIGURATION_BUILD_DIR\"\nln -sf \"$MESON_BUILD_DIR/$PRODUCT_NAME.a\" \"$CONFIGURATION_BUILD_DIR\"\n";
 		};
-		BB4A53AC1FAA49CA00A72ACE /* Compile JavaScript */ = {
-			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputPaths = (
-			);
-			name = "Compile JavaScript";
-			outputPaths = (
-				"$(SRCROOT)/deps/hterm/dist/js/hterm_all.js",
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = "/bin/sh -e";
-			shellScript = "cd $SRCROOT/deps/libapps\n./hterm/bin/mkdist\n";
-			showEnvVarsInLog = 0;
-		};
 		BB4A922A24ED9421002F5A96 /* Add icons to Info.plist */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
@@ -2424,23 +2384,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = "/bin/sh -e";
 			shellScript = "python3 $SRCROOT/app/gen_apk_repositories.py\n";
-		};
-		BBEF197B268066D1001225BD /* Compile JavaScript */ = {
-			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputPaths = (
-			);
-			name = "Compile JavaScript";
-			outputPaths = (
-				"$(SRCROOT)/deps/hterm/dist/js/hterm_all.js",
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = "/bin/sh -e";
-			shellScript = "cd $SRCROOT/deps/libapps\n./hterm/bin/mkdist\n";
-			showEnvVarsInLog = 0;
 		};
 		BBF1248B1FA7BF530088FB50 /* Download Root */ = {
 			isa = PBXShellScriptBuildPhase;

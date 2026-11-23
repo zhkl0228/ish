@@ -16,7 +16,7 @@ struct rowcol {
     int col;
 };
 
-@interface TerminalView () <UIGestureRecognizerDelegate>
+@interface TerminalView () <UIGestureRecognizerDelegate, UIEditMenuInteractionDelegate>
 
 @property (nonatomic) NSMutableArray<UIKeyCommand *> *keyCommands;
 @property ScrollbarView *scrollbarView;
@@ -29,6 +29,10 @@ struct rowcol {
 @property (nullable) NSString *selectedText;
 @property UITextRange *markedRange;
 @property UITextRange *selectedRange;
+
+// The selection's menu (Copy), and where it points: the selection's rows
+@property UIEditMenuInteraction *editMenu API_AVAILABLE(ios(16.0));
+@property CGRect selectionRect;
 
 @property struct rowcol floatingCursor;
 @property CGSize floatingCursorSensitivity;
@@ -53,7 +57,7 @@ struct rowcol {
     // the finger, as in Messages. That needs the drag to start even with nothing
     // to scroll (no scrollback, or a full-screen program like tmux), which takes
     // bouncing. The bounce doesn't show: the web view stays pinned in place and
-    // hterm clamps the out-of-range scroll positions it is sent.
+    // the page clamps the out-of-range scroll positions it is sent.
     scrollbarView.alwaysBounceVertical = YES;
     scrollbarView.keyboardDismissMode = UIScrollViewKeyboardDismissModeInteractive;
     [self addSubview:scrollbarView];
@@ -64,6 +68,15 @@ struct rowcol {
     linkClick.cancelsTouchesInView = NO;
     linkClick.delegate = self;
     [self addGestureRecognizer:linkClick];
+
+    // A long press selects the word under it, and a drag on from there as far
+    // as the finger goes (the page's selection: term.js); letting go shows its
+    // menu (Copy). The page draws the text, so there is no text of the web
+    // view's to select.
+    UILongPressGestureRecognizer *select = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(selectByPress:)];
+    select.minimumPressDuration = 0.4;
+    select.delegate = self;
+    [self addGestureRecognizer:select];
 
     UserPreferences *prefs = UserPreferences.shared;
     [prefs observe:@[@"capsLockMapping", @"optionMapping", @"backtickMapEscape", @"overrideControlSpace"]
@@ -182,7 +195,7 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollHeight",
         @"foregroundColor": palette.foregroundColor,
         @"backgroundColor": palette.backgroundColor,
         @"blinkCursor": @(prefs.blinkCursor),
-        @"cursorShape": prefs.htermCursorShape,
+        @"cursorShape": prefs.cursorShapeName,
     } mutableCopy];
     if (prefs.palette.colorPaletteOverrides) {
         themeInfo[@"colorPaletteOverrides"] = palette.colorPaletteOverrides;
@@ -287,6 +300,81 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollHeight",
     } else if ([message.name isEqualToString:@"openLink"]) {
         [UIApplication openURL:message.body];
     }
+}
+
+#pragma mark Selection
+
+- (void)selectByPress:(UILongPressGestureRecognizer *)press {
+    WKWebView *webView = self.terminal.webView;
+    if (webView.superview == nil)
+        return;
+    NSString *script;
+    switch (press.state) {
+        case UIGestureRecognizerStateBegan:
+            // the drag is the selection's, not a scroll
+            self.scrollbarView.panGestureRecognizer.enabled = NO;
+            script = @"exports.selectWordAt(x, y)";
+            break;
+        case UIGestureRecognizerStateChanged:
+            script = @"exports.extendSelectionTo(x, y)";
+            break;
+        case UIGestureRecognizerStateEnded:
+            self.scrollbarView.panGestureRecognizer.enabled = YES;
+            [self showSelectionMenu];
+            return;
+        default:
+            self.scrollbarView.panGestureRecognizer.enabled = YES;
+            return;
+    }
+    CGPoint point = [press locationInView:webView];
+    [webView callAsyncJavaScript:script
+                       arguments:@{@"x": @(point.x), @"y": @(point.y)}
+                         inFrame:nil
+                  inContentWorld:WKContentWorld.pageWorld
+               completionHandler:nil];
+}
+
+// The selection's menu, pointing at its rows
+- (void)showSelectionMenu {
+    WKWebView *webView = self.terminal.webView;
+    [webView callAsyncJavaScript:@"return exports.getSelection()"
+                       arguments:@{}
+                         inFrame:nil
+                  inContentWorld:WKContentWorld.pageWorld
+               completionHandler:^(id selection, NSError *error) {
+        if (![selection isKindOfClass:NSDictionary.class])
+            return;
+        NSArray<NSNumber *> *rect = selection[@"rect"];
+        self.selectionRect = [self convertRect:CGRectMake(rect[0].doubleValue, rect[1].doubleValue,
+                                                          rect[2].doubleValue, rect[3].doubleValue)
+                                      fromView:webView];
+        CGPoint top = CGPointMake(CGRectGetMidX(self.selectionRect), CGRectGetMinY(self.selectionRect));
+        if (@available(iOS 16.0, *)) {
+            if (self.editMenu == nil) {
+                self.editMenu = [[UIEditMenuInteraction alloc] initWithDelegate:self];
+                [self addInteraction:self.editMenu];
+            }
+            [self.editMenu presentEditMenuWithConfiguration:[UIEditMenuConfiguration configurationWithIdentifier:nil sourcePoint:top]];
+        } else {
+            // UIMenuController's actions are the first responder's
+            [self becomeFirstResponder];
+            [UIMenuController.sharedMenuController showMenuFromView:self rect:self.selectionRect];
+        }
+    }];
+}
+
+- (UIMenu *)editMenuInteraction:(UIEditMenuInteraction *)interaction menuForConfiguration:(UIEditMenuConfiguration *)configuration suggestedActions:(NSArray<UIMenuElement *> *)suggestedActions API_AVAILABLE(ios(16.0)) {
+    // Its own actions, not the first responder's: the keyboard need not be up
+    __weak typeof(self) weakSelf = self;
+    return [UIMenu menuWithChildren:@[
+        [UIAction actionWithTitle:@"Copy" image:[UIImage systemImageNamed:@"doc.on.doc"] identifier:nil handler:^(UIAction *action) {
+            [weakSelf copy:nil];
+        }],
+    ]];
+}
+
+- (CGRect)editMenuInteraction:(UIEditMenuInteraction *)interaction targetRectForConfiguration:(UIEditMenuConfiguration *)configuration API_AVAILABLE(ios(16.0)) {
+    return self.selectionRect;
 }
 
 - (void)linkClicked:(UITapGestureRecognizer *)recognizer {
@@ -429,12 +517,25 @@ static BOOL takeBarKey(UIButton *key) {
         return;
     NSString *string = UIPasteboard.generalPasteboard.string;
     if (string) {
-        [self insertText:string];
+        // bracketed if the program asked for that, so a pasted line is not
+        // run as it comes
+        [self.terminal pasteText:string];
     }
 }
 
+// The page's selection (a long press's, a pointer's drag), to the clipboard
 - (void)copy:(id)sender {
-    [self.terminal.webView evaluateJavaScript:@"exports.copy()" completionHandler:nil];
+    WKWebView *webView = self.terminal.webView;
+    [webView callAsyncJavaScript:@"return exports.getSelection()"
+                       arguments:@{}
+                         inFrame:nil
+                  inContentWorld:WKContentWorld.pageWorld
+               completionHandler:^(id selection, NSError *error) {
+        if (![selection isKindOfClass:NSDictionary.class])
+            return;
+        UIPasteboard.generalPasteboard.string = selection[@"text"];
+        [webView evaluateJavaScript:@"exports.clearSelection()" completionHandler:nil];
+    }];
 }
 
 - (void)clearScrollback {
@@ -446,7 +547,7 @@ static BOOL takeBarKey(UIButton *key) {
 }
 
 - (void)resetTerminal {
-    // hterm's reset also drops the palette overrides the theme installed.
+    // A reset also drops the palette overrides the theme installed.
     [self.terminal.webView evaluateJavaScript:@"exports.reset()" completionHandler:^(id result, NSError *error) {
         [self _updateStyle];
     }];

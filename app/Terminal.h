@@ -31,6 +31,9 @@ struct tty;
 
 - (int)sendOutput:(const void *)buf length:(int)len;
 - (void)sendInput:(NSData *)input;
+// A paste: to the input, between the markers of a bracketed paste if the
+// program asked for them, its newlines returns (xterm.js's term.paste)
+- (void)pasteText:(NSString *)text;
 
 - (NSString *)arrow:(char)direction;
 // With modifiers, xterm's CSI 1;m form (2=Shift, 3=Alt, 5=Ctrl, ...).
