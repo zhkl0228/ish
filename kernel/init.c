@@ -180,6 +180,15 @@ void create_some_device_nodes(void) {
     make_char_device("/dev/urandom", MEM_MAJOR, DEV_URANDOM_MINOR);
 
     generic_mkdirat(AT_PWD, "/dev/pts", 0755);
+    // POSIX shared memory and named semaphores (shm_open, sem_open) are files
+    // in /dev/shm, a tmpfs on Linux that programs take for granted: without
+    // it, Python's multiprocessing could make no lock, queue or pool. Here it
+    // is a directory of the root filesystem, so what a program leaves there
+    // outlives a restart. Its mode is set every boot, as tmpfs gets it at each
+    // mount: mkdir's would be cut by the host's umask on realfs.
+    int err = generic_mkdirat(AT_PWD, "/dev/shm", 01777);
+    if (err == 0 || err == _EEXIST)
+        generic_setattrat(AT_PWD, "/dev/shm", make_attr(mode, 01777), false);
 }
 
 int create_stdio(const char *file, int major, int minor) {

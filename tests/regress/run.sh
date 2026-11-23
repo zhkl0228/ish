@@ -362,6 +362,18 @@ else
         status=1
     fi
     echo
+    echo "########## /dev/shm: shm_open and sem_open ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_dev_shm" \
+            tests/regress/regress_dev_shm.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_dev_shm 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_dev_shm"
+    else
+        echo "failed to build regress_dev_shm" >&2
+        status=1
+    fi
+    echo
     echo "########## device nodes from a Darwin import ##########"
     # A fakefs of its own: a tarball with the test as /init and three device
     # nodes, imported with fakefsify, two of them then rewritten in meta.db to
