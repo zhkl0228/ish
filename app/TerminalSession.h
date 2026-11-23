@@ -37,6 +37,10 @@ typedef NS_ENUM(NSInteger, TerminalSessionState) {
 // Whether a shell, rather than a job like vim or ssh, owns the terminal: typed
 // text goes to a prompt.
 @property (readonly) BOOL shellIsForeground;
+// The programs of the job that owns the terminal when the shell does not
+// (claude, top, a script): what closing the tab ends, as the hangup goes to
+// them. Empty while the shell owns it.
+@property (readonly) NSArray<NSString *> *foregroundJobPrograms;
 
 @end
 

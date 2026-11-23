@@ -396,6 +396,21 @@ static NSString *const TERMINAL_HANDLERS[] = {@"load", @"log", @"sendInput", @"r
 #endif
 }
 
+- (int)sessionId {
+#if !ISH_LINUX
+    struct tty *tty = [self retainTty];
+    if (tty == NULL)
+        return 0;
+    lock(&tty->lock);
+    pid_t_ session = tty->session;
+    unlock(&tty->lock);
+    [self releaseTty:tty];
+    return session;
+#else
+    return 0;
+#endif
+}
+
 - (void)sendSignalToForegroundJob:(int)signal {
 #if !ISH_LINUX
     int fg_group = self.foregroundProcessGroup;

@@ -99,6 +99,33 @@ NSNotificationName const TerminalSessionDidChangeNotification = @"TerminalSessio
 #endif
 }
 
+- (NSArray<NSString *> *)foregroundJobPrograms {
+#if !ISH_LINUX
+    if (self.state != TerminalSessionStateRunning)
+        return @[];
+    // The session's leader is the shell (login execs it), and its process
+    // group is the session's: any other group in the foreground is a job.
+    int fg_group = self.terminal.foregroundProcessGroup;
+    int session = self.terminal.sessionId;
+    if (fg_group == 0 || fg_group == session)
+        return @[];
+    NSMutableOrderedSet<NSString *> *programs = [NSMutableOrderedSet orderedSet];
+    lock(&pids_lock);
+    struct pid *pid = pid_get(fg_group);
+    if (pid != NULL) {
+        struct tgroup *group;
+        list_for_each_entry(&pid->pgroup, group, pgroup) {
+            if (!group->leader->zombie)
+                [programs addObject:[NSString stringWithUTF8String:group->leader->comm]];
+        }
+    }
+    unlock(&pids_lock);
+    return programs.array;
+#else
+    return @[]; // can't tell, so don't get in the way
+#endif
+}
+
 @end
 
 @interface TerminalSessionStore ()

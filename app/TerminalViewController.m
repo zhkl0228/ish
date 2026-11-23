@@ -372,22 +372,58 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
     [self.termView becomeFirstResponder];
 }
 
+// Closing a tab hangs up its terminal, and the job that owns it (claude, top,
+// a script) ends. Asks first, as a desktop terminal does, then close; tabs
+// whose shell is at its prompt go without asking.
+- (void)confirmClosingSessions:(NSArray<TerminalSession *> *)sessions then:(void (^)(void))close {
+    NSMutableOrderedSet<NSString *> *programs = [NSMutableOrderedSet orderedSet];
+    for (TerminalSession *session in sessions)
+        [programs addObjectsFromArray:session.foregroundJobPrograms];
+    if (programs.count == 0) {
+        close();
+        return;
+    }
+    NSString *list = [programs.array componentsJoinedByString:@", "];
+    // "top is still running. Closing the tab ends it."
+    NSString *message = [NSString stringWithFormat:@"%@ %@ still running. Closing %@ ends %@.", list,
+                         programs.count == 1 ? @"is" : @"are", sessions.count == 1 ? @"the tab" : @"the tabs",
+                         programs.count == 1 ? @"it" : @"them"];
+    UIAlertController *alert = [UIAlertController
+        alertControllerWithTitle:sessions.count == 1 ? @"Close Tab?" : @"Close Tabs?"
+                         message:message
+                  preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Close" style:UIAlertActionStyleDestructive
+                                            handler:^(UIAlertAction *_) {
+        close();
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
 - (void)tabBar:(TabBarView *)tabBar didRequestCloseTabAtIndex:(NSUInteger)index {
-    if (index < self.tabs.count)
-        [self closeTab:self.tabs[index]];
+    if (index >= self.tabs.count)
+        return;
+    TerminalSession *session = self.tabs[index];
+    __weak typeof(self) weakSelf = self;
+    [self confirmClosingSessions:@[session] then:^{
+        [weakSelf closeTab:session];
+    }];
 }
 
 - (void)tabBar:(TabBarView *)tabBar didRequestCloseOtherTabsAtIndex:(NSUInteger)index {
     if (index >= self.tabs.count)
         return;
     TerminalSession *keep = self.tabs[index];
-    self.selectedSession = keep;
-    // Snapshot first: closeTab: mutates tabs.
-    for (TerminalSession *session in [self.tabs copy]) {
-        if (session != keep)
+    NSMutableArray<TerminalSession *> *others = [self.tabs mutableCopy];
+    [others removeObject:keep];
+    __weak typeof(self) weakSelf = self;
+    [self confirmClosingSessions:others then:^{
+        typeof(self) self = weakSelf;
+        self.selectedSession = keep;
+        for (TerminalSession *session in others)
             [self closeTab:session];
-    }
-    [self.termView becomeFirstResponder];
+        [self.termView becomeFirstResponder];
+    }];
 }
 
 - (void)tabBarDidRequestNewTab:(TabBarView *)tabBar {
@@ -822,8 +858,13 @@ static NSString *ShellQuoted(NSString *string) {
 }
 
 - (void)closeCurrentTab:(id)sender {
-    if (self.selectedSession != nil)
-        [self closeTab:self.selectedSession];
+    TerminalSession *session = self.selectedSession;
+    if (session == nil)
+        return;
+    __weak typeof(self) weakSelf = self;
+    [self confirmClosingSessions:@[session] then:^{
+        [weakSelf closeTab:session];
+    }];
 }
 
 - (void)closeOtherTabs:(id)sender {

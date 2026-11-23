@@ -50,6 +50,10 @@ struct tty;
 // signal it, e.g. to kill a job that ignores Ctrl+C.
 @property (readonly) int foregroundProcessGroup;
 - (void)sendSignalToForegroundJob:(int)signal;
+// The session the terminal is the controlling terminal of: its leader's pid,
+// and its process group while the shell, not a job, owns the terminal. 0 if
+// none.
+@property (readonly) int sessionId;
 
 @property (readonly) WKWebView *webView;
 @property (nonatomic) BOOL enableVoiceOverAnnounce;

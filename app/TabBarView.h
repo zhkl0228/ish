@@ -3,8 +3,9 @@
 //  iSH
 //
 //  A strip of shell tabs shown above the terminal, in the style of Hyper's tab bar:
-//  tabs share the width, the selected tab is the terminal color with no seam, and the
-//  close control only appears on the selected or hovered tab.
+//  tabs share the width and the selected tab is the terminal color with no seam. A tab
+//  has no close button, so that a tap cannot end what runs in it: it closes from its
+//  menu (a long press), with Cmd-W, or when its shell exits.
 //
 
 #import <UIKit/UIKit.h>

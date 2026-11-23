@@ -80,7 +80,7 @@
     sleep(3); // let the closed shell die, so the log shows its terminal being freed
 }
 
-// The tab strip: + opens a tab, tapping a tab selects it, x closes it.
+// The tab strip: + opens a tab, tapping a tab selects it, its menu (a long press) closes it.
 - (void)testTabStripTouch {
     [self waitForTerminalText:@":~#" timeout:30];
     XCUIElement *tabBar = self.app.otherElements[@"tab bar"];
@@ -100,11 +100,13 @@
     [self.app typeText:@"echo in-tab-one\n"];
     [self waitForTerminalText:@"in-tab-one" timeout:10];
 
-    // The close control only shows on the selected (or hovered) tab.
-    XCTAssertFalse(self.app.buttons[@"close tab 2"].isHittable);
+    // No close button, on any tab: a tap cannot end what runs there. The shell is at its
+    // prompt, so the menu's Close Tab closes it without asking.
     [self.app.buttons[@"tab 2"] tap];
-    XCTAssert([self.app.buttons[@"close tab 2"] waitForExistenceWithTimeout:5]);
-    [self.app.buttons[@"close tab 2"] tap];
+    XCTAssertFalse(self.app.buttons[@"close tab 2"].exists);
+    [self.app.buttons[@"tab 2"] pressForDuration:1.0];
+    XCTAssert([self.app.buttons[@"Close Tab"] waitForExistenceWithTimeout:5]);
+    [self.app.buttons[@"Close Tab"] tap];
     XCTAssert([self.app.buttons[@"tab 2"] waitForNonExistenceWithTimeout:5]);
     [self waitForTerminalText:@"in-tab-one" timeout:5];
 }

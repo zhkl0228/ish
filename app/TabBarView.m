@@ -8,7 +8,7 @@
 #import "Theme.h"
 
 static const CGFloat kMinStripHeight = 40;
-// Width of the leading spacer, the trailing close/hint slot, and the + cell.
+// Width of the leading spacer, the trailing hint slot, and the + cell.
 static const CGFloat kSlotWidth = 44;
 // Below this width per tab the strip stops sharing the width equally and scrolls instead.
 static const CGFloat kMinTabWidth = 150;
@@ -23,7 +23,6 @@ static UIFont *TabFont(void) {
 @interface TabItemView : UIControl
 @property (readonly) UILabel *label;
 @property (readonly) UILabel *hintLabel;
-@property (readonly) UIButton *closeButton;
 @property (readonly) UIView *separator;
 @property (readonly) UIView *bottomLine;
 @property (readonly) NSLayoutConstraint *widthConstraint;
@@ -31,7 +30,6 @@ static UIFont *TabFont(void) {
 @property NSUInteger index;
 @property BOOL tabSelected;
 @property BOOL hovered;
-@property BOOL closeVisible;
 @property BOOL hintVisible;
 @end
 
@@ -55,20 +53,9 @@ static UIFont *TabFont(void) {
         _hintLabel.translatesAutoresizingMaskIntoConstraints = NO;
         _hintLabel.userInteractionEnabled = NO;
         _hintLabel.isAccessibilityElement = NO;
-        [self addSubview:_hintLabel];
-
-        _closeButton = [UIButton buttonWithType:UIButtonTypeSystem];
-        [_closeButton setImage:[UIImage systemImageNamed:@"xmark"
-                                        withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:11 weight:UIImageSymbolWeightMedium]]
-                      forState:UIControlStateNormal];
-        _closeButton.translatesAutoresizingMaskIntoConstraints = NO;
-        _closeButton.pointerInteractionEnabled = YES;
-        // Both start hidden, matching closeVisible/hintVisible, until the first update.
-        _closeButton.alpha = 0;
-        _closeButton.userInteractionEnabled = NO;
-        _closeButton.isAccessibilityElement = NO;
+        // Hidden, matching hintVisible, until the first update.
         _hintLabel.alpha = 0;
-        [self addSubview:_closeButton];
+        [self addSubview:_hintLabel];
 
         _separator = [UIView new];
         _separator.translatesAutoresizingMaskIntoConstraints = NO;
@@ -88,13 +75,8 @@ static UIFont *TabFont(void) {
             [_label.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.leadingAnchor constant:kSlotWidth],
             [_label.trailingAnchor constraintLessThanOrEqualToAnchor:self.trailingAnchor constant:-kSlotWidth],
 
-            [_closeButton.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
-            [_closeButton.topAnchor constraintEqualToAnchor:self.topAnchor],
-            [_closeButton.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
-            [_closeButton.widthAnchor constraintEqualToConstant:kSlotWidth],
-
-            [_hintLabel.centerXAnchor constraintEqualToAnchor:_closeButton.centerXAnchor],
-            [_hintLabel.centerYAnchor constraintEqualToAnchor:_closeButton.centerYAnchor],
+            [_hintLabel.centerXAnchor constraintEqualToAnchor:self.trailingAnchor constant:-kSlotWidth / 2],
+            [_hintLabel.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
 
             [_separator.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
             [_separator.topAnchor constraintEqualToAnchor:self.topAnchor],
@@ -110,16 +92,11 @@ static UIFont *TabFont(void) {
     return self;
 }
 
-- (void)setCloseVisible:(BOOL)visible hintVisible:(BOOL)hintVisible animated:(BOOL)animated {
-    if (visible == self.closeVisible && hintVisible == self.hintVisible)
+- (void)setHintVisible:(BOOL)hintVisible animated:(BOOL)animated {
+    if (hintVisible == self.hintVisible)
         return;
-    self.closeVisible = visible;
     self.hintVisible = hintVisible;
-    // Hidden controls must not be tappable or reachable by assistive technologies.
-    self.closeButton.userInteractionEnabled = visible;
-    self.closeButton.isAccessibilityElement = visible;
     [UIView animateWithDuration:animated ? kFadeDuration : 0 animations:^{
-        self.closeButton.alpha = visible ? 1 : 0;
         self.hintLabel.alpha = hintVisible ? 1 : 0;
     }];
 }
@@ -302,7 +279,6 @@ static UIFont *TabFont(void) {
             item.sessionUUID = session.uuid;
             [item addTarget:self action:@selector(tabPressed:) forControlEvents:UIControlEventTouchUpInside];
             [item addTarget:self action:@selector(tabHighlightChanged:) forControlEvents:UIControlEventTouchDown | UIControlEventTouchDragEnter | UIControlEventTouchDragExit | UIControlEventTouchUpInside | UIControlEventTouchUpOutside | UIControlEventTouchCancel];
-            [item.closeButton addTarget:self action:@selector(closePressed:) forControlEvents:UIControlEventPrimaryActionTriggered];
             [item addGestureRecognizer:[[UIHoverGestureRecognizer alloc] initWithTarget:self action:@selector(tabHovered:)]];
             [item addInteraction:[[UIContextMenuInteraction alloc] initWithDelegate:self]];
         }
@@ -322,8 +298,6 @@ static UIFont *TabFont(void) {
         item.hintLabel.text = [NSString stringWithFormat:@"⌘%lu", (unsigned long) i + 1];
         item.accessibilityLabel = title;
         item.accessibilityIdentifier = [NSString stringWithFormat:@"tab %lu", (unsigned long) i + 1];
-        item.closeButton.accessibilityLabel = [NSString stringWithFormat:@"Close %@", session.displayTitle];
-        item.closeButton.accessibilityIdentifier = [NSString stringWithFormat:@"close tab %lu", (unsigned long) i + 1];
         item.accessibilityTraits = item.tabSelected ? UIAccessibilityTraitButton | UIAccessibilityTraitSelected : UIAccessibilityTraitButton;
         item.accessibilityCustomActions = @[
             [[UIAccessibilityCustomAction alloc] initWithName:@"Close" target:self selector:@selector(closeAction:)],
@@ -381,14 +355,12 @@ static UIFont *TabFont(void) {
         item.backgroundColor = item.tabSelected ? self.background : active ? hoverStrip : strip;
         item.label.textColor = item.tabSelected ? self.foreground : dimText;
         item.hintLabel.textColor = hintText;
-        item.closeButton.tintColor = item.tabSelected ? self.foreground : dimText;
         // Separators sit between inactive tabs; the selected tab's edges stay clean.
         BOOL hideSeparator = i + 1 == count || item.tabSelected || i + 1 == self.selectedIndex;
         item.separator.backgroundColor = hideSeparator ? UIColor.clearColor : rule;
         // Only the selected tab opens onto the terminal; every other tab is closed off below.
         item.bottomLine.backgroundColor = item.tabSelected ? UIColor.clearColor : rule;
-        BOOL closeVisible = item.tabSelected || item.hovered;
-        [item setCloseVisible:closeVisible hintVisible:!closeVisible && showHints && i < 9 animated:YES];
+        [item setHintVisible:showHints && i < 9 animated:YES];
     }];
 }
 
@@ -492,11 +464,6 @@ static UIFont *TabFont(void) {
         return;
     item.hovered = hovered;
     [self applyColors];
-}
-
-- (void)closePressed:(UIButton *)button {
-    TabItemView *item = (TabItemView *) button.superview;
-    [self.delegate tabBar:self didRequestCloseTabAtIndex:item.index];
 }
 
 - (TabItemView *)itemForAccessibilityAction:(UIAccessibilityCustomAction *)action {
