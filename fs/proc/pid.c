@@ -53,6 +53,24 @@ static void task_mem_pages(struct task *task, unsigned long *total, unsigned lon
     read_wrunlock(&mem->lock);
 }
 
+// Its state, as Linux's letters: inside a system call, where a task waits,
+// it is taken for sleeping (S), as near as iSH can tell; the task reading this
+// is running.
+static char task_state(struct task *task) {
+    if (task->zombie)
+        return 'Z';
+    if (task->group->stopped)
+        return 'T';
+    if (task != current && atomic_load(&task->in_syscall))
+        return 'S';
+    return 'R';
+}
+
+// in USER_HZ ticks, as /proc/<pid>/stat has times
+static unsigned long timeval_ticks(struct timeval_ tv) {
+    return (unsigned long) tv.sec * 100 + (unsigned long) tv.usec / 10000;
+}
+
 static int proc_pid_stat_show(struct proc_entry *entry, struct proc_data *buf) {
     struct task *task = proc_get_task(entry);
     if (task == NULL)
@@ -62,15 +80,15 @@ static int proc_pid_stat_show(struct proc_entry *entry, struct proc_data *buf) {
     lock(&task->general_lock);
     unsigned long pages, resident, shared;
     task_mem_pages(task, &pages, &resident, &shared);
+    // before the group's lock, which this takes
+    struct rusage_ rusage = rusage_of_group(task->group);
     lock(&task->group->lock);
+    struct rusage_ children = task->group->children_rusage;
     lock(&task->sighand->lock);
 
     proc_printf(buf, "%d ", task->pid);
     proc_printf(buf, "(%.16s) ", task->comm);
-    proc_printf(buf, "%c ",
-            task->zombie ? 'Z' :
-            task->group->stopped ? 'T' :
-            'R'); // I have no visibility into sleep state at the moment
+    proc_printf(buf, "%c ", task_state(task));
     proc_printf(buf, "%d ", task->parent ? task->parent->pid : 0);
     proc_printf(buf, "%d ", task->group->pgid);
     proc_printf(buf, "%d ", task->group->sid);
@@ -85,12 +103,11 @@ static int proc_pid_stat_show(struct proc_entry *entry, struct proc_data *buf) {
     proc_printf(buf, "%lu ", 0l); // major faults
     proc_printf(buf, "%lu ", 0l); // children major faults
 
-    // values that would be returned from getrusage
-    // finding these for a given process isn't too easy
-    proc_printf(buf, "%lu ", 0l); // user time
-    proc_printf(buf, "%lu ", 0l); // system time
-    proc_printf(buf, "%ld ", 0l); // children user time
-    proc_printf(buf, "%ld ", 0l); // children system time
+    // the process's CPU time (ps's TIME), and its waited-for children's
+    proc_printf(buf, "%lu ", timeval_ticks(rusage.utime));
+    proc_printf(buf, "%lu ", timeval_ticks(rusage.stime));
+    proc_printf(buf, "%ld ", timeval_ticks(children.utime));
+    proc_printf(buf, "%ld ", timeval_ticks(children.stime));
 
     proc_printf(buf, "%ld ", 20l); // priority (not adjustable)
     proc_printf(buf, "%ld ", 0l); // nice (also not adjustable)
@@ -159,10 +176,10 @@ static int proc_pid_status_show(struct proc_entry *entry, struct proc_data *buf)
         unlock(&task->fs->lock);
     }
     lock(&task->group->lock);
-    bool stopped = task->group->stopped;
+    char state = task_state(task);
     unlock(&task->group->lock);
-    // as /proc/<pid>/stat: iSH cannot tell a sleeping task
-    proc_printf(buf, "State:\t%s\n", stopped ? "T (stopped)" : "R (running)");
+    proc_printf(buf, "State:\t%c (%s)\n", state,
+                state == 'S' ? "sleeping" : state == 'T' ? "stopped" : state == 'Z' ? "zombie" : "running");
     proc_printf(buf, "Tgid:\t%d\n", task->tgid);
     proc_printf(buf, "Ngid:\t0\n");
     proc_printf(buf, "Pid:\t%d\n", task->pid);

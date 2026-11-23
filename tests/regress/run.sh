@@ -598,6 +598,18 @@ EOF
         status=1
     fi
     echo
+    echo "########## task state and CPU time: /proc/<pid>/stat, getrusage, CPU clocks ##########"
+    if "$CC_GUEST" -static -O0 -Wall -pthread -o "$GUEST_ROOT/tmp/regress_proc_time" \
+            tests/regress/regress_proc_time.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_proc_time 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_proc_time"
+    else
+        echo "failed to build regress_proc_time" >&2
+        status=1
+    fi
+    echo
     echo "########## /proc/<pid>/stat and status, meminfo, loadavg, vmstat ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_proc_pid" \
             tests/regress/regress_proc_pid.c; then

@@ -2,6 +2,8 @@
 // pull in RUSAGE_THREAD
 #define _GNU_SOURCE
 #include <sys/resource.h>
+#include <pthread.h>
+#include <time.h>
 #elif __APPLE__
 // pull in thread_info and friends
 #include <mach/mach.h>
@@ -210,6 +212,50 @@ struct rusage_ rusage_get_current(void) {
     return rusage;
 }
 
+// The CPU time of another task's thread, which is running (in its group's
+// threads, not exiting: it cannot finish do_exit while the caller holds
+// pids_lock). Darwin splits it into user and system time; a Linux host's
+// thread clock has only the sum, given as user time.
+static struct rusage_ rusage_of_task(struct task *task) {
+    struct rusage_ rusage = {};
+#if __linux__
+    clockid_t clock;
+    struct timespec ts;
+    if (pthread_getcpuclockid(task->thread, &clock) == 0 && clock_gettime(clock, &ts) == 0) {
+        rusage.utime.sec = ts.tv_sec;
+        rusage.utime.usec = ts.tv_nsec / 1000;
+    }
+#elif __APPLE__
+    thread_basic_info_data_t info;
+    mach_msg_type_number_t count = THREAD_BASIC_INFO_COUNT;
+    // the thread's port, borrowed from pthread: nothing to deallocate
+    if (thread_info(pthread_mach_thread_np(task->thread), THREAD_BASIC_INFO,
+                    (thread_info_t) &info, &count) == KERN_SUCCESS) {
+        rusage.utime.sec = info.user_time.seconds;
+        rusage.utime.usec = info.user_time.microseconds;
+        rusage.stime.sec = info.system_time.seconds;
+        rusage.stime.usec = info.system_time.microseconds;
+    }
+#endif
+    return rusage;
+}
+
+static void timeval_add(struct timeval_ *dst, struct timeval_ *src);
+
+struct rusage_ rusage_of_group(struct tgroup *group) {
+    lock(&group->lock);
+    struct rusage_ rusage = group->rusage; // its threads that exited
+    unlock(&group->lock);
+    struct task *thread;
+    list_for_each_entry(&group->threads, thread, group_links) {
+        if (thread->exiting)
+            continue;
+        struct rusage_ thread_rusage = thread == current ? rusage_get_current() : rusage_of_task(thread);
+        rusage_add(&rusage, &thread_rusage);
+    }
+    return rusage;
+}
+
 static void timeval_add(struct timeval_ *dst, struct timeval_ *src) {
     dst->sec += src->sec;
     dst->usec += src->usec;
@@ -227,7 +273,13 @@ void rusage_add(struct rusage_ *dst, struct rusage_ *src) {
 dword_t sys_getrusage(dword_t who, addr_t rusage_addr) {
     struct rusage_ rusage;
     switch (who) {
+        // all its threads', as Linux: it was the calling thread's alone
         case RUSAGE_SELF_:
+            lock(&pids_lock);
+            rusage = rusage_of_group(current->group);
+            unlock(&pids_lock);
+            break;
+        case RUSAGE_THREAD_:
             rusage = rusage_get_current();
             break;
         case RUSAGE_CHILDREN_:

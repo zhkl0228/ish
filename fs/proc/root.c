@@ -14,14 +14,19 @@ static int proc_show_version(struct proc_entry *UNUSED(entry), struct proc_data 
     return 0;
 }
 
-// Tasks that have not begun to exit. /proc/<pid>/stat calls every task
-// running, iSH cannot tell a sleeping one; so do the counts that use this.
-static unsigned live_tasks(void) {
+// Tasks that have not begun to exit, and of them those running: as
+// /proc/<pid>/stat has it, those not in a system call (where a task waits),
+// and the one reading this.
+static unsigned live_tasks(unsigned *running) {
     unsigned tasks = 0;
+    *running = 0;
     for (pid_t_ pid = 1; pid <= MAX_PID; pid++) {
         struct task *task = pid_get_task(pid);
-        if (task != NULL && !task->exiting)
-            tasks++;
+        if (task == NULL || task->exiting)
+            continue;
+        tasks++;
+        if (task == current || !atomic_load(&task->in_syscall))
+            (*running)++;
     }
     return tasks;
 }
@@ -55,10 +60,11 @@ static int proc_show_stat(struct proc_entry *UNUSED(entry), struct proc_data *bu
     // forks since boot, threads included, as Linux's total_forks
     proc_printf(buf, "processes %"PRIu64"\n", (uint64_t) atomic_load(&ish_guest_forks));
     // none is ever in uninterruptible sleep (D)
+    unsigned running;
     lock(&pids_lock);
-    unsigned tasks = live_tasks();
+    live_tasks(&running);
     unlock(&pids_lock);
-    proc_printf(buf, "procs_running %u\n", tasks);
+    proc_printf(buf, "procs_running %u\n", running);
     proc_printf(buf, "procs_blocked 0\n");
     proc_printf(buf, "softirq 0 0 0 0 0 0 0 0 0 0 0\n");
 
@@ -134,11 +140,12 @@ static int proc_show_loadavg(struct proc_entry *UNUSED(entry), struct proc_data 
         uint64_t hundredths = (loads[i] * 100 + (1 << 15)) >> 16;
         proc_printf(buf, "%"PRIu64".%02"PRIu64" ", hundredths / 100, hundredths % 100);
     }
+    unsigned running;
     lock(&pids_lock);
-    unsigned tasks = live_tasks();
+    unsigned tasks = live_tasks(&running);
     pid_t_ last_pid = pid_last_allocated();
     unlock(&pids_lock);
-    proc_printf(buf, "%u/%u %d\n", tasks, tasks, last_pid);
+    proc_printf(buf, "%u/%u %d\n", running, tasks, last_pid);
     return 0;
 }
 

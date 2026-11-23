@@ -62,15 +62,29 @@ dword_t sys_stime(addr_t UNUSED(time)) {
     return _EPERM;
 }
 
+// A CPU-time clock, user and system time together as Linux's: the process's
+// (all its threads, those that exited too; it was the calling thread's user
+// time) or the calling thread's (CLOCK_THREAD_CPUTIME_ID was EINVAL: Python's
+// time.thread_time()).
+static struct timespec cpu_clock(uint_t clock) {
+    struct rusage_ rusage;
+    if (clock == CLOCK_PROCESS_CPUTIME_ID_) {
+        lock(&pids_lock);
+        rusage = rusage_of_group(current->group);
+        unlock(&pids_lock);
+    } else {
+        rusage = rusage_get_current();
+    }
+    uint64_t usec = ((uint64_t) rusage.utime.sec + rusage.stime.sec) * 1000000 + rusage.utime.usec + rusage.stime.usec;
+    return (struct timespec) {.tv_sec = usec / 1000000, .tv_nsec = usec % 1000000 * 1000};
+}
+
 dword_t sys_clock_gettime(dword_t clock, addr_t tp) {
     STRACE("clock_gettime(%d, 0x%x)", clock, tp);
 
     struct timespec ts;
-    if (clock == CLOCK_PROCESS_CPUTIME_ID_) {
-        // FIXME this is thread usage, not process usage
-        struct rusage_ rusage = rusage_get_current();
-        ts.tv_sec = rusage.utime.sec;
-        ts.tv_nsec = rusage.utime.usec * 1000;
+    if (clock == CLOCK_PROCESS_CPUTIME_ID_ || clock == CLOCK_THREAD_CPUTIME_ID_) {
+        ts = cpu_clock(clock);
     } else {
         clockid_t clock_id;
         if (clockid_to_real(clock, &clock_id)) return _EINVAL;
@@ -89,13 +103,16 @@ dword_t sys_clock_gettime(dword_t clock, addr_t tp) {
 
 dword_t sys_clock_getres(dword_t clock, addr_t res_addr) {
     STRACE("clock_getres(%d, %#x)", clock, res_addr);
-    clockid_t clock_id;
-    if (clockid_to_real(clock, &clock_id)) return _EINVAL;
-
     struct timespec res;
-    int err = clock_getres(clock_id, &res);
-    if (err < 0)
-        return errno_map();
+    if (clock == CLOCK_PROCESS_CPUTIME_ID_ || clock == CLOCK_THREAD_CPUTIME_ID_) {
+        res = (struct timespec) {.tv_sec = 0, .tv_nsec = 1}; // as Linux says
+    } else {
+        clockid_t clock_id;
+        if (clockid_to_real(clock, &clock_id)) return _EINVAL;
+        int err = clock_getres(clock_id, &res);
+        if (err < 0)
+            return errno_map();
+    }
     struct timespec_ t;
     t.sec = res.tv_sec;
     t.nsec = res.tv_nsec;

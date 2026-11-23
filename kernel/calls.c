@@ -93,7 +93,9 @@ void handle_interrupt(int interrupt) {
                 printk("%d(%s) stub syscall %d\n", current->pid, current->comm, syscall_num);
             }
             STRACE("%d call %-3d ", current->pid, syscall_num);
+            atomic_store(&current->in_syscall, true);
             int result = syscall_table[syscall_num](cpu->ebx, cpu->ecx, cpu->edx, cpu->esi, cpu->edi, cpu->ebp);
+            atomic_store(&current->in_syscall, false);
             STRACE(" = 0x%x\n", result);
             cpu->eax = result;
         }
@@ -165,9 +167,11 @@ void handle_interrupt(int interrupt) {
                 uint64_t _a0=cpu->regs[0],_a1=cpu->regs[1],_a2=cpu->regs[2],
                          _a3=cpu->regs[3],_a4=cpu->regs[4],_a5=cpu->regs[5];
                 struct timespec _t0; if(systrace) clock_gettime(CLOCK_MONOTONIC, &_t0);
+                atomic_store(&current->in_syscall, true);
                 int64_t result = syscall_table[syscall_num](
                     cpu->regs[0], cpu->regs[1], cpu->regs[2],
                     cpu->regs[3], cpu->regs[4], cpu->regs[5]);
+                atomic_store(&current->in_syscall, false);
                 STRACE(" = 0x%llx\n", (unsigned long long)result);
                 // Single atomic fprintf so multi-thread output does not
                 // interleave the args line with another thread's return value.

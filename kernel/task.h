@@ -115,6 +115,9 @@ struct task {
     // (whole guest address space) from leaking forever when the thread never
     // re-enters do_exit(). Cleared once released so it never double-frees.
     bool mm_release_deferred;
+    // Inside a system call (the slow path), where a task waits: /proc shows it
+    // sleeping (S), as near as iSH can tell, and running (R) otherwise.
+    _Atomic bool in_syscall;
     // [T-ish-exit-valve-progress] Set by the thread itself on entering
     // do_exit, before it queues for pids_lock. do_exit_group's safety valve
     // reads it to tell a thread that is already exiting (merely waiting its
