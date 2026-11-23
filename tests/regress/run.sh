@@ -483,6 +483,18 @@ EOF
     rm -rf "$devdir"
 
     echo
+    echo "########## /proc/stat: cpu line and btime ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_proc_stat" \
+            tests/regress/regress_proc_stat.c; then
+        out=$(timeout 30 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_proc_stat 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_proc_stat"
+    else
+        echo "failed to build regress_proc_stat" >&2
+        status=1
+    fi
+    echo
     echo "########## /proc/net/tcp, udp and socket:[inode] links ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_proc_net" \
             tests/regress/regress_proc_net.c; then

@@ -10,6 +10,8 @@ struct cpu_usage {
     uint64_t nice_ticks;
 };
 struct cpu_usage get_cpu_usage(void);
+// The same for each CPU, as many as fit in usage (max): returns how many.
+unsigned get_per_cpu_usage(struct cpu_usage *usage, unsigned max);
 
 struct mem_usage {
     uint64_t total;

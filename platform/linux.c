@@ -21,8 +21,27 @@ struct cpu_usage get_cpu_usage() {
     struct cpu_usage usage = {};
     char buf[1234];
     read_proc_line("/proc/stat", "cpu", buf);
-    sscanf(buf, "cpu %"SCNu64" %"SCNu64" %"SCNu64" %"SCNu64"\n", &usage.user_ticks, &usage.system_ticks, &usage.idle_ticks, &usage.nice_ticks);
+    // Linux's order: user nice system idle (this read them as user system
+    // idle nice, and the guest's /proc/stat had the host's idle time as nice)
+    sscanf(buf, "cpu %"SCNu64" %"SCNu64" %"SCNu64" %"SCNu64"\n", &usage.user_ticks, &usage.nice_ticks, &usage.system_ticks, &usage.idle_ticks);
     return usage;
+}
+
+unsigned get_per_cpu_usage(struct cpu_usage *usage, unsigned max) {
+    FILE *f = fopen("/proc/stat", "r");
+    if (f == NULL) ERRNO_DIE("/proc/stat");
+    char buf[1234];
+    unsigned n = 0;
+    while (n < max && fgets(buf, sizeof(buf), f) != NULL) {
+        // "cpu0 ...", not the "cpu  ..." summary
+        if (strncmp(buf, "cpu", 3) != 0 || buf[3] < '0' || buf[3] > '9')
+            continue;
+        struct cpu_usage *u = &usage[n++];
+        sscanf(buf, "cpu%*u %"SCNu64" %"SCNu64" %"SCNu64" %"SCNu64"\n",
+               &u->user_ticks, &u->nice_ticks, &u->system_ticks, &u->idle_ticks);
+    }
+    fclose(f);
+    return n;
 }
 
 struct mem_usage get_mem_usage() {

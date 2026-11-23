@@ -28,6 +28,34 @@ struct cpu_usage get_cpu_usage(void) {
     return usage;
 }
 
+unsigned get_per_cpu_usage(struct cpu_usage *usage, unsigned max) {
+    natural_t cpus = 0;
+    processor_info_array_t info = NULL;
+    mach_msg_type_number_t info_count = 0;
+    kern_return_t status = host_processor_info(cached_host_self(), PROCESSOR_CPU_LOAD_INFO,
+                                               &cpus, &info, &info_count);
+    if (status != KERN_SUCCESS) {
+        // /proc/stat goes without its per-CPU lines, which Linux tools
+        // tolerate (CPUs can go offline)
+        static bool logged;
+        if (!logged) {
+            logged = true;
+            printk("host_processor_info(PROCESSOR_CPU_LOAD_INFO) failed: %d; /proc/stat has no per-CPU lines\n", status);
+        }
+        return 0;
+    }
+    processor_cpu_load_info_t load = (processor_cpu_load_info_t) info;
+    unsigned n = cpus < max ? cpus : max;
+    for (unsigned i = 0; i < n; i++) {
+        usage[i].user_ticks = load[i].cpu_ticks[CPU_STATE_USER];
+        usage[i].system_ticks = load[i].cpu_ticks[CPU_STATE_SYSTEM];
+        usage[i].idle_ticks = load[i].cpu_ticks[CPU_STATE_IDLE];
+        usage[i].nice_ticks = load[i].cpu_ticks[CPU_STATE_NICE];
+    }
+    vm_deallocate(mach_task_self(), (vm_address_t) info, info_count * sizeof(*info));
+    return n;
+}
+
 struct mem_usage get_mem_usage(void) {
     // Last successful reading; served as a fallback so a transient (or
     // OS-beta-induced) host_info failure degrades /proc/meminfo instead of

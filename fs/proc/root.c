@@ -1,4 +1,6 @@
 #include <sys/stat.h>
+#include <sys/resource.h>
+#include <stdatomic.h>
 #include <inttypes.h>
 #include <string.h>
 #include "kernel/calls.h"
@@ -14,13 +16,45 @@ static int proc_show_version(struct proc_entry *UNUSED(entry), struct proc_data 
 
 static int proc_show_stat(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
     struct cpu_usage usage = get_cpu_usage();
-    proc_printf(buf, "cpu  %"PRIu64" %"PRIu64" %"PRIu64" %"PRIu64"\n", usage.user_ticks, usage.nice_ticks, usage.system_ticks, usage.idle_ticks);
+    // All ten of Linux's fields: procps-ng 4 refuses a cpu line with fewer
+    // than eight, and ps then fails with "Unable to get system boot time".
+    // iSH counts no iowait, irq, softirq, steal or guest time.
+    proc_printf(buf, "cpu  %"PRIu64" %"PRIu64" %"PRIu64" %"PRIu64" 0 0 0 0 0 0\n",
+                usage.user_ticks, usage.nice_ticks, usage.system_ticks, usage.idle_ticks);
+    // the host's CPUs, each (top's per-CPU view, htop and psutil count them here)
+    struct cpu_usage cpus[256];
+    unsigned ncpus = get_per_cpu_usage(cpus, sizeof(cpus) / sizeof(cpus[0]));
+    for (unsigned i = 0; i < ncpus; i++)
+        proc_printf(buf, "cpu%u %"PRIu64" %"PRIu64" %"PRIu64" %"PRIu64" 0 0 0 0 0 0\n",
+                    i, cpus[i].user_ticks, cpus[i].nice_ticks, cpus[i].system_ticks, cpus[i].idle_ticks);
+    // no interrupts in iSH
+    proc_printf(buf, "intr 0\n");
+    // Context switches: the guest's threads are iSH's, so its own count.
+    struct rusage rusage;
+    getrusage(RUSAGE_SELF, &rusage);
+    proc_printf(buf, "ctxt %ld\n", rusage.ru_nvcsw + rusage.ru_nivcsw);
 
     // calculate btime (boot time in seconds since epoch) by subtracting uptime from current time
     struct uptime_info uptime = get_uptime();
     struct timespec uptime_ts = {.tv_sec = uptime.uptime_ticks / 100, .tv_nsec = uptime.uptime_ticks % 100 * 10000000};
     struct timespec boot_time = timespec_subtract(timespec_now(CLOCK_REALTIME), uptime_ts);
     proc_printf(buf, "btime %ld\n", boot_time.tv_sec);
+
+    // forks since boot, threads included, as Linux's total_forks
+    proc_printf(buf, "processes %"PRIu64"\n", (uint64_t) atomic_load(&ish_guest_forks));
+    // /proc/<pid>/stat calls every task running, iSH cannot tell a sleeping
+    // one; so does this. None is ever in uninterruptible sleep (D).
+    unsigned tasks = 0;
+    lock(&pids_lock);
+    for (pid_t_ pid = 1; pid <= MAX_PID; pid++) {
+        struct task *task = pid_get_task(pid);
+        if (task != NULL && !task->exiting)
+            tasks++;
+    }
+    unlock(&pids_lock);
+    proc_printf(buf, "procs_running %u\n", tasks);
+    proc_printf(buf, "procs_blocked 0\n");
+    proc_printf(buf, "softirq 0 0 0 0 0 0 0 0 0 0 0\n");
 
     return 0;
 }
