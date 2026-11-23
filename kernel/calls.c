@@ -615,7 +615,13 @@ void handle_interrupt(int interrupt) {
     lock(&group->lock);
     while (group->stopped)
         wait_for_ignore_signals(&group->stopped_cond, &group->lock, NULL);
+    // continued by SIGCONT: its parent hears of it now, as on Linux from the
+    // process as it runs on
+    bool continued = group->continued_unnotified;
+    group->continued_unnotified = false;
     unlock(&group->lock);
+    if (continued)
+        notify_parent_stop(CLD_CONTINUED_, SIGCONT_);
 }
 
 void dump_maps(void) {

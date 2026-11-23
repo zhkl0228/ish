@@ -5,6 +5,8 @@
 #include "kernel/calls.h"
 #include "kernel/signal.h"
 #include "kernel/task.h"
+#include "kernel/resource.h"
+#include "kernel/time.h"
 #include "kernel/native_offload.h"
 #include "kernel/vdso.h"
 #include "emu/interrupt.h"
@@ -158,6 +160,22 @@ void force_signal(struct task *task, int sig, struct siginfo_ info, bool to_defa
     signalfd_wakeup(sig);
 }
 
+// SIGCONT and SIGKILL end a stop. As Linux's prepare_signal, a stopped
+// process SIGCONT continues is for its parent to hear of (CLD_CONTINUED) and
+// to wait for (WCONTINUED); its stop's status goes, unless it is exiting and
+// the field is its exit's.
+static void end_stop(struct tgroup *group, int sig) {
+    lock(&group->lock);
+    if (sig == SIGCONT_ && group->stopped && !group->doing_group_exit) {
+        group->continued_unwaited = true;
+        group->continued_unnotified = true;
+        group->group_exit_code = 0;
+    }
+    group->stopped = false;
+    notify(&group->stopped_cond);
+    unlock(&group->lock);
+}
+
 void send_signal(struct task *task, int sig, struct siginfo_ info) {
     // signal zero is for testing whether a process exists
     if (sig == 0)
@@ -206,12 +224,8 @@ void send_signal(struct task *task, int sig, struct siginfo_ info) {
     unlock(&sighand->lock);
     signalfd_wakeup(sig);
 
-    if (sig == SIGCONT_ || sig == SIGKILL_) {
-        lock(&task->group->lock);
-        task->group->stopped = false;
-        notify(&task->group->stopped_cond);
-        unlock(&task->group->lock);
-    }
+    if (sig == SIGCONT_ || sig == SIGKILL_)
+        end_stop(task->group, sig);
 }
 
 // Wakes a thread of group that would take one of the signals in set, for
@@ -291,12 +305,8 @@ void send_process_signal(struct tgroup *group, int sig, struct siginfo_ info) {
     unlock(&sighand->lock);
     signalfd_wakeup(sig);
 
-    if (sig == SIGCONT_ || sig == SIGKILL_) {
-        lock(&group->lock);
-        group->stopped = false;
-        notify(&group->stopped_cond);
-        unlock(&group->lock);
-    }
+    if (sig == SIGCONT_ || sig == SIGKILL_)
+        end_stop(group, sig);
 }
 
 bool signal_ignored_or_blocked(int sig) {
@@ -535,6 +545,8 @@ static bool receive_signal(struct sighand *sighand, struct siginfo_ *info) {
             lock(&current->group->lock);
             current->group->stopped = true;
             current->group->group_exit_code = sig << 8 | 0x7f;
+            current->group->continued_unwaited = false;
+            current->group->continued_unnotified = false;
             unlock(&current->group->lock);
             return false;
 
@@ -798,15 +810,44 @@ void receive_signals(void) {
     if (!was_stopped) {
         lock(&current->group->lock);
         bool now_stopped = current->group->stopped;
+        int stop_sig = (current->group->group_exit_code >> 8) & 0x7f;
         unlock(&current->group->lock);
-        if (now_stopped) {
-            lock(&pids_lock);
-            notify(&current->parent->group->child_exit);
-            // TODO add siginfo
-            send_process_signal(current->parent->group, current->group->leader->exit_signal, SIGINFO_NIL);
-            unlock(&pids_lock);
-        }
+        if (now_stopped)
+            notify_parent_stop(CLD_STOPPED_, stop_sig);
     }
+}
+
+// SIGCHLD whatever the exit signal, with the process (its leader's pid), the
+// signal, and its CPU time, as Linux sends it: not if the parent ignores
+// SIGCHLD or asked not to with SA_NOCLDSTOP. Its wait wakes in any case. The
+// stop's had no siginfo, and a continue had nothing.
+void notify_parent_stop(int code, int sig) {
+    lock(&pids_lock);
+    struct task *leader = current->group->leader;
+    struct task *parent = leader->parent;
+    // none for init; none to send to while the parent exits
+    if (parent == NULL || parent->sighand == NULL) {
+        unlock(&pids_lock);
+        return;
+    }
+    notify(&parent->group->child_exit);
+    lock(&parent->sighand->lock);
+    struct sigaction_ *action = &parent->sighand->action[SIGCHLD_];
+    bool wanted = action->handler != SIG_IGN_ && !(action->flags & SA_NOCLDSTOP_);
+    unlock(&parent->sighand->lock);
+    if (wanted) {
+        struct rusage_ rusage = rusage_of_group(current->group);
+        struct siginfo_ info = {
+            .code = code,
+            .child.pid = leader->pid,
+            .child.uid = current->uid,
+            .child.status = sig,
+            .child.utime = clock_from_timeval(rusage.utime),
+            .child.stime = clock_from_timeval(rusage.stime),
+        };
+        send_process_signal(parent->group, SIGCHLD_, info);
+    }
+    unlock(&pids_lock);
 }
 
 #if defined(GUEST_ARM64)

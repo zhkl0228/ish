@@ -220,6 +220,11 @@ struct tgroup {
 
     bool stopped;
     cond_t stopped_cond;
+    // SIGCONT continued it from a stop: for its parent's wait (WCONTINUED),
+    // and for its parent's SIGCHLD, which it sends as it runs on (calls.c).
+    // Locked by the group's lock.
+    bool continued_unwaited;
+    bool continued_unnotified;
 
     // Signals sent to the process as a whole: kill(), a process group's
     // signal (a terminal's SIGINT), SIGCHLD, SIGALRM, a POSIX timer's

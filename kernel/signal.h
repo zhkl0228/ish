@@ -13,6 +13,7 @@ typedef qword_t sigset_t_;
 #define SIG_IGN_ 1
 
 #define SA_ONSTACK_ 0x08000000
+#define SA_NOCLDSTOP_ 1
 #define SA_SIGINFO_ 4
 #define SA_RESTART_ 0x10000000
 #define SA_NODEFER_ 0x40000000
@@ -166,6 +167,10 @@ bool dequeue_signal(sigset_t_ set, struct siginfo_ *info);
 // Wakes those polling a signalfd whose mask has sig (kernel/signalfd.c).
 // Caller holds no sighand lock.
 void signalfd_wakeup(int sig);
+// Tells the parent of the caller's process that it stopped (CLD_STOPPED) or
+// went on (CLD_CONTINUED), by sig: its wait wakes, and it gets SIGCHLD as
+// Linux's do_notify_parent_cldstop sends it. Caller holds no lock.
+void notify_parent_stop(int code, int sig);
 // Wake threads to take the process's pending signals in set; see signal.c.
 // Caller holds pids_lock and the threads' sighand lock.
 void retarget_process_signals(struct tgroup *group, sigset_t_ set);

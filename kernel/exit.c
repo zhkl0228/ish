@@ -708,10 +708,24 @@ static bool notify_if_stopped(struct task *task, struct siginfo_ *info_out) {
     return true;
 }
 
+// WCONTINUED: SIGCONT continued it from a stop, reported once (status
+// 0xffff, waitid's CLD_CONTINUED)
+static bool notify_if_continued(struct task *task, struct siginfo_ *info_out, int options) {
+    lock(&task->group->lock);
+    bool continued = task->group->continued_unwaited;
+    if (continued && !(options & WNOWAIT_))
+        task->group->continued_unwaited = false;
+    unlock(&task->group->lock);
+    if (continued)
+        info_out->child.status = 0xffff;
+    return continued;
+}
+
 static bool reap_if_needed(struct task *task, struct siginfo_ *info_out, struct rusage_ *rusage_out, int options) {
     assert(task_is_leader(task));
     if ((options & WUNTRACED_ && notify_if_stopped(task, info_out)) ||
-        (options & WEXITED_ && reap_if_zombie(task, info_out, rusage_out, options))) {
+        (options & WEXITED_ && reap_if_zombie(task, info_out, rusage_out, options)) ||
+        (options & WCONTINUED_ && notify_if_continued(task, info_out, options))) {
         info_out->sig = SIGCHLD_;
         return true;
     }
@@ -901,9 +915,7 @@ static void waitid_decode_status(struct siginfo_ *info) {
         info->code = CLD_STOPPED_;
         info->child.status = (status >> 8) & 0xff;
     } else if (status == 0xffff) {
-        // continued: WIFCONTINUED. Nothing produces this yet (SIGCONT does not
-        // set group_exit_code), but decode it so the case is not silently
-        // misreported as an exit if WCONTINUED support lands.
+        // continued: WIFCONTINUED (notify_if_continued)
         info->code = CLD_CONTINUED_;
         info->child.status = SIGCONT_;
     } else if ((status & 0x7f) != 0) {
