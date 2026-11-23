@@ -13,9 +13,13 @@
 # and busybox read them, at the daemons' sockets. (procps-ng's uptime and top
 # count no users: they get musl's getutxent, which has none, before libutmps's.)
 # Not if OpenRC is there to start them (setup-utmp).
-#
-# The app waits for utmpd's socket before the first session logs in, so that
-# its login is recorded: it removes the socket left from the last boot.
+# Whether process $1 runs: there, and no zombie, which kill -0 takes for one
+alive() {
+    state=
+    { read -r _ _ state _ < "/proc/$1/stat"; } 2> /dev/null
+    [ -n "$state" ] && [ "$state" != Z ]
+}
+
 start_utmps() {
     command -v utmps-utmpd > /dev/null || return 0
     [ ! -e /etc/runlevels/boot/utmpd ] || return 0
@@ -40,22 +44,26 @@ start_utmps() {
     # utmpd, wtmpd, btmpd: as utmp, in the directory of their file
     uid=$(id -u utmp)
     gid=$(id -g utmp)
+    pids=
     for daemon in "utmpd /run/utmps utmps-utmpd" "wtmpd /var/log/wtmpd utmps-wtmpd wtmp" \
             "btmpd /var/log/btmpd utmps-wtmpd btmp"; do
         set -- $daemon
         name=$1 dir=$2
         shift 2
         rm -f "/run/utmps/.$name-socket"
-        (cd "$dir" && exec s6-ipcserver -u "$uid" -g "$gid" "/run/utmps/.$name-socket" "$@" < /dev/null &)
+        # init's once this script is done
+        (cd "$dir" && exec s6-ipcserver -u "$uid" -g "$gid" "/run/utmps/.$name-socket" "$@") < /dev/null &
+        pids="$pids $!"
     done
 
     # utmp-init's records, as sysvinit and busybox's init write them, once
-    # utmpd and wtmpd are there
-    tries=0
+    # utmpd and wtmpd are there: their sockets, which they make before they
+    # take a connection. However long they take to start (longer without the
+    # JIT); not if one of them is gone.
+    set -- $pids
     until [ -S /run/utmps/.utmpd-socket ] && [ -S /run/utmps/.wtmpd-socket ]; do
-        tries=$((tries + 1))
-        if [ $tries -gt 50 ]; then
-            echo "ish-sysinit: utmpd and wtmpd did not start" >&2
+        if ! alive "$1" || ! alive "$2"; then
+            echo "ish-sysinit: utmpd or wtmpd ended before making its socket" >&2
             return 1
         fi
         sleep 0.1
@@ -71,3 +79,8 @@ start_utmps() {
 }
 
 start_utmps
+
+# Done: the app runs the sessions' processes, their logins, once this file is
+# there (it removes the last boot's), as Linux starts the logins after its
+# boot.
+: > /run/ish-sysinit.done

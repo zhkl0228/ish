@@ -79,6 +79,7 @@ struct task *task_create_(struct task *parent) {
     atomic_init(&task->refs, 1); // the kernel's
     task->pid = pid->id;
     // the parent's own
+    task->before_run = NULL;
     task->restart_sleep_pending = false;
     task->start_ticks = get_uptime().uptime_ticks;
     pid->task = task;
@@ -290,6 +291,11 @@ void task_run_current(void) {
 static void *task_thread(void *vtask) {
     current = vtask;
     update_thread_name();
+    if (current->before_run != NULL) {
+        void (*before_run)(void) = current->before_run;
+        current->before_run = NULL;
+        before_run();
+    }
     task_run_current();
     die("task_thread returned"); // above function call should never return
 }

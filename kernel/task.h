@@ -113,6 +113,10 @@ struct task {
     struct timespec restart_sleep_deadline; // CLOCK_MONOTONIC
     addr_t restart_sleep_rem;
 
+    // Run on the task's thread, as it, before its first instruction: set
+    // before task_start. The app's sessions wait there for the boot.
+    void (*before_run)(void);
+
     // locked by pids_lock
     dword_t exit_code;
     bool zombie;

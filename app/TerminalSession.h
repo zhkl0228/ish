@@ -11,6 +11,11 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+// The boot (/usr/local/sbin/ish-sysinit, init's first sysinit action) writes
+// this file when it is done, and the app removes it before it boots: the
+// sessions' processes run once it is there (TerminalSession.m)
+#define ISH_BOOT_DONE_PATH "/run/ish-sysinit.done"
+
 typedef NS_ENUM(NSInteger, TerminalSessionState) {
     TerminalSessionStateRunning,
     TerminalSessionStateExited, // the shell exited; the terminal still shows its last output

@@ -7,6 +7,7 @@
 #import "AppDelegate.h"
 #import "UserPreferences.h"
 #import "LinuxInterop.h"
+#include <stdatomic.h>
 #include "kernel/init.h"
 #include "kernel/task.h"
 #include "kernel/calls.h"
@@ -233,25 +234,42 @@ NSNotificationName const TerminalSessionDidChangeNotification = @"TerminalSessio
 }
 
 #if !ISH_LINUX
-// A login records itself with utmpd (w, who), which init starts at boot
-// (/usr/local/sbin/ish-sysinit), from the utmps the root has. As
-// Linux starts the logins after its boot services, the first session of a boot
-// waits for utmpd's socket, which the boot removes with the last one's, up to
-// 2 seconds; a later one finds it there.
-static void wait_for_utmpd(void) {
-    static BOOL waited;
-    if (waited)
-        return;
-    waited = YES;
+// As Linux starts the logins after the boot's sysinit actions, a session's
+// process runs once the boot (/usr/local/sbin/ish-sysinit) is done: its login
+// is then recorded with utmpd (w, who), which the boot starts. A login before
+// it went unrecorded, the first session's after the app started.
+//
+// Waited for on the process's own thread before it runs (task->before_run),
+// not the main thread: the boot can take seconds without the JIT. 30 seconds
+// at most, for an init that does not run it (an /etc/inittab of one's own);
+// not again after that.
+static atomic_bool boot_waited;
+
+static bool boot_is_awaited(void) {
+    if (atomic_load(&boot_waited))
+        return false;
     struct statbuf stat;
-    if (generic_statat(AT_PWD, "/usr/bin/utmps-utmpd", &stat, true) < 0)
-        return;
-    for (int i = 0; i < 200; i++) {
-        if (generic_statat(AT_PWD, "/run/utmps/.utmpd-socket", &stat, true) == 0)
+    // a root the app has not given it, or a boot that is not init's
+    if (generic_statat(AT_PWD, "/usr/local/sbin/ish-sysinit", &stat, true) < 0 ||
+            ![UserPreferences.shared.bootCommand.firstObject isEqualToString:@"/sbin/init"]) {
+        atomic_store(&boot_waited, true);
+        return false;
+    }
+    return true;
+}
+
+// task->before_run: current is the session's task, on its thread
+static void wait_for_boot(void) {
+    struct statbuf stat;
+    for (int i = 0; i < 3000; i++) {
+        if (atomic_load(&boot_waited) || generic_statat(AT_PWD, ISH_BOOT_DONE_PATH, &stat, true) == 0) {
+            atomic_store(&boot_waited, true);
             return;
+        }
         usleep(10000);
     }
-    NSLog(@"utmpd's socket did not appear in 2 seconds: the first session's login goes unrecorded");
+    atomic_store(&boot_waited, true);
+    NSLog(@"the boot did not say it was done in 30 seconds (%s): the sessions start without it", ISH_BOOT_DONE_PATH);
 }
 
 // Creates the pty and the process, leaving it ready for task_start. Returns a negative errno.
@@ -259,7 +277,6 @@ static int start_process(NSArray<NSString *> *command, Terminal **terminalOut) {
     int err = become_new_init_child();
     if (err < 0)
         return err;
-    wait_for_utmpd();
     struct tty *tty;
     Terminal *terminal = [Terminal createPseudoTerminal:&tty];
     if (terminal == nil) {
@@ -335,6 +352,8 @@ static int start_process(NSArray<NSString *> *command, Terminal **terminalOut) {
     [self.mutableSessions addObject:session];
     [self.livePids addObject:@(pid)];
 #if !ISH_LINUX
+    if (boot_is_awaited())
+        current->before_run = wait_for_boot;
     task_start(current);
     // The task now runs on its own thread. If main kept pointing at it, signals sent
     // from main (e.g. SIGHUP on close) would take the "signalling myself" path and
