@@ -773,6 +773,10 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
     // execve removes the calling thread's alternate signal stack.
     current->altstack = 0;
     current->altstack_size = 0;
+    // And, as Linux's begin_new_exec, the POSIX timers: their signals and
+    // values were the old program's, which may have died of the next one
+    // (SIGUSR1's handler gone). setitimer's and alarm's timer stays.
+    posix_timers_delete(current->group);
 
     current->did_exec = true;
     current->undumpable = false;

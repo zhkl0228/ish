@@ -14,6 +14,9 @@ dword_t sys_stime(addr_t time);
 dword_t sys_clock_gettime(dword_t clock, addr_t tp);
 dword_t sys_clock_settime(dword_t clock, addr_t tp);
 dword_t sys_clock_getres(dword_t clock, addr_t res_addr);
+struct tgroup;
+// Delete the process's POSIX timers, as execve does.
+void posix_timers_delete(struct tgroup *group);
 
 #ifdef GUEST_ARM64
 struct timeval_ {

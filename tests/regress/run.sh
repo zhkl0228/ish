@@ -399,6 +399,18 @@ else
         status=1
     fi
     echo
+    echo "########## POSIX timers deleted by exec ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_exec_timers" \
+            tests/regress/regress_exec_timers.c; then
+        out=$(timeout 30 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_exec_timers 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_exec_timers"
+    else
+        echo "failed to build regress_exec_timers" >&2
+        status=1
+    fi
+    echo
     echo "########## /dev/shm: shm_open and sem_open ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_dev_shm" \
             tests/regress/regress_dev_shm.c; then

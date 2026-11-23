@@ -564,6 +564,24 @@ int_t sys_timer_getoverrun(dword_t timer_id) {
     return 0;
 }
 
+// Freed without the group's lock held: a timer's callback runs holding the
+// timer's lock, and timer_free takes that lock, waiting for one under way.
+void posix_timers_delete(struct tgroup *group) {
+    struct timer *timers[TIMERS_MAX];
+    int count = 0;
+    lock(&group->lock);
+    for (int i = 0; i < TIMERS_MAX; i++) {
+        struct posix_timer *timer = &group->posix_timers[i];
+        if (timer->timer != NULL)
+            timers[count++] = timer->timer;
+        timer->timer = NULL;
+        timer->tgroup = NULL;
+    }
+    unlock(&group->lock);
+    for (int i = 0; i < count; i++)
+        timer_free(timers[i]);
+}
+
 int_t sys_timer_delete(dword_t timer_id) {
     STRACE("timer_delete(%d)\n", timer_id);
     lock(&current->group->lock);
