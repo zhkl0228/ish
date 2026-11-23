@@ -102,6 +102,30 @@ static uint64_t uc_esr(ucontext_t *uc) {
 #endif
 #endif
 
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define ISH_ASAN 1
+#endif
+#endif
+#if defined(__SANITIZE_ADDRESS__)
+#define ISH_ASAN 1
+#endif
+#ifdef ISH_ASAN
+// The options an AddressSanitizer build of iSH needs (tools/build-asan.sh);
+// ASAN_OPTIONS is read after them and can override them.
+// - handle_segv=0, allow_user_segv_handler=1: SIGSEGV and SIGBUS are iSH's
+//   own: crash_handler recovers faults in translated guest code.
+// - use_sigaltstack=0: iSH's main thread runs its handlers on a static
+//   altstack (main), which ASan, owning altstacks, would munmap at exit.
+// - detect_leaks=0: iSH does not free everything when it exits.
+// - verify_asan_link_order=0: clang code linked with gcc's libasan does not
+//   have the runtime first in the library list.
+const char *__asan_default_options(void);
+const char *__asan_default_options(void) {
+    return "handle_segv=0:allow_user_segv_handler=1:use_sigaltstack=0:detect_leaks=0:verify_asan_link_order=0";
+}
+#endif
+
 static void crash_handler(int sig, siginfo_t *info, void *ctx) {
 #if defined(__aarch64__) && defined(GUEST_ARM64)
     // If we're inside JIT code and got SIGSEGV/SIGBUS, recover by redirecting

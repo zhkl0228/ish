@@ -124,11 +124,13 @@ corresponding gadget.
 Running Node.js on a userspace emulator required solving multiple V8-specific problems:
 
 - **128GB MAP_NORESERVE**: Lazy address reservations that don't consume physical memory
-- **Guard pages at 0x0-0x100000**: V8 compressed pointers dereference small integers —
-  mapping the low 1MB as readable zeros prevents SIGSEGV
-- **V8 binary patch**: 9-instruction code cave patch for `InterpreterEntryTrampoline`
-  derived constructor bug (zero emulator overhead)
-- **`--jitless --no-lazy`**: V8 flags to avoid Wasm compilation and lazy parsing issues
+- **V8 flags for an emulator** (`sys_execve`, for a program named `node`): V8's JIT
+  tiers and native regexp code off (`--no-sparkplug --no-maglev --no-opt
+  --regexp-interpret-all`), fewer V8 threads, one heap generation. They choose speed and
+  memory, not correctness: node runs right with every tier, WebAssembly stays real.
+  `ISH_NODE_MODE=jitless` (or `--jitless`) picks the jitless set with a WebAssembly
+  polyfill instead. An option the program gives itself, on its command line or in
+  `NODE_OPTIONS`, wins over the injected one
 - **Exit cleanup**: Safety valves for stuck V8 threads during process exit
 
 **Result**: `npm install`, `npm exec`, `npx`, and `create-next-app` all work.
@@ -194,10 +196,10 @@ Enables AI agents to share files between the host app and the Linux guest withou
 
 ### 5. Rootfs Management
 
-- **Alpine 3.21 aarch64** with full apk package manager
+- **Alpine 3.24 aarch64** with full apk package manager (`tools/build-rootfs.sh`)
 - **RootfsPatch.bundle**: Versioned overlay system for incremental rootfs updates
 - **Polyfills**: WebAssembly polyfill for undici/llhttp, fetch polyfill for HTTP downloads
-- **OPENSSL_armcap=0** and **GODEBUG/GOMAXPROCS** injection in `sys_execve`
+- No environment variables injected: a program sees the environment it was started with
 
 ---
 
@@ -220,6 +222,35 @@ ninja -C build-arm64-release
 # Run
 ./build-arm64-release/ish -f ./alpine-arm64-fakefs /bin/sh
 ```
+
+### Tests
+
+```bash
+# Regression tests: small guest programs, each pinning a fixed bug. They are
+# built with $CC_GUEST (default aarch64-linux-musl-gcc) and run in a plain
+# (non-fakefs) aarch64 rootfs.
+tests/regress/run.sh -i build-arm64-release/ish -r ./alpine-arm64-plain
+
+# Smoke test: python/pip, node/npm, go, git and Claude Code doing real work in
+# a rootfs made by tools/build-rootfs.sh. Needs the network.
+tests/smoke/run.sh -i build-arm64-release/ish -f ./alpine-arm64-fakefs
+```
+
+**AddressSanitizer.** A heap overflow or use-after-free in iSH itself usually
+crashes it later, somewhere in `malloc` or `free`, or not at all.
+`tools/build-asan.sh` builds an ASan `ish`, which stops at the bad access and
+says where it happened and where the memory was allocated and freed:
+
+```bash
+tools/build-asan.sh build-asan -Dguest_arch=arm64
+tests/regress/run.sh -i build-asan/ish -r ./alpine-arm64-plain
+tests/smoke/run.sh -i build-asan/ish -f ./alpine-arm64-fakefs
+```
+
+Both test scripts notice an ASan build and fail on any report. The ASan options
+iSH needs are built into the binary; `ASAN_OPTIONS` adds to them. With a clang
+that has no ASan runtime of its own (Ubuntu's), the script links gcc's
+`libasan`.
 
 ---
 
@@ -250,8 +281,8 @@ timing (startup overhead excluded). Full details in
 
 > **Why ARM64 wins**: same-architecture gadget dispatch (each guest instruction costs only a
 > few ARM64 host instructions inside its gadget), full NEON + crypto extensions, 48-bit
-> address space for V8/Go/Rust, and Node.js-specific fixes (V8 binary patch, guard pages,
-> `--jitless` injection, io_uring syscall). On a few microbench cases the x86 interpreter is
+> address space for V8/Go/Rust, and Node.js-specific fixes (V8 flags, io_uring
+> syscall). On a few microbench cases the x86 interpreter is
 > competitive or faster (Node.js `sum 1M`, `JSON 10K`, C `mem_seq`/`func_call`) — typically
 > small allocations or tight loops where the JIT's per-block compile cost isn't amortized.
 
@@ -341,7 +372,7 @@ iSH/
 │   ├── native_offload.c/h       # Binary offload system
 │   ├── signal.c/h               # Signal delivery/frame
 │   ├── futex.c                  # Futex with pipe wakeup
-│   ├── exec.c                   # ELF loader, V8 guard pages
+│   ├── exec.c                   # ELF loader, node's V8 flags
 │   └── exit.c                   # Thread cleanup, safety valves
 ├── fs/
 │   ├── fake.c/h                 # fakefs + bind mount support

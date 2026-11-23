@@ -23,6 +23,9 @@
 # The guest test binary is built with a cross-compiler (aarch64-linux-musl-gcc
 # by default, override with $CC_GUEST). If none is available the script skips
 # rather than failing, since the toolchain is not part of the repo.
+#
+# Given an iSH built with AddressSanitizer (tools/build-asan.sh), the run also
+# fails on any ASan report, which it prints at the end.
 
 set -u
 cd "$(dirname "$0")/../.."
@@ -38,7 +41,7 @@ while getopts "i:r:f:m:h" opt; do
         r) ROOTFS="$OPTARG" ;;
         f) FAKEFS_PATH="$OPTARG" ;;
         m) MOUNT_FLAG="$OPTARG" ;;
-        h) sed -n '2,26p' "$0"; exit 0 ;;
+        h) sed -n '2,/^$/p' "$0"; exit 0 ;;
         *) exit 2 ;;
     esac
 done
@@ -58,6 +61,16 @@ if [ ! -d "$ROOTFS" ]; then
 fi
 
 CC_GUEST="${CC_GUEST:-aarch64-linux-musl-gcc}"
+
+# An AddressSanitizer build of iSH (tools/build-asan.sh) writes any report to
+# a file here, and a report fails the run whatever the tests printed: a
+# corrupted host heap does not always change a guest's output.
+ASAN_REPORTS=""
+if grep -qa __asan_init "$ISH"; then
+    ASAN_REPORTS=$(mktemp -d)
+    export ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}log_path=$ASAN_REPORTS/asan"
+    echo "$ISH is built with AddressSanitizer: reports go to $ASAN_REPORTS"
+fi
 if ! command -v "$CC_GUEST" >/dev/null 2>&1; then
     echo "SKIP: no guest cross-compiler ($CC_GUEST) available." >&2
     echo "      Install one or set CC_GUEST to build tests/regress/regress_syscall.c." >&2
@@ -500,6 +513,18 @@ echo "########## cp regressions ##########"
 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /bin/sh /tmp/regress_cp.sh ${FAKEFS_PATH:+"$FAKEFS_PATH"} || status=1
 
 rm -f "$BIN" "$GUEST_ROOT/tmp/regress_cp.sh"
+
+if [ -n "$ASAN_REPORTS" ]; then
+    echo
+    echo "########## AddressSanitizer reports ##########"
+    reports=$(ls "$ASAN_REPORTS"/asan.* 2>/dev/null)
+    if [ -n "$reports" ]; then
+        cat $reports
+        status=1
+    else
+        echo "none"
+    fi
+fi
 
 echo
 if [ "$status" = "0" ]; then

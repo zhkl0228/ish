@@ -116,11 +116,11 @@
 在用户态模拟器上跑 Node.js 需要解决多个 V8 特有问题：
 
 - **128GB MAP_NORESERVE**: 不占物理内存的惰性地址预留
-- **0x0-0x100000 守护页**: V8 compressed pointer 会解引用小整数 —
-  把低 1MB 映射成可读的零页能避免 SIGSEGV
-- **V8 二进制补丁**: 在代码 cave 中植入 9 条指令修复 `InterpreterEntryTrampoline`
-  派生构造函数 bug（零模拟器开销）
-- **`--jitless --no-lazy`**: V8 启动 flag，避开 Wasm 编译和懒解析问题
+- **面向模拟器的 V8 flag**（`sys_execve`，对名为 `node` 的程序）：关掉 V8 的 JIT 层级和
+  原生正则代码（`--no-sparkplug --no-maglev --no-opt --regexp-interpret-all`），减少 V8 线程，
+  只用一代堆。这些 flag 只为速度和内存，不为正确性：所有层级都开着 node 也跑得对，WebAssembly
+  是真的。`ISH_NODE_MODE=jitless`（或 `--jitless`）改用 jitless 那一套加 WebAssembly polyfill。
+  程序自己在命令行或 `NODE_OPTIONS` 里给出的选项优先于注入的
 - **退出清理**: V8 线程卡死时的 safety valve
 
 **效果**: `npm install`、`npm exec`、`npx`、`create-next-app` 全部可用。
@@ -186,10 +186,10 @@ fakefs_bind_mount("/host/path/to/data", "/mnt/data", /*read_only=*/true);
 
 ### 5. Rootfs 管理
 
-- **Alpine 3.21 aarch64**，自带完整 apk 包管理器
+- **Alpine 3.24 aarch64**，自带完整 apk 包管理器（`tools/build-rootfs.sh`）
 - **RootfsPatch.bundle**: 增量 rootfs 更新的版本化 overlay 系统
 - **Polyfills**: undici/llhttp 的 WebAssembly polyfill、HTTP 下载的 fetch polyfill
-- **OPENSSL_armcap=0** 和 **GODEBUG/GOMAXPROCS** 在 `sys_execve` 中注入
+- 不注入任何环境变量：程序看到的就是启动它时给的环境
 
 ---
 
@@ -212,6 +212,32 @@ ninja -C build-arm64-release
 # 运行
 ./build-arm64-release/ish -f ./alpine-arm64-fakefs /bin/sh
 ```
+
+### 测试
+
+```bash
+# 回归测试：一个个小的 guest 程序，各自钉住一个修过的 bug。用 $CC_GUEST
+# （默认 aarch64-linux-musl-gcc）编译，在普通（非 fakefs）的 aarch64 rootfs 里跑。
+tests/regress/run.sh -i build-arm64-release/ish -r ./alpine-arm64-plain
+
+# 冒烟测试：python/pip、node/npm、go、git、Claude Code 在 tools/build-rootfs.sh
+# 做出的 rootfs 里干真活。需要联网。
+tests/smoke/run.sh -i build-arm64-release/ish -f ./alpine-arm64-fakefs
+```
+
+**AddressSanitizer。** iSH 自身的堆越界或 use-after-free 通常要过一阵才在 `malloc`、`free`
+里崩，或者根本不崩。`tools/build-asan.sh` 构建 ASan 版的 `ish`，它停在出错的那次访问上，
+报出位置以及那块内存在哪分配、在哪释放：
+
+```bash
+tools/build-asan.sh build-asan -Dguest_arch=arm64
+tests/regress/run.sh -i build-asan/ish -r ./alpine-arm64-plain
+tests/smoke/run.sh -i build-asan/ish -f ./alpine-arm64-fakefs
+```
+
+两个测试脚本都会认出 ASan 构建，有任何报告就算失败。iSH 需要的 ASan 选项编进了二进制，
+`ASAN_OPTIONS` 在此基础上追加。clang 自己没带 ASan 运行时的话（Ubuntu 的 clang 就没有），
+脚本改链 gcc 的 `libasan`。
 
 ---
 
@@ -241,8 +267,8 @@ ninja -C build-arm64-release
 - **Crypto `md5sum`**: ARM64 借助硬件 crypto **快 2.2x**（6ms vs 13ms）
 
 > **ARM64 为什么快**: 同架构 gadget 分派（每条 guest 指令只需对应 gadget 中的几条 host 指令）、完整 NEON + 加密扩展、
-> 48-bit 地址空间支持 V8/Go/Rust，以及 Node.js 专项修复（V8 二进制补丁、守护页、`--jitless`
-> 注入、io_uring syscall）。在少数微基准上 x86 解释器与 ARM64 持平甚至更快（Node.js `sum 1M`、
+> 48-bit 地址空间支持 V8/Go/Rust，以及 Node.js 专项修复（V8 flag、
+> io_uring syscall）。在少数微基准上 x86 解释器与 ARM64 持平甚至更快（Node.js `sum 1M`、
 > `JSON 10K`、C `mem_seq`/`func_call`）—— 多为小分配或紧密循环，JIT 单次编译成本不划算的场景。
 
 ## 兼容性
@@ -331,7 +357,7 @@ iSH/
 │   ├── native_offload.c/h       # 二进制 offload 系统
 │   ├── signal.c/h               # 信号投递/帧
 │   ├── futex.c                  # 基于 pipe 唤醒的 futex
-│   ├── exec.c                   # ELF 加载器、V8 守护页
+│   ├── exec.c                   # ELF 加载器、node 的 V8 flag
 │   └── exit.c                   # 线程清理、safety valve
 ├── fs/
 │   ├── fake.c/h                 # fakefs + bind mount
