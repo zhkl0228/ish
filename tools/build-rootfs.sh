@@ -29,6 +29,11 @@ PACKAGES=(
     inetutils-telnet
     # user accounting (w, who, last): its daemons, which ish-sysinit starts
     utmps
+    # root's login shell (below)
+    bash
+    # captures what iSH's processes send and receive (tcpdump -i any), which
+    # the app makes up from their socket calls (kernel/netcap.c)
+    tcpdump
 )
 
 [ $# -eq 2 ] || { sed -n '2,16p' "$0"; exit 2; }
@@ -57,6 +62,10 @@ guest() { "$build/ish" -f "$work/fs" "$@" < /dev/null; }
 grep '^nameserver' /etc/resolv.conf | "$build/ish" -f "$work/fs" /bin/sh -c 'cat > /etc/resolv.conf'
 guest /sbin/apk upgrade --no-cache
 guest /sbin/apk add --no-cache "${PACKAGES[@]}"
+# root logs in to bash: the app's launch command, login -f root, runs root's
+# shell. /bin/sh (busybox ash) stays the scripts'.
+guest /bin/sed -i 's|^\(root:.*:\)/bin/sh$|\1/bin/bash|' /etc/passwd
+guest /bin/grep -q '^root:.*:/bin/bash$' /etc/passwd
 guest /bin/rm /etc/resolv.conf
 # A fakefs keeps regular files' contents under data/, so the package database
 # can be read from here.

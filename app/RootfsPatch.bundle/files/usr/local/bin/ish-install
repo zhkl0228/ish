@@ -6,19 +6,21 @@
 #   ish-install -l           list the groups, and which are installed
 #
 # A group already installed is skipped. Packages come from Alpine's
-# repositories (apk) and Claude Code from npm, so this needs the network.
+# repositories (apk), and Claude Code and Kimi Code from npm, so this needs the
+# network.
 #
 # Installed by the iSH app (RootfsPatch.bundle), which rewrites this file when
 # it updates the root.
 set -e
 
-ALL_GROUPS="python node claude go java c clang db tools"
+ALL_GROUPS="python node claude kimi go java c clang db tools"
 
 describe() {
     case $1 in
         python) echo "Python 3, pip, cryptography, PyYAML      ~55 MB" ;;
         node)   echo "Node.js and npm                          ~60 MB" ;;
         claude) echo "Claude Code (and node)                   ~410 MB" ;;
+        kimi)   echo "Kimi Code (and node)                     ~120 MB" ;;
         go)     echo "Go                                       ~175 MB" ;;
         java)   echo "OpenJDK 25 and Maven                     ~360 MB" ;;
         c)      echo "gcc, g++, make, musl-dev (build-base)    ~225 MB" ;;
@@ -33,6 +35,7 @@ packages() {
         python) echo "python3 py3-pip py3-pysocks py3-cryptography py3-yaml" ;;
         node)   echo "nodejs npm" ;;
         claude) echo "nodejs npm" ;;
+        kimi)   echo "nodejs npm" ;;
         go)     echo "go" ;;
         # openjdk25-jdk first, so it is the java-jdk maven depends on
         java)   echo "openjdk25-jdk maven" ;;
@@ -43,11 +46,21 @@ packages() {
     esac
 }
 
+# The groups with a tool from npm: its command and package. Installed with
+# npm -g, the way the tool's own updater expects to update it.
+npm_tool() {
+    case $1 in
+        claude) echo "claude @anthropic-ai/claude-code" ;;
+        kimi)   echo "kimi @moonshot-ai/kimi-code" ;;
+    esac
+}
+
 # apk info -e names the packages given that are installed
 installed() {
     # shellcheck disable=SC2046
     [ "$(apk info -e $(packages "$1") | wc -l)" -eq "$(packages "$1" | wc -w)" ] || return 1
-    [ "$1" != claude ] || command -v claude > /dev/null
+    tool=$(npm_tool "$1")
+    [ -z "$tool" ] || command -v "${tool%% *}" > /dev/null
 }
 
 list() {
@@ -79,7 +92,7 @@ for arg in "$@"; do
 done
 [ -n "$wanted" ] || wanted=$ALL_GROUPS
 
-todo='' pkgs='' claude=''
+todo='' pkgs=''
 for group in $wanted; do
     if installed "$group"; then
         echo "$group: already installed"
@@ -87,16 +100,19 @@ for group in $wanted; do
     fi
     todo="$todo $group"
     pkgs="$pkgs $(packages "$group")"
-    [ "$group" = claude ] && claude=1
 done
 [ -n "$todo" ] || exit 0
 
 echo "installing:$todo"
 # shellcheck disable=SC2086
 apk add --no-cache $pkgs
-if [ -n "$claude" ] && ! command -v claude > /dev/null; then
-    # with npm -g, the way Claude Code's own updater expects to update it
-    npm install -g --no-audit --no-fund @anthropic-ai/claude-code
-    npm cache clean --force 2> /dev/null
-fi
+npm_installed=''
+for group in $todo; do
+    tool=$(npm_tool "$group")
+    [ -n "$tool" ] || continue
+    command -v "${tool%% *}" > /dev/null && continue
+    npm install -g --no-audit --no-fund "${tool#* }"
+    npm_installed=1
+done
+[ -z "$npm_installed" ] || npm cache clean --force 2> /dev/null
 echo "installed:$todo"
