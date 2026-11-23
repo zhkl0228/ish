@@ -159,7 +159,9 @@ bool (*remove_user_default)(const char *name);
             kPreferenceBacktickEscapeKey: @(NO),
             kPreferenceHideExtraKeysWithExternalKeyboardKey: @(NO),
             kPreferenceOverrideControlSpaceKey: @(NO),
-            kPreferenceDisableDimmingKey: @(NO),
+            // A terminal is watched while something runs in it, as a game
+            // is played: the screen stays on (Keep Screen Turned On)
+            kPreferenceDisableDimmingKey: @(YES),
             kPreferenceLaunchCommandKey: @[@"/bin/login", @"-f", @"root"],
             kPreferenceBootCommandKey: @[@"/sbin/init"],
             kPreferenceBlinkCursorKey: @(NO),
