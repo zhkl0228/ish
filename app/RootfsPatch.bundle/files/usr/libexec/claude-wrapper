@@ -53,4 +53,9 @@ export no_proxy="$NO_PROXY"
 # Claude Code updates itself with `npm install -g`, into npm's global prefix
 # (/usr/local): its updates go where ish-install put it instead
 export NPM_CONFIG_PREFIX=/opt/claude-code
+# But not of itself: the app's AOT image of claude.exe serves the version it
+# was recorded from, and an update would run on without it until recorded
+# again. Updated by hand, then recorded again (benchmark/aojit/README.md):
+#   npm install -g --prefix /opt/claude-code @anthropic-ai/claude-code
+export DISABLE_AUTOUPDATER=1
 exec "$claude" "$@"
