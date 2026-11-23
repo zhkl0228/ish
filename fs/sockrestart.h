@@ -20,6 +20,15 @@ void sockrestart_begin_listen(struct fd *sock);
 void sockrestart_end_listen(struct fd *sock);
 void sockrestart_begin_listen_wait(struct fd *sock);
 void sockrestart_end_listen_wait(struct fd *sock);
+// Whether fd is a socket: a wait on one is marked with the two below.
+bool sockrestart_is_socket(struct fd *fd);
+// The two above for the current task, without the fd, which may be closed
+// by the time the wait ends.
+void sockrestart_begin_task_wait(void);
+void sockrestart_end_task_wait(void);
+struct task;
+// For a task that exits: it must not be left on the list of waiting tasks.
+void sockrestart_task_exit(struct task *task);
 bool sockrestart_should_restart_listen_wait(void);
 void sockrestart_on_suspend(void);
 void sockrestart_on_resume(void);

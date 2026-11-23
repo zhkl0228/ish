@@ -81,16 +81,7 @@ noreturn void do_exit(int status) {
     // do_exit_group's safety valve not to give up on it while it waits for
     // pids_lock below.
     atomic_store(&current->exit_started, true);
-
-    // Block SIGSEGV during exit to prevent cosmetic crashes from host
-    // pthread stack unwinding (especially with many threads exiting at once).
-    if (current->group->doing_group_exit) {
-        sigset_t set;
-        sigemptyset(&set);
-        sigaddset(&set, SIGSEGV);
-        sigaddset(&set, SIGBUS);
-        pthread_sigmask(SIG_BLOCK, &set, NULL);
-    }
+    sockrestart_task_exit(current);
 
     // has to happen before mm_release
     addr_t clear_tid = current->clear_tid;
@@ -239,6 +230,12 @@ noreturn void do_exit(int status) {
         struct task *self = current;
         current = NULL;  // Clear before destroy to prevent dangling access
         task_destroy(self);
+    } else {
+        // Once pids_lock is released, the parent may reap the zombie and its
+        // struct be freed: nothing after may touch it. The thread's cleanup
+        // handler (task_run_tlb_cleanup) read it through current, and ASan
+        // caught it reading freed memory.
+        current = NULL;
     }
     unlock(&pids_lock);
 

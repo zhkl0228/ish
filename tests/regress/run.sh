@@ -386,6 +386,20 @@ else
         status=1
     fi
     echo
+    echo "########## socket removed from an epoll set during a wait ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_poll_socket_removed" \
+            tests/regress/regress_poll_socket_removed.c; then
+        out=$(timeout 120 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_poll_socket_removed 2>&1 | grep -v '^NETDIAG')
+        echo "$out" | grep -v '^sockrestart:'
+        n=$(echo "$out" | grep -c '^sockrestart:')
+        [ "$n" = 0 ] || echo "FAIL $n tasks exited with socket waits not ended"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' && [ "$n" = 0 ] || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_poll_socket_removed"
+    else
+        echo "failed to build regress_poll_socket_removed" >&2
+        status=1
+    fi
+    echo
     echo "########## device nodes from a Darwin import ##########"
     # A fakefs of its own: a tarball with the test as /init and three device
     # nodes, imported with fakefsify, two of them then rewritten in meta.db to

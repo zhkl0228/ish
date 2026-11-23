@@ -29,9 +29,7 @@ void sockrestart_end_listen(struct fd *sock) {
 
 static struct list listen_tasks = LIST_INITIALIZER(listen_tasks);
 
-void sockrestart_begin_listen_wait(struct fd *sock) {
-    if (sock->ops != &socket_fdops)
-        return;
+void sockrestart_begin_task_wait(void) {
     lock(&sockrestart_lock);
     if (current->sockrestart.count == 0)
         list_add(&listen_tasks, &current->sockrestart.listen);
@@ -39,13 +37,38 @@ void sockrestart_begin_listen_wait(struct fd *sock) {
     unlock(&sockrestart_lock);
 }
 
-void sockrestart_end_listen_wait(struct fd *sock) {
-    if (sock->ops != &socket_fdops)
-        return;
+void sockrestart_end_task_wait(void) {
     lock(&sockrestart_lock);
     current->sockrestart.count--;
     if (current->sockrestart.count == 0)
         list_remove(&current->sockrestart.listen);
+    unlock(&sockrestart_lock);
+}
+
+void sockrestart_begin_listen_wait(struct fd *sock) {
+    if (sock->ops == &socket_fdops)
+        sockrestart_begin_task_wait();
+}
+
+void sockrestart_end_listen_wait(struct fd *sock) {
+    if (sock->ops == &socket_fdops)
+        sockrestart_end_task_wait();
+}
+
+bool sockrestart_is_socket(struct fd *fd) {
+    return fd->ops == &socket_fdops;
+}
+
+void sockrestart_task_exit(struct task *task) {
+    lock(&sockrestart_lock);
+    if (task->sockrestart.count != 0) {
+        // A begin without its end: the task would stay on listen_tasks after
+        // it is freed, and the next begin would write into it.
+        printk("sockrestart: pid %d exits with %d socket waits not ended; removing it from the waiting tasks\n",
+               task->pid, task->sockrestart.count);
+        list_remove_safe(&task->sockrestart.listen);
+        task->sockrestart.count = 0;
+    }
     unlock(&sockrestart_lock);
 }
 

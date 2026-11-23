@@ -498,10 +498,20 @@ int poll_wait(struct poll *poll_, poll_callback_t callback, void *context, struc
             }
         }
 
-        // wait for a ready notification
+        // wait for a ready notification. Whether it waits on a socket is
+        // decided once: the fds can change while it sleeps (epoll_ctl from
+        // another thread), and marking each fd at the start and again at the
+        // end left the task on sockrestart's list of waiting tasks after it
+        // was freed (heap corruption in git's curl, found by ASan).
+        bool wait_socket = false;
         list_for_each_entry(&poll_->poll_fds, poll_fd, fds) {
-            sockrestart_begin_listen_wait(poll_fd->fd);
+            if (sockrestart_is_socket(poll_fd->fd)) {
+                wait_socket = true;
+                break;
+            }
         }
+        if (wait_socket)
+            sockrestart_begin_task_wait();
         unlock(&poll_->lock);
         if (spurious >= POLL_SPIN_GRACE)
             poll_spin_backoff(spurious);
@@ -539,9 +549,8 @@ int poll_wait(struct poll *poll_, poll_callback_t callback, void *context, struc
         // post-syscall guard ends the thread.
         if (task_orphaned(current)) {
             lock(&poll_->lock);
-            list_for_each_entry(&poll_->poll_fds, poll_fd, fds) {
-                sockrestart_end_listen_wait(poll_fd->fd);
-            }
+            if (wait_socket)
+                sockrestart_end_task_wait();
             res = _EINTR;
             break;
         }
@@ -562,9 +571,8 @@ int poll_wait(struct poll *poll_, poll_callback_t callback, void *context, struc
         if (err == 0 && wait_timeout == &bounded_timeout) {
             spurious = 0;
             lock(&poll_->lock);
-            list_for_each_entry(&poll_->poll_fds, poll_fd, fds) {
-                sockrestart_end_listen_wait(poll_fd->fd);
-            }
+            if (wait_socket)
+                sockrestart_end_task_wait();
             // Check for group exit so blocking threads unblock promptly
             if (current->group->doing_group_exit) {
                 res = _EINTR;
@@ -621,9 +629,8 @@ int poll_wait(struct poll *poll_, poll_callback_t callback, void *context, struc
             continue;
         }
         lock(&poll_->lock);
-        list_for_each_entry(&poll_->poll_fds, poll_fd, fds) {
-            sockrestart_end_listen_wait(poll_fd->fd);
-        }
+        if (wait_socket)
+            sockrestart_end_task_wait();
 
         if (err < 0) {
             errno = saved_errno;
