@@ -180,19 +180,23 @@ exports.getCharacterSize = () => {
 };
 
 // scrolling: the app's scroll view stands for xterm.js's (ScrollbarView),
-// whose height is the lines' and whose offset is the top line's, in points.
-// Its offset moves the terminal a line at a time; the terminal moving of
-// itself (output, scrollToBottom) moves the scroll view.
-let lastScrollHeight, lastScrollTop;
+// whose range is the lines above the last screen (baseY) and whose offset is
+// the top line's, in points. Its offset moves the terminal a line at a time;
+// the terminal moving of itself (output, scrollToBottom) moves the scroll
+// view. The range is the lines', not the buffer's height less the view's: the
+// view is rarely a whole number of lines high, and with half a line or more
+// left over the bottom of the scroll view came out a line above the bottom,
+// the last line (the cursor's) under the keys over the keyboard.
+let lastScrollRange, lastScrollTop;
 // the line the app's scroll view put at the top, not to be told back to it
 let appScrollLine = null;
 function syncScroll() {
     const height = cellSize().height;
     const buffer = term.buffer.active;
-    const scrollHeight = buffer.length * height;
-    if (scrollHeight != lastScrollHeight)
-        native.newScrollHeight(scrollHeight);
-    lastScrollHeight = scrollHeight;
+    const scrollRange = buffer.baseY * height;
+    if (scrollRange != lastScrollRange)
+        native.newScrollRange(scrollRange);
+    lastScrollRange = scrollRange;
     if (buffer.viewportY === appScrollLine)
         return;
     appScrollLine = null;
@@ -217,7 +221,7 @@ exports.scrollToBottom = () => term.scrollToBottom();
 // Called by the app when a TerminalView (re)attaches, since scroll updates
 // sent while detached were dropped.
 exports.resyncScroll = () => {
-    lastScrollHeight = lastScrollTop = undefined;
+    lastScrollRange = lastScrollTop = undefined;
     appScrollLine = null;
     syncScroll();
 };

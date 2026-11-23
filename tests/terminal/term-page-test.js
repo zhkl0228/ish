@@ -29,7 +29,7 @@ const utf8 = (s) => Buffer.from(s, 'utf8').toString('latin1');
     await page.addInitScript(() => {
         window.__messages = [];
         const names = ['load', 'log', 'sendInput', 'sendBinary', 'resize', 'propUpdate', 'setTitle', 'copyText',
-                       'syncFocus', 'focus', 'newScrollHeight', 'newScrollTop', 'openLink'];
+                       'syncFocus', 'focus', 'newScrollRange', 'newScrollTop', 'openLink'];
         window.webkit = { messageHandlers: {} };
         for (const name of names)
             window.webkit.messageHandlers[name] = { postMessage: (body) => window.__messages.push([name, body]) };
@@ -88,12 +88,12 @@ const utf8 = (s) => Buffer.from(s, 'utf8').toString('latin1');
     for (let i = 0; i < 200; i++) lines += 'line ' + i + '\r\n';
     await write(lines);
     msgs = await take();
-    const heights = msgs.filter(([n]) => n == 'newScrollHeight').map(([, b]) => b);
+    const ranges = msgs.filter(([n]) => n == 'newScrollRange').map(([, b]) => b);
     const tops = msgs.filter(([n]) => n == 'newScrollTop').map(([, b]) => b);
     const cellH = size[1][1];
     const len = await page.evaluate(() => [term.buffer.active.length, term.buffer.active.viewportY, term.buffer.active.baseY]);
-    check('scroll height and top follow output', heights.length > 0 && Math.abs(heights[heights.length - 1] - len[0] * cellH) < 0.5 &&
-          tops.length > 0 && Math.abs(tops[tops.length - 1] - len[1] * cellH) < 0.5, JSON.stringify({ heights: heights.slice(-2), tops: tops.slice(-2), len, cellH }));
+    check('scroll range and top follow output', ranges.length > 0 && Math.abs(ranges[ranges.length - 1] - len[2] * cellH) < 0.5 &&
+          tops.length > 0 && Math.abs(tops[tops.length - 1] - len[1] * cellH) < 0.5, JSON.stringify({ ranges: ranges.slice(-2), tops: tops.slice(-2), len, cellH }));
     await page.evaluate((y) => exports.newScrollTop(y), 10 * cellH);
     await page.waitForTimeout(50);
     msgs = await take();
@@ -103,6 +103,13 @@ const utf8 = (s) => Buffer.from(s, 'utf8').toString('latin1');
     await page.waitForTimeout(50);
     msgs = await take();
     check('scrollToBottom told to the app', msgs.some(([n, b]) => n == 'newScrollTop' && Math.abs(b - len[2] * cellH) < 0.5), JSON.stringify(msgs));
+    // The app's scroll view at its bottom (an offset of the whole range) is
+    // the terminal's bottom: its last line, the cursor's, shown
+    await page.evaluate((y) => exports.newScrollTop(y), 10 * cellH);
+    await page.evaluate((y) => exports.newScrollTop(y), len[2] * cellH);
+    await page.waitForTimeout(50);
+    const atBottom = await page.evaluate(() => [term.buffer.active.viewportY, term.buffer.active.baseY]);
+    check("the app's scroll at its bottom is the terminal's", atBottom[0] == atBottom[1], JSON.stringify(atBottom));
 
     // selection and links, at points of the page
     await page.evaluate(() => exports.clearScrollback());

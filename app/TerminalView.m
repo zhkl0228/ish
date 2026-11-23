@@ -24,6 +24,10 @@ struct rowcol {
 // While the native scrollbar is being updated from the terminal's own scroll
 // state, its scroll events must not be sent back to the terminal.
 @property BOOL syncingScroll;
+// How far the terminal scrolls, in points: the lines above its last screen
+// (term.js's newScrollRange). The scroll view's content is that and its own
+// height, so that its bottom is the terminal's.
+@property CGFloat scrollRange;
 
 @property (nullable) NSString *markedText;
 @property (nullable) NSString *selectedText;
@@ -109,7 +113,7 @@ struct rowcol {
     }
 }
 
-static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollHeight", @"newScrollTop", @"openLink"};
+static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollRange", @"newScrollTop", @"openLink"};
 
 - (void)setTerminal:(Terminal *)terminal {
     if (_terminal) {
@@ -285,11 +289,9 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollHeight",
         if (!self.isFirstResponder) {
             [self becomeFirstResponder];
         }
-    } else if ([message.name isEqualToString:@"newScrollHeight"]) {
-        // Changing the size can clamp the offset, which must not be echoed back as a scroll.
-        self.syncingScroll = YES;
-        self.scrollbarView.contentSize = CGSizeMake(0, [message.body doubleValue]);
-        self.syncingScroll = NO;
+    } else if ([message.name isEqualToString:@"newScrollRange"]) {
+        self.scrollRange = [message.body doubleValue];
+        [self applyScrollRange];
     } else if ([message.name isEqualToString:@"newScrollTop"]) {
         CGFloat newOffset = [message.body doubleValue];
         if (self.scrollbarView.contentOffset.y == newOffset)
@@ -389,6 +391,23 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollHeight",
 
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
     return YES;
+}
+
+- (void)applyScrollRange {
+    CGFloat height = self.scrollRange + self.scrollbarView.bounds.size.height;
+    if (self.scrollbarView.contentSize.height == height)
+        return;
+    // Changing the size can clamp the offset, which must not be echoed back as a scroll.
+    self.syncingScroll = YES;
+    self.scrollbarView.contentSize = CGSizeMake(0, height);
+    self.syncingScroll = NO;
+}
+
+// The scroll view as high as the terminal shows (the keyboard up or down, a
+// rotation, a foldable unfolded): its content with it
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    [self applyScrollRange];
 }
 
 - (void)scrollViewDidScroll:(UIScrollView *)scrollView {
