@@ -7,6 +7,12 @@
 // fesetround changed nothing. They are now the host's while the guest runs.
 // The FPCR trap enables are not: an exception would kill iSH with SIGFPE.
 //
+// FPSR then moved from each entry to and exit from translated code to the
+// run loop's: every indirect branch left translated code, and reading and
+// writing FPSR there took a third of the host's time. Cases 7 and 8 hold the
+// flags to that: kept over many indirect calls and returns, and each thread's
+// its own.
+//
 // Prints one line per case and "N passed, M failed". Natively passes.
 //
 // Build: aarch64-linux-musl-gcc -static -O0 -o regress_fenv regress_fenv.c -lm
@@ -15,6 +21,7 @@
 #include <fenv.h>
 #include <float.h>
 #include <math.h>
+#include <pthread.h>
 #include <sched.h>
 #include <signal.h>
 #include <stdint.h>
@@ -67,6 +74,17 @@ static void check_raises(const char *name, void (*op)(void), int expected) {
     int flags = raised(op);
     describe_flags(detail, sizeof(detail), flags);
     check(name, (flags & FE_ALL_EXCEPT) == expected, detail);
+}
+
+static int nothing(int i) { return i + 1; }
+static int twice(int i) { return i * 2; }
+
+// The flags a new thread raises, and what it finds raised
+static void *thread_raises_invalid(void *arg) {
+    (void) arg;
+    feclearexcept(FE_ALL_EXCEPT);
+    invalid();
+    return (void *) (intptr_t) fetestexcept(FE_ALL_EXCEPT);
 }
 
 static void on_usr1(int sig) {
@@ -155,6 +173,35 @@ int main(void) {
     check("FPCR.DZE: a trap, or ignored and the flag raised",
           (WIFSIGNALED(status) && WTERMSIG(status) == SIGFPE) || (WIFEXITED(status) && WEXITSTATUS(status) == 0),
           detail);
+
+    // 7. the flags stay raised over indirect calls and returns, each one a
+    // block an indirect branch ends; one raised among them is added
+    feclearexcept(FE_ALL_EXCEPT);
+    divide_by_zero();
+    int (*volatile calls[2])(int) = {nothing, twice};
+    void (*volatile raise_inexact)(void) = inexact;
+    int acc = 0;
+    for (int i = 0; i < 20000; i++) {
+        acc = calls[i & 1](acc) & 0xffff;
+        if (i == 10000)
+            raise_inexact();
+    }
+    flags = fetestexcept(FE_ALL_EXCEPT);
+    describe_flags(detail, sizeof(detail), flags);
+    check("flags kept over 20000 indirect calls", flags == (FE_DIVBYZERO | FE_INEXACT) && acc >= 0, detail);
+
+    // 8. a thread's flags are its own
+    feclearexcept(FE_ALL_EXCEPT);
+    pthread_t thread;
+    void *thread_flags = NULL;
+    pthread_create(&thread, NULL, thread_raises_invalid, NULL);
+    pthread_join(thread, &thread_flags);
+    flags = fetestexcept(FE_ALL_EXCEPT);
+    char mine[80], theirs[80];
+    describe_flags(mine, sizeof(mine), flags);
+    describe_flags(theirs, sizeof(theirs), (int) (intptr_t) thread_flags);
+    snprintf(detail, sizeof(detail), "the thread's %s; mine %s", theirs, mine);
+    check("a thread's flags are its own", (intptr_t) thread_flags == FE_INVALID && flags == 0, detail);
 
     printf("%d passed, %d failed\n", passed, failed);
     return failed != 0;

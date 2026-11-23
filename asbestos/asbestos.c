@@ -798,6 +798,31 @@ static inline size_t fiber_cache_hash(addr_t ip) {
     return (ip ^ (ip >> 12)) & (FIBER_CACHE_SIZE - 1);
 }
 
+#ifdef GUEST_ARM64
+// The guest's FPSR is the host's register while the run loop runs: put in
+// when it starts, taken back at each of its exits (fiber_cpu_out), and left
+// alone by fiber_enter and fiber_exit (entry.S).
+static inline void host_fpsr_write(uint32_t fpsr) {
+    __asm__ volatile("msr fpsr, %0" : : "r"((uint64_t) fpsr));
+}
+static inline uint32_t host_fpsr_read(void) {
+    uint64_t fpsr;
+    __asm__ volatile("mrs %0, fpsr" : "=r"(fpsr));
+    return (uint32_t) fpsr;
+}
+#endif
+
+// The run loop's state back in cpu, at its exits. _poked is the poked_ptr
+// channel's, never the copy's (see the end of cpu_step_to_interrupt).
+static void fiber_cpu_out(struct cpu_state *cpu, struct fiber_frame *frame) {
+    bool live_poked = cpu->_poked;
+    *cpu = frame->cpu;
+    cpu->_poked = live_poked;
+#ifdef GUEST_ARM64
+    cpu->fpsr = host_fpsr_read();
+#endif
+}
+
 static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
     struct asbestos *asbestos = cpu->mmu->asbestos;
 
@@ -834,6 +859,9 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
     frame->last_block = NULL;
     frame->cpu = *cpu;
     assert(asbestos->mmu == cpu->mmu);
+#ifdef GUEST_ARM64
+    host_fpsr_write(frame->cpu.fpsr);
+#endif
 
     int interrupt = INT_NONE;
     int crash_retry_count = 0;
@@ -862,7 +890,7 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
         // tagged address (which reads unmapped memory forever).
         if (ip & 0xffff000000000000ULL) {
             read_wrunlock(&asbestos->jetsam_lock);
-            { bool live_poked = cpu->_poked; *cpu = frame->cpu; cpu->_poked = live_poked; }
+            fiber_cpu_out(cpu, frame);
             cpu->segfault_addr = ip;
             cpu->segfault_was_write = 0;
             cpu->pc = ip & 0xffffffffffffULL;
@@ -893,7 +921,7 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
             // Release asbestos jetsam_lock held by cpu_step_to_interrupt
             // before calling do_exit_group (which may synchronously reap).
             read_wrunlock(&asbestos->jetsam_lock);
-            { bool live_poked = cpu->_poked; *cpu = frame->cpu; cpu->_poked = live_poked; }
+            fiber_cpu_out(cpu, frame);
             // Fall through to cpu_run_to_interrupt — return INT_GPF with
             // a canonical write=0 so handle_interrupt delivers SIGSEGV.
             cpu->segfault_addr = 0;
@@ -909,7 +937,7 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
         // spec_fn can continue from where the call was.
         if (ip == PREBUILT_SENTINEL) {
             read_wrunlock(&asbestos->jetsam_lock);
-            { bool live_poked = cpu->_poked; *cpu = frame->cpu; cpu->_poked = live_poked; }
+            fiber_cpu_out(cpu, frame);
             return INT_PREBUILT_RET;
         }
         // --- Pluggable native offload (ARM64 guest only) ---
@@ -1233,7 +1261,7 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
     // stale 'true' snapshot taken at loop entry: the exchange cleared the live
     // byte and returned INT_TIMER, then the copy-back re-arms it, making every
     // block dispatch interrupt forever (and fork inherits the storm).
-    { bool live_poked = cpu->_poked; *cpu = frame->cpu; cpu->_poked = live_poked; }
+    fiber_cpu_out(cpu, frame);
 
     // Release jetsam_lock read. Jetsam cleanup can now proceed.
     read_wrunlock(&asbestos->jetsam_lock);
@@ -1254,8 +1282,14 @@ static int cpu_single_step(struct cpu_state *cpu, struct tlb *tlb) {
 #ifdef ISH_JIT
     jit_exec_ready();
 #endif
+#ifdef GUEST_ARM64
+    host_fpsr_write(frame.cpu.fpsr);
+#endif
     int interrupt = fiber_enter(block, &frame, tlb);
     *cpu = frame.cpu;
+#ifdef GUEST_ARM64
+    cpu->fpsr = host_fpsr_read();
+#endif
     fiber_block_free(NULL, block);
     if (interrupt == INT_NONE)
         interrupt = INT_DEBUG;
@@ -1282,6 +1316,9 @@ uint64_t prebuilt_call(struct cpu_state *cpu, struct tlb *tlb, addr_t target_pc)
     tlb->frame = NULL;                   // force a fresh frame to be allocated
 
     struct cpu_state nested = *cpu;      // callee runs on its own cpu copy
+    // cpu->fpsr is the outer loop's at its start: the guest's flags since are
+    // the register's (fiber_cpu_out)
+    nested.fpsr = host_fpsr_read();
     nested.pc = target_pc;
     nested.regs[30] = PREBUILT_SENTINEL; // callee returns here
 

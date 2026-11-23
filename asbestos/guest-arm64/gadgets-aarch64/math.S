@@ -3629,7 +3629,8 @@ msub_store:
     b 2f
 1:  mov x10, #0
 2:
-    // live in the host's FPSR, saved to cpu->fpsr at fiber_exit
+    // live in the host's FPSR, saved to cpu->fpsr when the run loop returns
+    // (cpu_step_to_interrupt)
     msr fpsr, x10
     gret
 

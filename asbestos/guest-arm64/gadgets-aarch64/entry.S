@@ -48,9 +48,14 @@ NAME(fiber_enter):
 
     // The guest's FP instructions run natively, so the host's FPCR (rounding
     // mode, flush to zero, default NaN) and FPSR (cumulative exception flags)
-    // are the guest's while it runs. fiber_exit keeps its FPSR and puts the
-    // host's FPCR back, saved at 0x68. No trap enable is let through: an
-    // exception would be the host's SIGFPE.
+    // are the guest's while it runs. fiber_exit puts the host's FPCR back,
+    // saved at 0x68. No trap enable is let through: an exception would be the
+    // host's SIGFPE. FPSR is not touched here or in fiber_exit: the run loop
+    // (cpu_step_to_interrupt) puts the guest's in when it starts and takes
+    // it back when it returns, and in between runs nothing that raises a
+    // flag. Reading or writing FPSR waits for every FP instruction in flight:
+    // done for each block an indirect branch ends (each bytecode of an
+    // interpreter: V8's, CPython's), it took a third of the host's time.
     mrs x8, fpcr
     str x8, [sp, #0x68]
     ldr w9, [x1, #CPU_fpcr]
@@ -59,9 +64,7 @@ NAME(fiber_enter):
     cmp x8, x9
     b.eq 1f
     msr fpcr, x9
-1:  ldr w9, [x1, #CPU_fpsr]
-    msr fpsr, x9
-
+1:
     // Save SP for crash recovery: signal handler restores SP to this value
     // so fiber_exit can correctly pop the callee-saved register frame.
     mov x8, sp
@@ -162,9 +165,8 @@ fiber_exit:
     // it left. cpu->pc only tracks the current block's start; for an INT_GPF
     // the run loop maps this back to the faulting instruction.
     str _pc, [_cpu, #LOCAL_fault_stream]
-    // The guest's exception flags, and the host's FPCR back (fiber_enter)
-    mrs x8, fpsr
-    str w8, [_cpu, #CPU_fpsr]
+    // The host's FPCR back (fiber_enter); the guest's FPSR stays in the
+    // register for the run loop (cpu_step_to_interrupt)
     ldr x8, [sp, #0x68]
     mrs x9, fpcr
     cmp x8, x9
