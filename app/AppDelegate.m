@@ -34,6 +34,9 @@
 #include "fs/dyndev.h"
 #include "fs/devices.h"
 #include "fs/path.h"
+#ifdef GUEST_ARM64
+#include "asbestos/guest-arm64/host_fault.h"
+#endif
 #if defined(GUEST_ARM64) && defined(DEBUG)
 #include "DebugServer.h"
 #endif
@@ -166,6 +169,12 @@ static void ish_install_anon_cap(void) {
 
 - (int)boot {
 #if !ISH_LINUX
+#ifdef GUEST_ARM64
+    // A host fault in translated guest code (a stale TLB entry) is retried,
+    // in native code at its access; any other crash still reaches the
+    // system's handler and its crash report.
+    asbestos_install_host_fault_handler();
+#endif
     // Install the device-derived ledger cap, then start the live governor.
     // Both must happen before the first guest process runs.
     ish_install_anon_cap();

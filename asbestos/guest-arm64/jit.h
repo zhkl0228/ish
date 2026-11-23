@@ -105,24 +105,20 @@ void jit_exec_ready(void);
 int jit_prof_locate(struct tlb *tlb, addr_t pc, uint64_t *off);
 void jit_module_path(int mod, char *buf, size_t size);
 
-// A host fault at address addr in guest code (main.c's crash handler; see
-// "host faults" in jit.c).
+// A host fault at address addr in guest code (asbestos/guest-arm64/host_fault.c;
+// see "host faults" in jit.c). as_unknown: take it for one not at a guest
+// access (ISH_JIT_FAULT_TEST=unknown).
 enum jit_fault {
     JIT_FAULT_NONE,       // not in native code
     JIT_FAULT_RESUME,     // at a guest access: go on at *resume, its TLB-miss exit
     JIT_FAULT_UNKNOWN,    // elsewhere in native code: no position to retry from
 };
-enum jit_fault jit_native_fault(void *ucontext, uintptr_t addr, uintptr_t *resume);
+enum jit_fault jit_native_fault(void *ucontext, uintptr_t addr, bool as_unknown, uintptr_t *resume);
 // After a JIT_FAULT_UNKNOWN, on the thread it happened on: the run loop ends
 // with INT_JIT_NATIVE_FAULT, and handle_interrupt logs what was recorded
 // (written into buf) and kills the process.
 bool jit_unknown_fault_pending(void);
 size_t jit_take_unknown_fault(char *buf, size_t size, const struct cpu_state *cpu);
-// ISH_JIT_FAULT_TEST (tests/regress/regress_jit_fault.c): madvise with this
-// advice takes the host memory behind a guest range away until an access
-// faults on it. false: the test is off, or already armed.
-#define JIT_FAULT_TEST_ADVICE 0x4a4954
-bool jit_fault_test_arm(void *host, size_t len);
 
 // Guest init is exiting: ISH_JIT_STATS=1 prints counters, ISH_JIT_DUMP=<file>
 // writes the code region.

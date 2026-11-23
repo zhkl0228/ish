@@ -1,20 +1,24 @@
-// Regression test for host faults in the ARM64 JIT's native code.
+// Regression test for host faults in translated guest code.
 //
-// A host fault at a guest access in native code (its TLB entry valid, the host
-// memory behind it not) retried the block the run loop had entered: what ran
-// before the access ran again, so a post-index load before it advanced its
-// base twice. It now goes on at the access's TLB-miss exit, which runs the
-// access again as a gadget. A fault anywhere else in native code has nothing
-// to retry from: the process is killed with SIGSEGV and iSH logs a sample.
+// A guest access through a TLB entry whose host memory has gone faults on the
+// host. In a gadget the run loop retries the access. In native code (ish built
+// with -Djit=true) such a fault retried the block the run loop had entered:
+// what ran before the access ran again, so a post-index load before it
+// advanced its base twice. It now goes on at the access's TLB-miss exit, which
+// runs the access again as a gadget. A fault anywhere else in native code has
+// nothing to retry from: the process is killed with SIGSEGV and iSH logs a
+// sample.
 //
 //   ISH_JIT_FAULT_TEST=resume  regress_jit_fault resume
 //   ISH_JIT_FAULT_TEST=unknown regress_jit_fault unknown
 //
-// The fault is made by ish built with -Djit=true (an Apple arm64 host):
-// madvise with the advice JIT_FAULT_TEST_ADVICE takes the host memory behind a
-// page away and leaves the TLB as it is, and /proc/ish/jit counts the faults.
-// Without them (natively, without the JIT, or without ISH_JIT_FAULT_TEST) it
-// prints "SKIP ..." and exits 0.
+// madvise with the advice HOST_FAULT_TEST_ADVICE takes the host memory behind
+// a page away and leaves the TLB as it is (asbestos/guest-arm64/host_fault.c).
+// resume checks that the probe's result is right, and, where ish translates
+// to native code ("mode: JIT" in /proc/ish/jit), that the fault was there.
+// unknown needs native code. Without the madvise (natively, on x86, without
+// ISH_JIT_FAULT_TEST) or native code for unknown it prints "SKIP ..." and
+// exits 0.
 //
 // resume prints one line per case and "N passed, M failed". unknown is killed
 // at the fault: run.sh and tools/jit-test-mac.sh look for iSH's sample in the
@@ -37,7 +41,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-#define JIT_FAULT_TEST_ADVICE 0x4a4954
+#define HOST_FAULT_TEST_ADVICE 0x4a4954
 #define TRAP_SIZE 16384 // a host page on Apple arm64, 4 guest pages
 
 static int passed, failed;
@@ -53,22 +57,26 @@ static void check(const char *name, int ok, const char *detail) {
     fflush(stdout);
 }
 
-// /proc/ish/jit's counts of host faults in native code; -1 without them
-static int jit_faults(unsigned long long *resumed, unsigned long long *elsewhere) {
+// /proc/ish/jit: whether ish translates to native code, and its counts of
+// host faults there (0 without them)
+static int native;
+static unsigned long long resumed, elsewhere;
+static void read_jit(void) {
+    resumed = elsewhere = 0;
     FILE *f = fopen("/proc/ish/jit", "r");
     if (f == NULL)
-        return -1;
+        return;
     char line[512];
-    int found = -1;
-    while (fgets(line, sizeof(line), f) != NULL)
-        if (sscanf(line, "host faults in native code: %llu went on at the access's TLB-miss exit, %llu elsewhere",
-                   resumed, elsewhere) == 2)
-            found = 0;
+    while (fgets(line, sizeof(line), f) != NULL) {
+        if (strncmp(line, "mode: JIT", 9) == 0)
+            native = 1;
+        sscanf(line, "host faults in native code: %llu went on at the access's TLB-miss exit, %llu elsewhere",
+               &resumed, &elsewhere);
+    }
     fclose(f);
-    return found;
 }
 
-// A post-index load, then a load from trap: the one native code faults on.
+// A post-index load, then a load from trap: the one that faults.
 __attribute__((noinline)) static uint64_t probe(uint64_t **cursor, volatile uint64_t *trap) {
     uint64_t *p = *cursor, a, b;
     __asm__ volatile("ldr %0, [%2], #8\n\t"
@@ -98,48 +106,52 @@ static int arm(volatile uint64_t *trap) {
         uint64_t *cursor = src;
         probe(&cursor, trap);
     }
-    return madvise((void *) trap, TRAP_SIZE, JIT_FAULT_TEST_ADVICE) == 0 ? 0 : errno;
+    return madvise((void *) trap, TRAP_SIZE, HOST_FAULT_TEST_ADVICE) == 0 ? 0 : errno;
 }
 
 int main(int argc, char **argv) {
     const char *mode = argc > 1 ? argv[1] : "resume";
     char detail[200];
-    unsigned long long resumed0, elsewhere0, resumed1, elsewhere1;
-    if (jit_faults(&resumed0, &elsewhere0) < 0) {
-        printf("SKIP no /proc/ish/jit fault counts: not iSH with the native JIT\n");
-        return 0;
-    }
+    read_jit();
+    unsigned long long resumed0 = resumed, elsewhere0 = elsewhere;
     volatile uint64_t *trap = mmap(NULL, 4 * TRAP_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     trap[0] = 0x1122334455667788;
-
     uint64_t *cursor = src;
+
     if (strcmp(mode, "resume") == 0) {
         int err = arm(trap);
         if (err != 0) {
-            printf("SKIP madvise(JIT_FAULT_TEST_ADVICE): %s (ISH_JIT_FAULT_TEST=resume not set?)\n", strerror(err));
+            printf("SKIP madvise(HOST_FAULT_TEST_ADVICE): %s (not iSH on arm64, or ISH_JIT_FAULT_TEST not set)\n",
+                   strerror(err));
             return 0;
         }
         uint64_t sum = probe(&cursor, trap);
-        jit_faults(&resumed1, &elsewhere1);
-        snprintf(detail, sizeof(detail), "base advanced %ld bytes, sum %#llx, faults went on %llu, elsewhere %llu",
-                 (long) ((char *) cursor - (char *) src), (unsigned long long) sum, resumed1 - resumed0,
-                 elsewhere1 - elsewhere0);
-        check("a fault at an access goes on there: the load before it runs once",
-              cursor == src + 1 && sum == 0x100 + 0x1122334455667788 && resumed1 - resumed0 == 1 &&
-              elsewhere1 == elsewhere0, detail);
+        read_jit();
+        snprintf(detail, sizeof(detail), "base advanced %ld bytes, sum %#llx; native code %s: faults went on %llu, "
+                 "elsewhere %llu", (long) ((char *) cursor - (char *) src), (unsigned long long) sum,
+                 native ? "yes" : "no", resumed - resumed0, elsewhere - elsewhere0);
+        // with native code the fault is its own; else a gadget's
+        check(native ? "a fault at an access in native code goes on there: the load before it runs once"
+                     : "a fault at an access in a gadget is retried there",
+              cursor == src + 1 && sum == 0x100 + 0x1122334455667788 && resumed - resumed0 == (native ? 1u : 0u) &&
+              elsewhere == elsewhere0, detail);
     } else {
+        if (!native) {
+            printf("SKIP unknown needs native code (ish -Djit=true translating: \"mode: JIT\" in /proc/ish/jit)\n");
+            return 0;
+        }
         printf("a fault elsewhere in native code: the process is killed at it\n");
         fflush(stdout);
         signal(SIGSEGV, on_segv);
         int err = arm(trap);
         if (err != 0) {
-            printf("SKIP madvise(JIT_FAULT_TEST_ADVICE): %s (ISH_JIT_FAULT_TEST=unknown not set?)\n", strerror(err));
+            printf("SKIP madvise(HOST_FAULT_TEST_ADVICE): %s (ISH_JIT_FAULT_TEST=unknown not set?)\n", strerror(err));
             return 0;
         }
         probe(&cursor, trap);
-        jit_faults(&resumed1, &elsewhere1);
+        read_jit();
         snprintf(detail, sizeof(detail), "the process went on: faults went on %llu, elsewhere %llu",
-                 resumed1 - resumed0, elsewhere1 - elsewhere0);
+                 resumed - resumed0, elsewhere - elsewhere0);
         check("a fault elsewhere in native code: SIGSEGV, no retry", 0, detail);
     }
 

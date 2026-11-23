@@ -2929,37 +2929,6 @@ static void jit_translate(struct fiber_block *b, const struct jit_units *U, stru
 
 static _Atomic uint64_t st_fault_resumed, st_fault_unknown;
 
-// ISH_JIT_FAULT_TEST=resume|unknown, for tests/regress/regress_jit_fault.c:
-// madvise(addr, len, JIT_FAULT_TEST_ADVICE) takes the host memory behind guest
-// [addr, addr + len) away (jit_fault_test_arm()) and leaves the TLB as it is,
-// so that the next access through the TLB faults on the host; the fault gives
-// it back. With "unknown" that fault, in native code, is taken for one not at
-// an access.
-enum { FAULT_TEST_OFF, FAULT_TEST_RESUME, FAULT_TEST_UNKNOWN };
-static int fault_test;
-static void *volatile fault_test_host;
-static volatile size_t fault_test_len;
-
-bool jit_fault_test_arm(void *host, size_t len) {
-    if (fault_test == FAULT_TEST_OFF || fault_test_host != NULL)
-        return false;
-    if (mprotect(host, len, PROT_NONE) < 0)
-        return false;
-    fault_test_len = len;
-    fault_test_host = host;
-    return true;
-}
-
-// Whether the fault at addr was the test's; its memory is back.
-static bool fault_test_restore(uintptr_t addr) {
-    void *host = fault_test_host;
-    if (host == NULL || addr - (uintptr_t) host >= fault_test_len)
-        return false;
-    mprotect(host, fault_test_len, PROT_READ | PROT_WRITE);
-    fault_test_host = NULL;
-    return true;
-}
-
 // The exit of the guest access whose host instruction is at pc, in code
 // [lo, hi); 0 if pc is not one.
 static uintptr_t access_exit(uintptr_t pc, uintptr_t lo, uintptr_t hi) {
@@ -3029,9 +2998,8 @@ static __thread struct {
     unsigned before, n;
 } unknown_fault;
 
-enum jit_fault jit_native_fault(void *ucontext, uintptr_t addr, uintptr_t *resume) {
+enum jit_fault jit_native_fault(void *ucontext, uintptr_t addr, bool as_unknown, uintptr_t *resume) {
     ucontext_t *uc = ucontext;
-    bool test = fault_test_restore(addr);
     uintptr_t pc = uc->uc_mcontext->__ss.__pc;
     const struct aot_module *img = NULL;
     uintptr_t lo, hi;
@@ -3044,7 +3012,7 @@ enum jit_fault jit_native_fault(void *ucontext, uintptr_t addr, uintptr_t *resum
     } else {
         return JIT_FAULT_NONE;
     }
-    uintptr_t target = test && fault_test == FAULT_TEST_UNKNOWN ? 0 : access_exit(pc, lo, hi);
+    uintptr_t target = as_unknown ? 0 : access_exit(pc, lo, hi);
     if (target != 0) {
         atomic_fetch_add_explicit(&st_fault_resumed, 1, memory_order_relaxed);
         *resume = target;
@@ -3626,9 +3594,6 @@ static void jit_init(void) {
         pic_on = true;
     pin_init(pin_on);
     cm_on = getenv("ISH_JIT_MAP") != NULL;
-    const char *ft = getenv("ISH_JIT_FAULT_TEST");
-    fault_test = ft == NULL ? FAULT_TEST_OFF : strcmp(ft, "resume") == 0 ? FAULT_TEST_RESUME :
-                 strcmp(ft, "unknown") == 0 ? FAULT_TEST_UNKNOWN : FAULT_TEST_OFF;
     rec_file = pic_on && have_region ? getenv("ISH_JIT_RECORD") : NULL;
     rec_mod = getenv("ISH_JIT_RECORD_MOD") ? getenv("ISH_JIT_RECORD_MOD") : "ld-musl";
     if (have_region) {

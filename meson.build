@@ -114,6 +114,7 @@ elif guest_arch == 'arm64'
     emu_src += [
         'asbestos/asbestos.c',
         'asbestos/guest-arm64/gen.c',
+        'asbestos/guest-arm64/host_fault.c',
         'asbestos/guest-arm64/crypto_helpers.c',
         'asbestos/helpers.c',
         # Symbol-level native offload (ARM64 guest only). Companion to the

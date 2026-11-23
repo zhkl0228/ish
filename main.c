@@ -20,55 +20,10 @@
 #include "emu/tlb.h"
 #include "xX_main_Xx.h"
 
-// Thread-local JIT recovery state (defined in asbestos.c)
-extern __thread volatile sig_atomic_t in_jit;
-
-// Diagnostic: JIT crash info (defined in calls.c)
-extern __thread volatile uint64_t jit_last_host_fault;
-extern __thread volatile uint64_t jit_last_x7;
-extern __thread volatile uint64_t jit_last_x10;
-extern __thread volatile int jit_crash_count;
-
-#ifdef GUEST_ARM64
-// Assembly trampoline: returns INT_JIT_CRASH via fiber_exit (defined in entry.S)
-extern void jit_crash_trampoline(void);
-#endif
-
-// Field offsets needed by the JIT crash handler.
-//
-// These were previously hand-copied integer literals, and three of the four had
-// drifted from the structs they describe (segfault_addr 832 vs 840,
-// segfault_was_write 840 vs 848, jit_exit_sp 920 vs 936). The jit_exit_sp error
-// is the damaging one: offset 920 lands on `fiber_frame.value[3]`, the crosspage
-// scratch buffer, so recovery restored SP from leftover guest data (or 0) and
-// `fiber_exit`'s first instruction — `ldr lr, [sp, #0x60]` — faulted. That is
-// the `fiber_exit + 0` <- `handle_miss_… + 4` crash signature, including the
-// literal `KERN_INVALID_ADDRESS at 0x60` seen when the buffer happened to be 0.
-//
-// Derive them from the actual types instead. main.c already includes both
-// headers, so offsetof cannot drift; a struct-layout change now updates these
-// automatically rather than silently corrupting recovery.
 #include <stddef.h>
 #include <sys/resource.h>
-#include "asbestos/frame.h"
-#ifdef ISH_JIT
-#include "asbestos/guest-arm64/jit.h"
-#endif
 #ifdef GUEST_ARM64
-#define CRASH_CPU_pc                offsetof(struct cpu_state, pc)
-#define CRASH_CPU_segfault_addr     offsetof(struct cpu_state, segfault_addr)
-#define CRASH_CPU_segfault_was_write offsetof(struct cpu_state, segfault_was_write)
-#define CRASH_LOCAL_jit_exit_sp     offsetof(struct fiber_frame, jit_exit_sp)
-
-// The gadgets reach the same fields through cpu-offsets.h, which meson
-// generates from these structs. Tie the two views together so a future layout
-// change can never leave the C recovery path and the assembly disagreeing --
-// silent disagreement is exactly how the literals above went stale.
-#include "cpu-offsets.h"
-static_assert(CRASH_CPU_pc                 == CPU_pc,                 "cpu-offsets drift: pc");
-static_assert(CRASH_CPU_segfault_addr      == CPU_segfault_addr,      "cpu-offsets drift: segfault_addr");
-static_assert(CRASH_CPU_segfault_was_write == CPU_segfault_was_write, "cpu-offsets drift: segfault_was_write");
-static_assert(CRASH_LOCAL_jit_exit_sp      == LOCAL_jit_exit_sp,      "cpu-offsets drift: jit_exit_sp");
+#include "asbestos/guest-arm64/host_fault.h"
 #endif
 
 #ifdef __aarch64__
@@ -79,28 +34,11 @@ static_assert(CRASH_LOCAL_jit_exit_sp      == LOCAL_jit_exit_sp,      "cpu-offse
 #define UC_SP(uc) ((uc)->uc_mcontext->__ss.__sp)
 #define UC_PC(uc) ((uc)->uc_mcontext->__ss.__pc)
 #define UC_LR(uc) ((uc)->uc_mcontext->__ss.__lr)
-static uint64_t uc_esr(ucontext_t *uc) {
-    return uc->uc_mcontext->__es.__esr;
-}
 #elif __linux__
-#include <asm/sigcontext.h>
 #define UC_X(uc, n) ((uc)->uc_mcontext.regs[n])
 #define UC_SP(uc) ((uc)->uc_mcontext.sp)
 #define UC_PC(uc) ((uc)->uc_mcontext.pc)
 #define UC_LR(uc) ((uc)->uc_mcontext.regs[30])
-// The kernel puts the ESR of a data abort in an esr_context record in the
-// __reserved area, which is a list of records ending with a zero magic.
-static uint64_t uc_esr(ucontext_t *uc) {
-    struct _aarch64_ctx *head = (struct _aarch64_ctx *) (void *) uc->uc_mcontext.__reserved;
-    while (head->magic != 0) {
-        if (head->magic == ESR_MAGIC)
-            return ((struct esr_context *) head)->esr;
-        head = (struct _aarch64_ctx *) (void *) ((char *) head + head->size);
-    }
-    static const char msg[] = "crash_handler: no esr_context in the signal frame\n";
-    write(STDERR_FILENO, msg, sizeof(msg) - 1);
-    _exit(139);
-}
 #endif
 #endif
 
@@ -130,74 +68,9 @@ const char *__asan_default_options(void) {
 
 static void crash_handler(int sig, siginfo_t *info, void *ctx) {
 #if defined(__aarch64__) && defined(GUEST_ARM64)
-    // If we're inside JIT code and got SIGSEGV/SIGBUS, recover by redirecting
-    // execution to jit_crash_trampoline via ucontext PC manipulation.
-    // This avoids the overhead of _setjmp on every block entry.
-    if ((sig == SIGSEGV || sig == SIGBUS) && in_jit) {
-        ucontext_t *uc = (ucontext_t *)ctx;
-#ifdef ISH_JIT
-        // In native code: a fault at a guest access goes on at its TLB-miss
-        // exit, as a miss there would. Anywhere else there is no position to
-        // retry from, and the run loop kills the process; x28 is the
-        // code-stream position only at exits, so it is cleared for fiber_exit.
-        uintptr_t resume;
-        enum jit_fault fault = jit_native_fault(uc, (uintptr_t) info->si_addr, &resume);
-        if (fault == JIT_FAULT_RESUME) {
-            UC_PC(uc) = resume;
-            return;
-        }
-        if (fault == JIT_FAULT_UNKNOWN)
-            UC_X(uc, 28) = 0;
-#endif
-
-        // _cpu is in x1 — pointer to cpu_state within fiber_frame
-        uint64_t cpu_ptr = UC_X(uc, 1);
-
-        // Reconstruct guest segfault_addr from registers.
-        // x7 = _addr (host pointer = data_minus_addr + guest_addr)
-        // x10 may hold data_minus_addr from TLB lookup (but only on TLB HIT path)
-        uint64_t x7 = UC_X(uc, 7);
-        uint64_t x10 = UC_X(uc, 10);
-        uint64_t guest_addr = (x7 - x10) & 0xffffffffffffULL;
-
-        // Store diagnostic info for handle_interrupt to read
-        jit_last_host_fault = (uint64_t)info->si_addr;
-        jit_last_x7 = x7;
-        jit_last_x10 = x10;
-        jit_crash_count++;
-
-        // Determine read/write from host ESR. Bit 6 (WnR): 0=read, 1=write.
-        uint64_t esr = uc_esr(uc);
-        int was_write = (esr & 0x40) != 0;
-
-        // Write crash info directly to cpu_state via _cpu pointer.
-        // Each store must match the field's real width: segfault_was_write is a
-        // `bool`, and the previous `*(int *)` store wrote 4 bytes over it and the
-        // padding before `trapno`. The generated gadgets use `strb` for the same
-        // field, so 1 byte is the correct width on both sides.
-        *(addr_t *)(cpu_ptr + CRASH_CPU_segfault_addr) = guest_addr;
-        *(bool *)(cpu_ptr + CRASH_CPU_segfault_was_write) = (bool)was_write;
-        // cpu->pc stays the current block's start. x28 (_pc) is left as the
-        // code-stream position of the fault, which fiber_exit records, so the
-        // run loop retries from the faulting instruction.
-
-        // Restore SP to the value saved by fiber_enter, so fiber_exit
-        // can correctly pop the callee-saved register frame.
-        uint64_t exit_sp = *(uint64_t *)(cpu_ptr + CRASH_LOCAL_jit_exit_sp);
-        UC_SP(uc) = exit_sp;
-
-        // Redirect execution to crash trampoline (returns INT_JIT_CRASH)
-        UC_PC(uc) = (uint64_t)jit_crash_trampoline;
-
-        // Unblock signal so it can fire again on next crash
-        sigset_t unblock;
-        sigemptyset(&unblock);
-        sigaddset(&unblock, sig);
-        sigprocmask(SIG_UNBLOCK, &unblock, NULL);
-
-        // Signal handler returns; execution resumes at jit_crash_trampoline
+    // A fault in translated guest code goes on (asbestos/guest-arm64/host_fault.c)
+    if (asbestos_host_fault(sig, info, ctx))
         return;
-    }
 #endif
 
     // Non-JIT crash: dump state and exit
