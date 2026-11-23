@@ -235,6 +235,17 @@ void handle_interrupt(int interrupt) {
                             current->syscall_restartable = false;
                             current->syscall_restart_nohandler = true;
                             break;
+                        // ERESTART_RESTARTBLOCK: the same, as restart_syscall,
+                        // which sleeps on to the time they slept to
+                        // (kernel/time.c): a stopped `sleep 30` continued
+                        // (Ctrl-Z, bg) ended with its nanosleep's EINTR. Not
+                        // restart_syscall's with no sleep to go on with.
+                        case 101: case 115: // nanosleep, clock_nanosleep
+                        case 128:           // restart_syscall
+                            current->syscall_restartable = false;
+                            current->syscall_restart_nohandler = current->restart_sleep_pending;
+                            current->syscall_restart_block = current->restart_sleep_pending;
+                            break;
                         default:
                             current->syscall_restartable = false;
                     }

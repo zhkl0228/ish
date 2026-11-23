@@ -78,6 +78,8 @@ struct task *task_create_(struct task *parent) {
         *task = *parent;
     atomic_init(&task->refs, 1); // the kernel's
     task->pid = pid->id;
+    // the parent's own
+    task->restart_sleep_pending = false;
     task->start_ticks = get_uptime().uptime_ticks;
     pid->task = task;
     // Copied from the parent above; a new task has not begun exiting.

@@ -795,9 +795,17 @@ void receive_signals(void) {
             current->cpu.pc == current->syscall_restart_pc) {
         current->cpu.pc -= 4;
         current->cpu.regs[0] = current->syscall_restart_arg0;
+        // as Linux's setup_restart_syscall: x8 is the call's number
+        if (current->syscall_restart_block)
+            current->cpu.regs[8] = 128; // restart_syscall
         current->syscall_restartable = false;
     }
     current->syscall_restart_nohandler = false;
+    current->syscall_restart_block = false;
+    // the sleep a handler ran after is not restarted (Linux's sigreturn
+    // resets its restart_block)
+    if (handler_ran)
+        current->restart_sleep_pending = false;
 #else
     (void) handler_ran;   // x86 restarts nothing without a handler
 #endif

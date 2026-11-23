@@ -708,6 +708,17 @@ EOF
         status=1
     fi
     echo
+    echo "########## a sleep a stop or an ignored signal interrupts goes on (restart_syscall) ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_sleep_restart" tests/regress/regress_sleep_restart.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_sleep_restart 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_sleep_restart"
+    else
+        echo "failed to build regress_sleep_restart" >&2
+        status=1
+    fi
+    echo
     echo "########## floating-point environment: exception flags, rounding mode ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_fenv" tests/regress/regress_fenv.c -lm; then
         out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_fenv 2>&1)

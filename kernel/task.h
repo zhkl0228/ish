@@ -104,6 +104,14 @@ struct task {
     // ... with no handler run for the signal, as Linux's ERESTARTSYS (see
     // receive_signals); for the signal handling right after it only
     bool syscall_restart_nohandler;
+    // ... as restart_syscall, as Linux's ERESTART_RESTARTBLOCK: a sleep
+    // (nanosleep, clock_nanosleep) goes on to the time it slept to, not the
+    // whole of it again
+    bool syscall_restart_block;
+    // the interrupted sleep's, for restart_syscall: valid while pending
+    bool restart_sleep_pending;
+    struct timespec restart_sleep_deadline; // CLOCK_MONOTONIC
+    addr_t restart_sleep_rem;
 
     // locked by pids_lock
     dword_t exit_code;

@@ -305,7 +305,38 @@ static dword_t nanosleep_interruptible(struct timespec *req, addr_t rem_addr) {
     }
     if (rem_addr != 0 && user_put(rem_addr, rem_ts))
         return _EFAULT;
-    return err == _EINTR ? _EINTR : 0;
+    if (err == _EINTR) {
+        // where restart_syscall sleeps on to, when no handler runs for the
+        // signal (kernel/calls.c)
+        long long end_ns = (long long) start.tv_nsec + req_ns % 1000000000LL;
+        current->restart_sleep_deadline.tv_sec = start.tv_sec + req_ns / 1000000000LL + end_ns / 1000000000LL;
+        current->restart_sleep_deadline.tv_nsec = end_ns % 1000000000LL;
+        current->restart_sleep_rem = rem_addr;
+        current->restart_sleep_pending = true;
+        return _EINTR;
+    }
+    return 0;
+}
+
+// restart_syscall: a sleep a signal interrupted with no handler run for it
+// (one that stopped the process, which was then continued; one ignored), as
+// Linux's ERESTART_RESTARTBLOCK. It sleeps on to the time it slept to: what
+// is left, nothing if the stop outlasted it. nanosleep's and
+// clock_nanosleep's are the only ones here.
+dword_t sys_restart_syscall(void) {
+    STRACE("restart_syscall()");
+    if (!current->restart_sleep_pending)
+        return _EINTR;
+    current->restart_sleep_pending = false;
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) < 0)
+        return errno_map();
+    long long left_ns = (long long) (current->restart_sleep_deadline.tv_sec - now.tv_sec) * 1000000000LL +
+        (current->restart_sleep_deadline.tv_nsec - now.tv_nsec);
+    if (left_ns <= 0)
+        return 0;
+    struct timespec left = {.tv_sec = left_ns / 1000000000LL, .tv_nsec = left_ns % 1000000000LL};
+    return nanosleep_interruptible(&left, current->restart_sleep_rem);
 }
 
 dword_t sys_nanosleep(addr_t req_addr, addr_t rem_addr) {
