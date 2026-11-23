@@ -117,6 +117,9 @@
                                         <action selector="pressTab:" destination="BYZ-38-t0r" eventType="primaryActionTriggered" id="Cbz-tT-Cre"/>
                                     </connections>
                                 </button>
+                                <view contentMode="scaleToFill" horizontalHuggingPriority="100" translatesAutoresizingMaskIntoConstraints="NO" id="qmg-M1-7W8" userLabel="Spacer">
+                                    <rect key="frame" x="148" y="0.0" width="229" height="50"/>
+                                </view>
                                 <button contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" tag="1" id="ArU-Ky-k01" userLabel="Up Arrow" customClass="BarButton">
                                     <rect key="frame" x="74" y="0.0" width="31" height="50"/>
                                     <color key="backgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
@@ -201,9 +204,6 @@
                                         <action selector="paste:" destination="dkx-z0-nzr" eventType="primaryActionTriggered" id="cfw-0C-OAd"/>
                                     </connections>
                                 </button>
-                                <view contentMode="scaleToFill" horizontalHuggingPriority="100" translatesAutoresizingMaskIntoConstraints="NO" id="qmg-M1-7W8" userLabel="Spacer">
-                                    <rect key="frame" x="148" y="0.0" width="229" height="50"/>
-                                </view>
                             </subviews>
                             <constraints>
                                 <constraint firstAttribute="height" constant="43" id="3cy-zm-9Qp"/>

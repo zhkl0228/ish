@@ -156,10 +156,11 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
     self.barView.accessibilityCustomActions = @[[[UIAccessibilityCustomAction alloc] initWithName:@"Hide Keyboard" actionHandler:^BOOL(UIAccessibilityCustomAction *action) {
         return [self.termView resignFirstResponder];
     }]];
-    // The bar is a row of flat keys from the left edge, a point apart: esc,
-    // ctrl, tab, the four arrows and paste, 42 points tall on a phone (50 on
-    // an iPad) and about as wide (resizeBar). esc and ctrl are named in
-    // lowercase; tab, paste and the arrows are drawn.
+    // The bar is a row of flat keys, a point apart: esc, ctrl and tab from the
+    // left edge, the four arrows and paste to the right one, the room a wide
+    // screen leaves between them (the spacer, in the storyboard). 42 points
+    // tall on a phone (50 on an iPad) and about as wide (resizeBar). esc and
+    // ctrl are named in lowercase; tab, paste and the arrows are drawn.
     bool phone = UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone;
     self.barHeight.constant = phone ? 42 : 50;
     CGFloat keyFontSize = phone ? 18 : 21;
@@ -618,7 +619,8 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
 - (void)resizeBar {
     // Keys 41 points wide on a phone and 50 on an iPad, which in Slide Over is
     // as narrow as a phone; narrower if the row is (39 on a 320-point iPhone
-    // SE). Every arranged view but the spacer after them is a key.
+    // SE). Every arranged view but the spacer between tab and the arrows is a
+    // key.
     bool phone = UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone;
     NSUInteger views = self.bar.arrangedSubviews.count;
     NSUInteger keys = views - 1;
