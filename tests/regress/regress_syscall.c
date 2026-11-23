@@ -196,6 +196,52 @@ static void test_stat_fstat_agreement(const char *path) {
 }
 
 // ---------------------------------------------------------------------------
+// unlink(directory) said EPERM, the host's answer (Darwin's unlink(2), so on
+// fakefs and on any realfs over APFS), where Linux says EISDIR. remove(3)
+// goes on to rmdir(2) only for EISDIR, so remove() of a directory failed:
+// Java's File.delete() is remove(), and Maven's protobuf plugin died with
+// "Unable to clean up temporary proto file directory: Directory ... unable
+// to be deleted". On a Linux host realfs already said EISDIR.
+// ---------------------------------------------------------------------------
+static void test_unlink_directory(const char *dir) {
+    section("unlink(directory) -> EISDIR, remove(directory) removes it");
+    printf("  path: %s\n", dir);
+
+    rmdir(dir);
+    if (mkdir(dir, 0755) != 0) {
+        printf("  SKIP  mkdir(%s): %s\n", dir, strerror(errno));
+        return;
+    }
+    errno = 0;
+    check(unlink(dir) < 0 && errno == EISDIR, "unlink(directory) -> EISDIR");
+    struct stat s;
+    check(stat(dir, &s) == 0 && S_ISDIR(s.st_mode), "the directory is still there");
+    check(remove(dir) == 0, "remove(empty directory) succeeds");
+    errno = 0;
+    check(stat(dir, &s) < 0 && errno == ENOENT, "the directory is gone");
+
+    // Not empty: remove() must say so, the way rmdir() does.
+    char inner[512];
+    snprintf(inner, sizeof(inner), "%s/inner", dir);
+    if (mkdir(dir, 0755) == 0 && mkdir(inner, 0755) == 0) {
+        errno = 0;
+        check(remove(dir) < 0 && errno == ENOTEMPTY,
+              "remove(non-empty directory) -> ENOTEMPTY");
+        rmdir(inner);
+    }
+    rmdir(dir);
+
+    // A regular file is still unlinked as before.
+    char file[512];
+    snprintf(file, sizeof(file), "%s.file", dir);
+    int fd = open(file, O_CREAT | O_WRONLY, 0644);
+    if (fd >= 0) {
+        close(fd);
+        check(unlink(file) == 0, "unlink(regular file) still succeeds");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // #29 — do_wait() waits with a 1-second bounded timeout (a workaround for
 // macOS condvars). It tested `if (wait_for(...))`, which is true for both
 // _EINTR and _ETIMEDOUT, so every expiry of that internal timeout was
@@ -533,6 +579,7 @@ int main(int argc, char **argv) {
     test_stat_fstat_agreement(file);
     if (extra_path != NULL)
         test_stat_fstat_agreement(extra_path);
+    test_unlink_directory("/tmp/regress_unlink_dir");
     test_waitpid_across_timeout();
     test_signal_still_interrupts();
     test_waitid_siginfo();

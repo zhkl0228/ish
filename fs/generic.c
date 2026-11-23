@@ -286,6 +286,17 @@ int generic_unlinkat(struct fd *at, const char *path_raw) {
     err = _EPERM;
     if (mount->fs->unlink)
         err = mount->fs->unlink(mount, path);
+    // A directory is EISDIR on Linux, but the host's unlink(2) says EPERM for
+    // it (POSIX allows either), and remove(3) goes on to rmdir(2) only for
+    // EISDIR, in musl and glibc alike: so Java's File.delete(), which is
+    // remove(), could not delete a directory, and Maven's cleanups (plexus
+    // FileUtils, the protobuf plugin's) failed with "unable to be deleted".
+    // Only a failure pays for the stat.
+    if (err == _EPERM) {
+        struct statbuf victim;
+        if (mount->fs->stat(mount, path, &victim) >= 0 && S_ISDIR(victim.mode))
+            err = _EISDIR;
+    }
     if (err >= 0 && watched) {
         inotify_inode(mount, gone.inode, IN_ATTRIB_);   // its link count
         if (gone.nlink <= 1)
