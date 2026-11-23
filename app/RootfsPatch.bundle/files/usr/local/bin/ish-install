@@ -49,7 +49,7 @@ describe() {
         go)     echo "Go                                       ~175 MB" ;;
         java)   echo "OpenJDK 25, Maven, gcompat               ~360 MB" ;;
         c)      echo "gcc, g++, make, musl-dev (build-base)    ~225 MB" ;;
-        clang)  echo "clang 21 (and build-base)                ~475 MB" ;;
+        clang)  echo "clang 22 (and build-base)                ~490 MB" ;;
         db)     echo "Redis, MariaDB server and client         ~230 MB" ;;
         tools)  echo "GitHub CLI, ShellCheck, 7-Zip            ~65 MB" ;;
         svn)    echo "Subversion (svn)                         ~6 MB" ;;
@@ -68,7 +68,7 @@ packages() {
         # such as protoc-gen-grpc-java (protoc itself is static).
         java)   echo "openjdk25-jdk maven gcompat" ;;
         c)      echo "build-base" ;;
-        clang)  echo "build-base clang21" ;;
+        clang)  echo "build-base clang22" ;;
         db)     echo "redis mariadb mariadb-client" ;;
         tools)  echo "github-cli shellcheck 7zip" ;;
         svn)    echo "subversion" ;;
@@ -126,7 +126,7 @@ case $1 in
         exit 0 ;;
 esac
 
-wanted= cn=
+wanted='' cn=''
 for arg in "$@"; do
     if [ "$arg" = --cn ]; then
         cn=1
