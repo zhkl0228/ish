@@ -18,7 +18,6 @@
 #include "fs/sockrestart.h"
 
 // From kernel/calls.h - avoid circular include
-extern _Noreturn void do_exit_group(int status);
 
 #if defined(__linux__)
 #include <sys/epoll.h>
@@ -587,46 +586,20 @@ int poll_wait(struct poll *poll_, poll_callback_t callback, void *context, struc
                 res = _EINTR;
                 break;
             }
-            // Safety valve: if no thread in this process group has
-            // done real work for >60s and there are no live child
-            // processes, force exit. Catches V8/libuv exit cleanup
-            // hangs where the event loop spins idle forever.
-            //
-            // Exceptions:
-            //   - pid 1 (init): legitimately idles, killing halts the system
-            //   - processes with a controlling TTY: interactive shells idle
-            //     waiting for user input and must not be killed
-            if (current->pid != 1 && current->group->tty == NULL) {
-                struct timespec _now;
-                clock_gettime(CLOCK_MONOTONIC, &_now);
-                uint64_t now_ns = (uint64_t)_now.tv_sec * 1000000000ULL + _now.tv_nsec;
-                uint64_t last = atomic_load_explicit(
-                    &current->group->last_progress_ns, memory_order_relaxed);
-                int64_t idle_s = (int64_t)(now_ns - last) / 1000000000LL;
-                if (idle_s >= 60) {
-                    bool has_live_children = false;
-                    int thread_count = 0;
-                    lock(&pids_lock);
-                    lock(&current->group->lock);
-                    struct task *t_iter;
-                    list_for_each_entry(&current->group->threads, t_iter, group_links) {
-                        thread_count++;
-                        struct task *child;
-                        list_for_each_entry(&t_iter->children, child, siblings) {
-                            if (child->group != current->group && !child->zombie)
-                                has_live_children = true;
-                        }
-                    }
-                    unlock(&current->group->lock);
-                    unlock(&pids_lock);
-                    if (!has_live_children) {
-                        if (ish_exec_trace())
-                            printk("SAFETY-VALVE[poll]: pid=%d idle %llds, %d threads → exit_group\n",
-                                   current->pid, (long long)idle_s, thread_count);
-                        do_exit_group(0);
-                    }
-                }
-            }
+            // [T-ish-poll-valve-removal] This used to be a "safety valve"
+            // that exit_group(0)'d a process without a controlling tty, with
+            // no live children, after 60 s with no event in any of its polls
+            // (5d8e1e1a, for Node/npm exit hangs). It killed every quiet
+            // daemon: utmps's (utmpd, wtmpd, btmpd) a minute after boot, a
+            // redis, sshd or crond waiting for work alike. And it exited
+            // holding poll_->lock: another thread exiting at once, holding
+            // pids_lock to tell its parent, woke this poll's signalfd and
+            // waited for the lock, while this one waited for pids_lock to
+            // exit (build/ish-crash-reports 163241, 163433: every thread
+            // that took pids_lock after, the app's main thread among them,
+            // stopped, and the watchdog killed the app). As the futex
+            // valve's removal says: an idle process is not the kernel's to
+            // kill, and a stuck one is ended by its caller's own timeout.
             if (timeout != NULL) {
                 // Timed wait: subtract elapsed time
                 timeout->tv_sec -= 1;
