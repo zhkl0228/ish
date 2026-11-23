@@ -4322,29 +4322,6 @@ msub_store:
     gret
 
 /*
- * MOV Xd, Vn.D[0] - Move low 64 bits of vector to GPR
- * Code stream: [gadget addr][rd | rn<<8]
- */
-.gadget mov_v_to_gpr
-    ldr x8, [_pc]
-    add _pc, _pc, #8
-
-    and x9, x8, #0x1f       // rd (gpr)
-    ubfx x10, x8, #8, #5    // rn (vector)
-
-    // Load low 64 bits of vector
-    add x11, _cpu, #CPU_fp
-    lsl x12, x10, #4        // each V reg is 16 bytes
-    ldr x13, [x11, x12]
-
-    // Store to GPR (check for XZR)
-    cmp x9, #31
-    b.eq 1f                 // XZR - discard
-    add x14, _cpu, #CPU_x0
-    str x13, [x14, x9, lsl #3]
-1:  gret
-
-/*
  * UMOV/MOV - Move vector element to GPR (zero-extend)
  * Code stream: [gadget addr][rd | rn<<8 | elem_size<<16 | index<<20]
  *

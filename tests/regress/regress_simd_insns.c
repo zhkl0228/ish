@@ -14,6 +14,8 @@
 //   - FNMSUB with bits[15:10]=101001 was decoded as SSHLL (mask missing bit 28).
 //   - LD1/ST1..ST4 single structure to an H lane took the lane index from
 //     size<0> instead of size<1>, so {Vt.h}[1] went to lane 0 and so on.
+//   - RBIT (vector) was decoded as NOT: the mask left size out. libcrypto's
+//     differential run found it.
 // It also covers instructions that were not implemented at all (SIGILL):
 //   - SQSHL, UQSHL and SQSHLU by immediate, vector and scalar.
 //   - SCVTF and UCVTF (vector, fixed-point), single and double precision.

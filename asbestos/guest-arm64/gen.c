@@ -277,7 +277,6 @@ extern void gadget_dup_gpr_to_vec(void);   // DUP Vd.<T>, Wn (general - all elem
 extern void gadget_dup_elem_vec(void);     // DUP Vd.<T>, Vn.<Ts>[idx] (element to vector)
 extern void gadget_dup_elem_scalar(void);  // DUP <V>d, Vn.<T>[idx] (element to scalar)
 extern void gadget_ins_elem_vec(void);     // INS Vd.<T>[idx1], Vn.<T>[idx2] (element to element)
-extern void gadget_mov_v_to_gpr(void);     // MOV Xd, Vn.D[0]
 extern void gadget_umov_vec_to_gpr(void);  // UMOV/MOV Wd, Vn.<T>[idx]
 extern void gadget_smov_vec_to_gpr(void);  // SMOV Wd/Xd, Vn.<T>[idx]
 extern void gadget_ins_gpr_to_vec_s(void); // MOV Vd.S[idx], Wn (INS from GPR)
@@ -492,7 +491,6 @@ extern void gadget_zip2_vec(void);         // ZIP2 Vd, Vn, Vm (zip upper halves)
 extern void gadget_rev16_vec(void);        // REV16 Vd, Vn (reverse bytes in 16-bit halfwords)
 extern void gadget_rev32_vec(void);        // REV32 Vd, Vn (reverse bytes in 32-bit elements)
 extern void gadget_rev64_vec(void);        // REV64 Vd, Vn (reverse bytes in 64-bit elements)
-extern void gadget_rbit_vec(void);         // RBIT Vd.xB, Vn.xB (reverse bits in each byte)
 extern void gadget_cnt_vec(void);          // CNT Vd.xB, Vn.xB (count set bits per byte)
 extern void gadget_addv_vec(void);         // ADDV Vd, Vn (add across vector lanes)
 extern void gadget_saddlv_vec(void);       // SADDLV Vd, Vn (signed add long across vector)
@@ -4876,18 +4874,6 @@ static int gen_simd_fp(struct gen_state *state, uint32_t insn) {
     }
 
     // UMOV/MOV (to general) - extract vector element to GPR
-    // For MOV Xd, Vn.D[0]: 0x4e083c00 | (Rn << 5) | Rd
-    // Pattern: 0Q001110 imm5 0 01111 Rn Rd
-    // Q=1, imm5[4:0]=01000 means D[0]
-    if ((insn & 0xffe0fc00) == 0x4e083c00) {
-        uint32_t rd = insn & 0x1f;
-        uint32_t rn = (insn >> 5) & 0x1f;
-        gen(state, (unsigned long) gadget_mov_v_to_gpr);
-        gen(state, rd | (rn << 8));
-        return 1;
-    }
-
-    // UMOV/MOV (to general) - extract vector element to GPR
     // Matches: 0Q001110 0imm5 0 01111 Rn Rd (UMOV/MOV scalar from vector)
     if ((insn & 0xbfe0fc00) == 0x0e003c00) {
         uint32_t imm5 = (insn >> 16) & 0x1f;
@@ -5651,7 +5637,8 @@ skip_three_different:
     // NOT/RBIT (vector) - AdvSIMD two-register misc (bytes only)
     // NOT:  0 Q 1 01110 00 10000 00101 10 Rn Rd  (U=1, size=00, opcode=0x05)
     // RBIT: 0 Q 1 01110 01 10000 00101 10 Rn Rd  (U=1, size=01, opcode=0x05)
-    if ((insn & 0xbf3ffc00) == 0x2e205800) {   // NOT (size=00)
+    // The masks keep size: without it RBIT was taken for NOT.
+    if ((insn & 0xbffffc00) == 0x2e205800) {   // NOT (size=00)
         uint32_t Q = (insn >> 30) & 1;
         uint32_t rn = (insn >> 5) & 0x1f;
         uint32_t rd = insn & 0x1f;
@@ -5659,7 +5646,7 @@ skip_three_different:
         gen(state, rd | (rn << 8) | (Q << 16));
         return 1;
     }
-    if ((insn & 0xbf3ffc00) == 0x2e605800) {   // RBIT (size=01)
+    if ((insn & 0xbffffc00) == 0x2e605800) {   // RBIT (size=01)
         uint32_t Q = (insn >> 30) & 1;
         uint32_t rn = (insn >> 5) & 0x1f;
         uint32_t rd = insn & 0x1f;
@@ -5859,19 +5846,6 @@ skip_three_different:
         return 1;
     }
 
-    // RBIT (vector) - reverse bits in each byte
-    // 0 Q 1 01110 sz 10000 00101 10 Rn Rd
-    // Mask 0xbf3ffc00 checks fixed bits, ignores Q, sz, Rn, Rd
-    // Value: sz must be 00 for .8B/.16B
-    if ((insn & 0xbf3ffc00) == 0x2e205800) {
-        uint32_t Q = (insn >> 30) & 1;
-        uint32_t rn = (insn >> 5) & 0x1f;
-        uint32_t rd = insn & 0x1f;
-
-        gen(state, (unsigned long) gadget_rbit_vec);
-        gen(state, rd | (rn << 8) | (Q << 16));
-        return 1;
-    }
 
     // ADDV (across lanes) - add all vector elements into scalar
     // 0 Q U 01110 size 11000 1 10110 10 Rn Rd  (U=0, opcode=11011)
