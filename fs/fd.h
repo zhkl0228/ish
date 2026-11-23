@@ -52,6 +52,12 @@ struct fd {
         struct {
             uint64_t val;
         } eventfd;
+        // signalfd (kernel/signalfd.c): the signals it reads (a sigset_t_),
+        // and its place among the signalfds
+        struct {
+            _Atomic uint64_t mask;
+            struct list links;
+        } signalfd;
         struct {
             struct timer *timer;
             uint64_t expirations;

@@ -63,6 +63,8 @@ static bool delete_timers_if_last(struct task *task) {
     return last;
 }
 
+static void waitid_decode_status(struct siginfo_ *info);
+
 static bool exit_tgroup(struct task *task) {
     struct tgroup *group = task->group;
     list_remove(&task->group_links);
@@ -263,14 +265,16 @@ noreturn void do_exit(int status) {
             notify(&parent->group->child_exit);
             // Wake any pidfd poller waiting on this pid.
             pidfd_notify_exit(leader->pid);
+            // As Linux's do_notify_parent: the process's pid, and the code
+            // and status waitid gives (CLD_EXITED and the exit code, ...)
             struct siginfo_ info = {
-                .code = SI_KERNEL_,
-                .child.pid = current->pid,
+                .child.pid = leader->pid,
                 .child.uid = current->uid,
                 .child.status = current->exit_code,
                 .child.utime = clock_from_timeval(group_rusage.utime),
                 .child.stime = clock_from_timeval(group_rusage.stime),
             };
+            waitid_decode_status(&info);
             // to the parent process, as Linux does: any of its threads may
             // take it
             if (leader->exit_signal != 0)

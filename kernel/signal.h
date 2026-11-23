@@ -159,6 +159,13 @@ int send_group_signal(dword_t pgid, int sig, struct siginfo_ info);
 // pids_lock.
 struct tgroup;
 void send_process_signal(struct tgroup *group, int sig, struct siginfo_ info);
+// Takes the first signal in set queued for the thread, else for its process,
+// into info (sigtimedwait, signalfd): false if there is none. Caller holds the
+// sighand lock.
+bool dequeue_signal(sigset_t_ set, struct siginfo_ *info);
+// Wakes those polling a signalfd whose mask has sig (kernel/signalfd.c).
+// Caller holds no sighand lock.
+void signalfd_wakeup(int sig);
 // Wake threads to take the process's pending signals in set; see signal.c.
 // Caller holds pids_lock and the threads' sighand lock.
 void retarget_process_signals(struct tgroup *group, sigset_t_ set);
@@ -235,6 +242,8 @@ int_t sys_rt_sigtimedwait(addr_t set_addr, addr_t info_addr, addr_t timeout_addr
 dword_t sys_kill(pid_t_ pid, dword_t sig);
 dword_t sys_tkill(pid_t_ tid, dword_t sig);
 dword_t sys_tgkill(pid_t_ tgid, pid_t_ tid, dword_t sig);
+int_t sys_rt_sigqueueinfo(pid_t_ pid, int_t sig, addr_t info_addr);
+int_t sys_rt_tgsigqueueinfo(pid_t_ tgid, pid_t_ tid, int_t sig, addr_t info_addr);
 
 // signal frame structs. There's a good chance this should go in its own header file
 

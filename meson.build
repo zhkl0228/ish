@@ -1730,6 +1730,7 @@ if get_option('kernel') == 'ish'
         'kernel/random.c',
         'kernel/misc.c',
         'kernel/eventfd.c',
+        'kernel/signalfd.c',
         'kernel/pidfd.c',
         'kernel/inotify.c',
         'kernel/ipc.c',

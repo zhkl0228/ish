@@ -144,6 +144,7 @@ int_t sys_epoll_wait(fd_t epoll, addr_t events_addr, int_t max_events, int_t tim
 int_t sys_epoll_pwait(fd_t epoll_f, addr_t events_addr, int_t max_events, int_t timeout, addr_t sigmask_addr, dword_t sigsetsize);
 
 int_t sys_eventfd2(uint_t initval, int_t flags);
+int_t sys_signalfd4(fd_t f, addr_t mask_addr, uint_t size, int_t flags);
 int_t sys_pidfd_open(pid_t_ pid, uint_t flags);
 
 // System V shared memory (kernel/shm.c, arm64 guest)

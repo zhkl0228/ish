@@ -664,6 +664,28 @@ EOF
         status=1
     fi
     echo
+    echo "########## signalfd, and SIGCHLD's siginfo ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_signalfd" tests/regress/regress_signalfd.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_signalfd 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_signalfd"
+    else
+        echo "failed to build regress_signalfd" >&2
+        status=1
+    fi
+    echo
+    echo "########## sigqueue: rt_sigqueueinfo, rt_tgsigqueueinfo ##########"
+    if "$CC_GUEST" -static -O0 -Wall -pthread -o "$GUEST_ROOT/tmp/regress_sigqueue" tests/regress/regress_sigqueue.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_sigqueue 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_sigqueue"
+    else
+        echo "failed to build regress_sigqueue" >&2
+        status=1
+    fi
+    echo
     echo "########## floating-point environment: exception flags, rounding mode ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_fenv" tests/regress/regress_fenv.c -lm; then
         out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_fenv 2>&1)

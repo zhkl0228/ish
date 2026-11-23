@@ -133,6 +133,7 @@ void deliver_signal(struct task *task, int sig, struct siginfo_ info) {
     deliver_signal_unlocked(task, sig, info, true);
     unlock(&task->sighand->lock);
     cpu_poke(&task->cpu);
+    signalfd_wakeup(sig);
 }
 
 // A signal the task brought on itself synchronously: a fault, a breakpoint,
@@ -154,6 +155,7 @@ void force_signal(struct task *task, int sig, struct siginfo_ info, bool to_defa
     deliver_signal_unlocked(task, sig, info, true);
     unlock(&task->sighand->lock);
     cpu_poke(&task->cpu);
+    signalfd_wakeup(sig);
 }
 
 void send_signal(struct task *task, int sig, struct siginfo_ info) {
@@ -202,6 +204,7 @@ void send_signal(struct task *task, int sig, struct siginfo_ info) {
         cpu_poke(&task->cpu);
     }
     unlock(&sighand->lock);
+    signalfd_wakeup(sig);
 
     if (sig == SIGCONT_ || sig == SIGKILL_) {
         lock(&task->group->lock);
@@ -286,6 +289,7 @@ void send_process_signal(struct tgroup *group, int sig, struct siginfo_ info) {
         }
     }
     unlock(&sighand->lock);
+    signalfd_wakeup(sig);
 
     if (sig == SIGCONT_ || sig == SIGKILL_) {
         lock(&group->lock);
@@ -1155,6 +1159,30 @@ int_t sys_pause(void) {
     return _EINTR;
 }
 
+bool dequeue_signal(sigset_t_ set, struct siginfo_ *info) {
+    // The thread's own first, then its process's. Its pending bit goes
+    // with it: a second sigtimedwait would find the signal still pending
+    // and return EINTR at once.
+    struct sigqueue *sigqueue;
+    list_for_each_entry(&current->queue, sigqueue, queue) {
+        if (sigset_has(set, sigqueue->info.sig)) {
+            unqueue_signal(&current->queue, &current->pending, sigqueue);
+            goto found;
+        }
+    }
+    list_for_each_entry(&current->group->shared_queue, sigqueue, queue) {
+        if (sigset_has(set, sigqueue->info.sig)) {
+            unqueue_signal(&current->group->shared_queue, &current->group->shared_pending, sigqueue);
+            goto found;
+        }
+    }
+    return false;
+found:
+    *info = sigqueue->info;
+    free(sigqueue);
+    return true;
+}
+
 int_t sys_rt_sigtimedwait(addr_t set_addr, addr_t info_addr, addr_t timeout_addr, uint_t set_size) {
     sigset_t_ set;
     int err = user_get_sigset(set_addr, set_size, &set);
@@ -1201,32 +1229,11 @@ int_t sys_rt_sigtimedwait(addr_t set_addr, addr_t info_addr, addr_t timeout_addr
         return _EAGAIN;
     }
 
-    // The thread's own first, then its process's. Its pending bit goes
-    // with it: a second sigtimedwait would find the signal still pending
-    // and return EINTR at once.
-    struct sigqueue *sigqueue;
-    bool found = false;
-    list_for_each_entry(&current->queue, sigqueue, queue) {
-        if (sigset_has(set, sigqueue->info.sig)) {
-            found = true;
-            unqueue_signal(&current->queue, &current->pending, sigqueue);
-            break;
-        }
-    }
-    if (!found) {
-        list_for_each_entry(&current->group->shared_queue, sigqueue, queue) {
-            if (sigset_has(set, sigqueue->info.sig)) {
-                found = true;
-                unqueue_signal(&current->group->shared_queue, &current->group->shared_pending, sigqueue);
-                break;
-            }
-        }
-    }
+    struct siginfo_ info;
+    bool found = dequeue_signal(set, &info);
     unlock(&current->sighand->lock);
     if (!found)
         return _EINTR;
-    struct siginfo_ info = sigqueue->info;
-    free(sigqueue);
     if (info_addr != 0)
         if (user_put(info_addr, info))
             return _EFAULT;
@@ -1236,16 +1243,19 @@ int_t sys_rt_sigtimedwait(addr_t set_addr, addr_t info_addr, addr_t timeout_addr
 
 // process_directed: kill() (and its process group forms) address the whole
 // process; tkill() and tgkill() address one thread.
-static int kill_task(struct task *task, dword_t sig, bool process_directed) {
+// given: the siginfo sigqueue sends; NULL for kill's, tkill's and tgkill's
+static int kill_task(struct task *task, dword_t sig, const struct siginfo_ *given, bool process_directed) {
     if (!superuser() &&
             current->uid != task->uid &&
             current->uid != task->suid &&
             current->euid != task->uid &&
             current->euid != task->suid)
         return _EPERM;
-    struct siginfo_ info = {
-        .code = SI_USER_,
-        .kill.pid = current->pid,
+    // as Linux: SI_USER from kill, SI_TKILL from tkill and tgkill; the
+    // sender's process, not its thread
+    struct siginfo_ info = given != NULL ? *given : (struct siginfo_) {
+        .code = process_directed ? SI_USER_ : SI_TKILL_,
+        .kill.pid = current->tgid,
         .kill.uid = current->uid,
     };
     if (process_directed)
@@ -1256,15 +1266,14 @@ static int kill_task(struct task *task, dword_t sig, bool process_directed) {
 }
 
 static int kill_group(pid_t_ pgid, dword_t sig) {
+    // do_kill drops pids_lock: dropped here too, it was unlocked twice
     struct pid *pid = pid_get(pgid);
-    if (pid == NULL) {
-        unlock(&pids_lock);
+    if (pid == NULL)
         return _ESRCH;
-    }
     struct tgroup *tgroup;
     int err = _EPERM;
     list_for_each_entry(&pid->pgroup, tgroup, pgroup) {
-        int kill_err = kill_task(tgroup->leader, sig, true);
+        int kill_err = kill_task(tgroup->leader, sig, NULL, true);
         // killing a group should return an error only if no process can be signaled
         if (err == _EPERM)
             err = kill_err;
@@ -1278,14 +1287,14 @@ static int kill_everything(dword_t sig) {
         struct task *task = pid_get_task(i);
         if (task == NULL || task == current || !task_is_leader(task))
             continue;
-        int kill_err = kill_task(task, sig, true);
+        int kill_err = kill_task(task, sig, NULL, true);
         if (err == _EPERM)
             err = kill_err;
     }
     return err;
 }
 
-static int do_kill(pid_t_ pid, dword_t sig, pid_t_ tgid, bool process_directed) {
+static int do_kill(pid_t_ pid, dword_t sig, pid_t_ tgid, bool process_directed, const struct siginfo_ *info) {
     STRACE("kill(%d, %d)", pid, sig);
     if (sig >= NUM_SIGS)
         return _EINVAL;
@@ -1312,7 +1321,7 @@ static int do_kill(pid_t_ pid, dword_t sig, pid_t_ tgid, bool process_directed) 
             return _ESRCH;
         }
 
-        err = kill_task(task, sig, process_directed);
+        err = kill_task(task, sig, info, process_directed);
     }
 
     unlock(&pids_lock);
@@ -1320,15 +1329,53 @@ static int do_kill(pid_t_ pid, dword_t sig, pid_t_ tgid, bool process_directed) 
 }
 
 dword_t sys_kill(pid_t_ pid, dword_t sig) {
-    return do_kill(pid, sig, 0, true);
+    return do_kill(pid, sig, 0, true, NULL);
 }
 dword_t sys_tgkill(pid_t_ tgid, pid_t_ tid, dword_t sig) {
     if (tid <= 0 || tgid <= 0)
         return _EINVAL;
-    return do_kill(tid, sig, tgid, false);
+    return do_kill(tid, sig, tgid, false, NULL);
 }
 dword_t sys_tkill(pid_t_ tid, dword_t sig) {
     if (tid <= 0)
         return _EINVAL;
-    return do_kill(tid, sig, 0, false);
+    return do_kill(tid, sig, 0, false, NULL);
+}
+
+// sigqueue's siginfo, the caller's own (its value). As Linux, a code the
+// kernel's, kill's or tkill's (SI_USER and up, SI_TKILL) is not the caller's
+// to give, but to itself: target is the thread the signal is for.
+static int sigqueue_info(int_t sig, pid_t_ target, addr_t info_addr, struct siginfo_ *info) {
+    if (user_get(info_addr, *info))
+        return _EFAULT;
+    info->sig = sig;
+    if ((info->code >= 0 || info->code == SI_TKILL_) && current->pid != target)
+        return _EPERM;
+    return 0;
+}
+
+// For a process, as kill: one that is not is ESRCH, process groups being
+// none of POSIX's sigqueue
+int_t sys_rt_sigqueueinfo(pid_t_ pid, int_t sig, addr_t info_addr) {
+    STRACE("rt_sigqueueinfo(%d, %d, %#llx)", pid, sig, (unsigned long long) info_addr);
+    struct siginfo_ info;
+    int err = sigqueue_info(sig, pid, info_addr, &info);
+    if (err < 0)
+        return err;
+    if (pid <= 0)
+        return _ESRCH;
+    return do_kill(pid, sig, 0, true, &info);
+}
+
+// For a thread, as tgkill (pthread_sigqueue). It was sys_rt_sigreturn in
+// the table: a call returned from a signal handler that was never called.
+int_t sys_rt_tgsigqueueinfo(pid_t_ tgid, pid_t_ tid, int_t sig, addr_t info_addr) {
+    STRACE("rt_tgsigqueueinfo(%d, %d, %d, %#llx)", tgid, tid, sig, (unsigned long long) info_addr);
+    struct siginfo_ info;
+    int err = sigqueue_info(sig, tid, info_addr, &info);
+    if (err < 0)
+        return err;
+    if (tid <= 0 || tgid <= 0)
+        return _EINVAL;
+    return do_kill(tid, sig, tgid, false, &info);
 }
