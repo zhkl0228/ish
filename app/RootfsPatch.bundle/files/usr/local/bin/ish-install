@@ -3,17 +3,42 @@
 #
 #   ish-install              install every group
 #   ish-install go python    install those groups
+#   ish-install --cn ...     the same, from Alibaba Cloud's mirrors (in China)
 #   ish-install -l           list the groups, and which are installed
 #
 # A group already installed is skipped. Packages come from Alpine's
 # repositories (apk), and Claude Code and Kimi Code from npm, so this needs the
-# network.
+# network. --cn makes apk, npm, pip and go use Alibaba Cloud's mirrors from
+# then on: /etc/apk/repositories, and /etc/profile.d/ish-mirror-cn.sh for the
+# others.
 #
 # Installed by the iSH app (RootfsPatch.bundle), which rewrites this file when
 # it updates the root.
 set -e
 
 ALL_GROUPS="python node claude kimi go java c clang db tools"
+
+# --cn: apk's repositories on mirrors.aliyun.com, and for login shells (and
+# what they start: Claude Code's own updates too) npm on npmmirror, pip and go
+# on mirrors.aliyun.com. go checks modules against sum.golang.org, which China
+# does not reach either: its mirror is sum.golang.google.cn.
+CN_PROFILE=/etc/profile.d/ish-mirror-cn.sh
+use_cn_mirrors() {
+    sed -i 's|https://dl-cdn.alpinelinux.org/alpine/|https://mirrors.aliyun.com/alpine/|' /etc/apk/repositories
+    cat > "$CN_PROFILE" <<'EOF'
+# Written by ish-install --cn: Alibaba Cloud's mirrors for npm, pip and go.
+# Remove this file, and put https://dl-cdn.alpinelinux.org/alpine/ back in
+# /etc/apk/repositories, for the official ones.
+export NPM_CONFIG_REGISTRY=https://registry.npmmirror.com
+export PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+export GOPROXY=https://mirrors.aliyun.com/goproxy/,direct
+export GOSUMDB=sum.golang.google.cn
+EOF
+    # shellcheck disable=SC1090
+    . "$CN_PROFILE"
+    echo "apk, npm, pip and go use Alibaba Cloud's mirrors now (this shell's npm, pip and go once you run: . $CN_PROFILE)"
+}
+
 
 describe() {
     case $1 in
@@ -89,15 +114,20 @@ case $1 in
         list
         exit 0 ;;
     -h|--help)
-        echo "usage: ish-install [group...]   (every group if none is given)"
-        echo "       ish-install -l           (the groups, and which are installed)"
+        echo "usage: ish-install [--cn] [group...]   (every group if none is given;"
+        echo "                                        --cn: from Alibaba Cloud's mirrors, from then on)"
+        echo "       ish-install -l                  (the groups, and which are installed)"
         echo
         list
         exit 0 ;;
 esac
 
-wanted=
+wanted= cn=
 for arg in "$@"; do
+    if [ "$arg" = --cn ]; then
+        cn=1
+        continue
+    fi
     if [ -z "$(packages "$arg")" ]; then
         echo "ish-install: no group $arg; groups: $ALL_GROUPS" >&2
         exit 2
@@ -105,6 +135,7 @@ for arg in "$@"; do
     wanted="$wanted $arg"
 done
 [ -n "$wanted" ] || wanted=$ALL_GROUPS
+[ -z "$cn" ] || use_cn_mirrors
 
 todo='' pkgs=''
 for group in $wanted; do

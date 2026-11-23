@@ -15,6 +15,7 @@ if [ -n "$ish_install_hint" ]; then
     echo "Python, Node.js, Claude Code, Kimi Code, Go, Java, C/C++ and more are not installed yet:"
     echo "  ish-install              installs them all"
     echo "  ish-install go python    installs only those (ish-install -l lists them)"
+    echo "  ish-install --cn ...     the same, from Alibaba Cloud's mirrors (in China)"
     echo
 fi
 unset ish_install_hint ish_install_cmd

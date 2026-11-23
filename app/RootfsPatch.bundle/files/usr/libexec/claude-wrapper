@@ -46,7 +46,9 @@ if [ "$region" != California ]; then
 fi
 
 export HTTPS_PROXY="$proxy" HTTP_PROXY="$proxy" https_proxy="$proxy" http_proxy="$proxy"
-export NO_PROXY="localhost,127.0.0.1"
+# Not through the proxy: this device, and the mirrors ish-install --cn sets
+# (Claude Code updating itself from npmmirror by way of California is slow)
+export NO_PROXY="localhost,127.0.0.1,mirrors.aliyun.com,npmmirror.com"
 export no_proxy="$NO_PROXY"
 # Claude Code updates itself with `npm install -g`, into npm's global prefix
 # (/usr/local): its updates go where ish-install put it instead
