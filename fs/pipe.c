@@ -16,6 +16,7 @@ static fd_t pipe_f_create(int pipe_fd, int flags) {
         return _ENOMEM;
     }
     fd->real_fd = pipe_fd;
+    fd->type = S_IFIFO; // realfs_read and _write wait for a signal on it too
     fd->stat.mode = S_IFIFO | 0660;
     fd->stat.uid = current->uid;
     fd->stat.gid = current->gid;

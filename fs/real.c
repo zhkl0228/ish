@@ -182,24 +182,53 @@ int realfs_fstat(struct fd *fd, struct statbuf *fake_stat) {
     return 0;
 }
 
+// A read or write that can wait for good, on a pipe or FIFO in blocking mode,
+// ends with EINTR when the task has a signal to take, as on Linux (and
+// receive_signals starts it again if no handler runs). The host call is made
+// once poll says it is ready, poll waiting a second at a time and checking in
+// between: the SIGUSR1 that wakes a thread for a signal interrupts only a
+// host call it is already in. The call used to be retried on every EINTR, so
+// no signal could end its wait: not SIGINT's handler (Python's Ctrl-C while
+// reading a child's output), not SIGSTOP (Ctrl-Z). 0 when ready.
+static int realfs_wait_ready(struct fd *fd, short events) {
+    if (!S_ISFIFO(fd->type) || (fd->flags & O_NONBLOCK_) || current == NULL)
+        return 0;
+    for (;;) {
+        if (task_signal_pending(current))
+            return _EINTR;
+        struct pollfd p = {.fd = fd->real_fd, .events = events};
+        int n = poll(&p, 1, 1000);
+        if (n > 0)
+            return 0; // ready, or an error or hangup the call will tell
+        if (n < 0 && errno != EINTR)
+            return errno_map();
+    }
+}
+
 ssize_t realfs_read(struct fd *fd, void *buf, size_t bufsize) {
-    ssize_t res;
-    do {
-        res = read(fd->real_fd, buf, bufsize);
-    } while (res < 0 && errno == EINTR);
-    if (res < 0)
-        return errno_map();
-    return res;
+    for (;;) {
+        int err = realfs_wait_ready(fd, POLLIN);
+        if (err < 0)
+            return err;
+        ssize_t res = read(fd->real_fd, buf, bufsize);
+        if (res >= 0)
+            return res;
+        if (errno != EINTR)
+            return errno_map();
+    }
 }
 
 ssize_t realfs_write(struct fd *fd, const void *buf, size_t bufsize) {
-    ssize_t res;
-    do {
-        res = write(fd->real_fd, buf, bufsize);
-    } while (res < 0 && errno == EINTR);
-    if (res < 0)
-        return errno_map();
-    return res;
+    for (;;) {
+        int err = realfs_wait_ready(fd, POLLOUT);
+        if (err < 0)
+            return err;
+        ssize_t res = write(fd->real_fd, buf, bufsize);
+        if (res >= 0)
+            return res;
+        if (errno != EINTR)
+            return errno_map();
+    }
 }
 
 ssize_t realfs_pread(struct fd *fd, void *buf, size_t bufsize, off_t off) {

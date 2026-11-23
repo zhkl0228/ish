@@ -115,6 +115,7 @@ void handle_interrupt(int interrupt) {
         // syscall) before doing pc -= 4.
         current->syscall_restart_pc = cpu->pc;
         current->syscall_restartable = false;
+        current->syscall_restart_nohandler = false;
 
         // === FAST PATH: Hot syscalls ===
         int fast_result = -1;  // -1 means fast path not taken
@@ -192,13 +193,31 @@ void handle_interrupt(int interrupt) {
                 // rather than the remaining time, so a `timeout N` wrapper's
                 // sleep would never end. Those keep returning EINTR (userspace
                 // handles their own restart with an adjusted timeout).
+                //
+                // The blocking calls Linux returns ERESTARTSYS from start
+                // again also when no handler runs for the signal at all
+                // (receive_signals): one that stopped the process, which was
+                // then continued (Ctrl-Z, fg), or one another thread took.
+                // They returned EINTR, which the program never asked for.
+                // futex and epoll_pwait are left to the program then, which
+                // loops on their EINTR anyway, rather than wait their full
+                // timeout again.
                 if ((int32_t)(uint32_t)result == -EINTR) {
                     switch (syscall_num) {
                         case 98:  // futex
                         case 22:  // epoll_pwait
-                        case 63:  // read
-                        case 64:  // write
                             current->syscall_restartable = true;
+                            break;
+                        case 63: case 64:   // read, write
+                        case 65: case 66:   // readv, writev
+                        case 67: case 68:   // pread64, pwrite64
+                        case 260: case 95:  // wait4, waitid
+                        case 202: case 242: // accept, accept4
+                        case 206: case 207: // sendto, recvfrom
+                        case 211: case 212: // sendmsg, recvmsg
+                        case 32:            // flock
+                            current->syscall_restartable = true;
+                            current->syscall_restart_nohandler = true;
                             break;
                         default:
                             current->syscall_restartable = false;
@@ -711,8 +730,10 @@ static inline int fast_read(struct cpu_state *cpu) {
     if (size > 4096)
         return -1;
 
+    // Not a pipe or FIFO: a read there can wait for good, and only
+    // realfs_read lets a signal end the wait.
     struct fd *fd = f_get(fd_no);
-    if (fd == NULL || fd->ops != &realfs_fdops)
+    if (fd == NULL || fd->ops != &realfs_fdops || S_ISFIFO(fd->type))
         return -1;
 
     // Direct host read (with EINTR retry)
@@ -742,8 +763,9 @@ static inline int fast_write(struct cpu_state *cpu) {
     if (size > 4096)
         return -1;
 
+    // as fast_read: not a pipe or FIFO
     struct fd *fd = f_get(fd_no);
-    if (fd == NULL || fd->ops != &realfs_fdops)
+    if (fd == NULL || fd->ops != &realfs_fdops || S_ISFIFO(fd->type))
         return -1;
 
     // Copy from guest memory

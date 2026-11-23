@@ -517,21 +517,22 @@ static void setup_rt_sigframe(struct siginfo_ *info, struct rt_sigframe_ *frame)
     memcpy(frame->retcode, &rt_retcode, sizeof(rt_retcode));
 }
 
-static void receive_signal(struct sighand *sighand, struct siginfo_ *info) {
+// Whether a handler was set up to run
+static bool receive_signal(struct sighand *sighand, struct siginfo_ *info) {
     int sig = info->sig;
     STRACE("%d receiving signal %d\n", current->pid, sig);
 
     int action_type = signal_action(sighand, sig);
     switch (action_type) {
         case SIGNAL_IGNORE:
-            return;
+            return false;
 
         case SIGNAL_STOP:
             lock(&current->group->lock);
             current->group->stopped = true;
             current->group->group_exit_code = sig << 8 | 0x7f;
             unlock(&current->group->lock);
-            return;
+            return false;
 
         case SIGNAL_KILL:
             unlock(&sighand->lock); // do_exit must be called without this lock
@@ -667,6 +668,7 @@ static void receive_signal(struct sighand *sighand, struct siginfo_ *info) {
 
     if (action->flags & SA_RESETHAND_)
         *action = (struct sigaction_) {.handler = SIG_DFL_};
+    return true;
 }
 
 void signal_delivery_stop(int sig, struct siginfo_ *info) {
@@ -725,6 +727,7 @@ void receive_signals(void) {
     // when another thread may take some of the process's: each search
     // starts over.
     struct tgroup *group = current->group;
+    bool handler_ran = false;
     for (;;) {
         struct sigqueue *sigqueue = NULL, *entry;
         list_for_each_entry(&current->queue, entry, queue) {
@@ -764,10 +767,24 @@ void receive_signals(void) {
             // for SIGKILL_, which causes an immediate exit.
             signal_delivery_stop(sig, &sigqueue->info);
         } else {
-            receive_signal(sighand, &sigqueue->info);
+            handler_ran |= receive_signal(sighand, &sigqueue->info);
         }
         free(sigqueue);
     }
+
+#if defined(GUEST_ARM64)
+    // A blocking call a signal interrupted, with no handler run for it,
+    // starts again (calls.c), as Linux's ERESTARTSYS: PC back to its svc
+    // and its first argument back. Only right after the call: on a later
+    // interrupt PC may be there again by chance.
+    if (current->syscall_restart_nohandler && !handler_ran &&
+            current->cpu.pc == current->syscall_restart_pc) {
+        current->cpu.pc -= 4;
+        current->cpu.regs[0] = current->syscall_restart_arg0;
+        current->syscall_restartable = false;
+    }
+    current->syscall_restart_nohandler = false;
+#endif
 
     unlock(&sighand->lock);
 

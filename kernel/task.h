@@ -101,6 +101,9 @@ struct task {
                                  // equals this, so a stale syscall_restartable
                                  // flag can't corrupt PC on a later interrupt.
     bool syscall_restartable; // this syscall returned EINTR and may restart
+    // ... with no handler run for the signal, as Linux's ERESTARTSYS (see
+    // receive_signals); for the signal handling right after it only
+    bool syscall_restart_nohandler;
 
     // locked by pids_lock
     dword_t exit_code;
