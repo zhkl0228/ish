@@ -142,36 +142,42 @@ static NSString *_Nullable arrowKeySymbol(NSInteger tag) {
     self.barView.accessibilityCustomActions = @[[[UIAccessibilityCustomAction alloc] initWithName:@"Hide Keyboard" actionHandler:^BOOL(UIAccessibilityCustomAction *action) {
         return [self.termView resignFirstResponder];
     }]];
-    if (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone) {
-        self.barHeight.constant = 36;
-    } else {
-        self.barHeight.constant = 43;
-    }
-    
-    // The keys are named in text: few people read the Mac key symbols (⎋ ⇥ ⌃ ⌥)
-    // as esc, tab, ctrl and alt. A key is 28 points wide on a 320-point screen,
-    // so the name may shrink a little to fit.
+    // Keys 44 points tall, Apple's minimum for something to tap, and as wide
+    // as the row lets them be (resizeBar); their names and symbols sized to
+    // match.
+    bool phone = UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone;
+    self.barHeight.constant = phone ? 44 : 50;
+    CGFloat keyFontSize = phone ? 17 : 19;
+
+    // The keys are named in text, in capitals as on a keyboard: few people read
+    // the Mac key symbols (⎋ ⇥ ⌃ ⌥) as Esc, Tab, Ctrl and Alt. A key is 28
+    // points wide on a 320-point screen and 36 on a 390-point one, so a name
+    // like CTRL shrinks to fit.
     NSDictionary<NSString *, UIButton *> *namedKeys = @{
-        @"esc": self.escapeKey,
-        @"tab": self.tabKey,
-        @"ctrl": self.controlKey,
-        @"alt": self.altKey,
+        @"ESC": self.escapeKey,
+        @"TAB": self.tabKey,
+        @"CTRL": self.controlKey,
+        @"ALT": self.altKey,
     };
     [namedKeys enumerateKeysAndObjectsUsingBlock:^(NSString *name, UIButton *key, BOOL *stop) {
         [key setTitle:name forState:UIControlStateNormal];
-        key.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
+        key.titleLabel.font = [UIFont systemFontOfSize:keyFontSize weight:UIFontWeightMedium];
         key.titleLabel.adjustsFontSizeToFitWidth = YES;
-        key.titleLabel.minimumScaleFactor = 0.75;
+        key.titleLabel.minimumScaleFactor = 0.5;
     }];
 
     // SF Symbols is cool
     if (@available(iOS 13, *)) {
+        UIImageSymbolConfiguration *keySymbol =
+            [UIImageSymbolConfiguration configurationWithPointSize:keyFontSize + 2 weight:UIImageSymbolWeightMedium];
         [self.pasteButton setImage:[UIImage systemImageNamed:@"doc.on.clipboard"] forState:UIControlStateNormal];
+        [self.pasteButton setPreferredSymbolConfiguration:keySymbol forImageInState:UIControlStateNormal];
         for (UIButton *button in self.barButtons) {
             NSString *symbol = arrowKeySymbol(button.tag);
             if (symbol != nil) {
                 [button setTitle:nil forState:UIControlStateNormal];
                 [button setImage:[UIImage systemImageNamed:symbol] forState:UIControlStateNormal];
+                [button setPreferredSymbolConfiguration:keySymbol forImageInState:UIControlStateNormal];
             }
         }
     }
@@ -561,23 +567,17 @@ static NSString *_Nullable arrowKeySymbol(NSInteger tag) {
 
 - (void)resizeBar {
     CGSize bar = self.barView.bounds.size;
-    // set sizing parameters on bar
-    // numbers stolen from iVim and modified somewhat
-    if (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone) {
-        // phone: up to 32 points a key, narrower when the row would not fit (a
-        // 320-point wide iPhone SE). Every arranged view but the spacer is a key.
-        CGFloat padding = 6;
-        NSUInteger views = self.bar.arrangedSubviews.count;
-        NSUInteger keys = views - 1;
-        CGFloat fit = (bar.width - 2 * padding - self.bar.spacing * (views - 1)) / keys;
-        [self setBarHorizontalPadding:padding verticalPadding:6 buttonWidth:MIN(32, floor(fit))];
-    } else if (bar.width >= 450) {
-        // wide ipad
-        [self setBarHorizontalPadding:15 verticalPadding:8 buttonWidth:43];
-    } else {
-        // narrow ipad (slide over)
-        [self setBarHorizontalPadding:10 verticalPadding:8 buttonWidth:36];
-    }
+    // Keys as wide as the row lets them, up to 44 points on a phone (36 on a
+    // 390-point wide iPhone, 28 on a 320-point iPhone SE) and 52 on an iPad,
+    // which in Slide Over is as narrow as a phone. Every arranged view but the
+    // spacer is a key.
+    bool phone = UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone;
+    CGFloat padding = phone ? 6 : bar.width >= 450 ? 15 : 10;
+    NSUInteger views = self.bar.arrangedSubviews.count;
+    NSUInteger keys = views - 1;
+    CGFloat fit = (bar.width - 2 * padding - self.bar.spacing * (views - 1)) / keys;
+    [self setBarHorizontalPadding:padding verticalPadding:phone ? 6 : 8
+                      buttonWidth:MIN(phone ? 44 : 52, floor(fit))];
     [UIView performWithoutAnimation:^{
         [self.barView layoutIfNeeded];
     }];
