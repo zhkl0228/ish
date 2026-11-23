@@ -49,6 +49,7 @@ extern void jit_crash_trampoline(void);
 // headers, so offsetof cannot drift; a struct-layout change now updates these
 // automatically rather than silently corrupting recovery.
 #include <stddef.h>
+#include <sys/resource.h>
 #include "asbestos/frame.h"
 #ifdef ISH_JIT
 #include "asbestos/guest-arm64/jit.h"
@@ -532,8 +533,16 @@ int main(int argc, char *const argv[]) {
         }
     }
 
-    // Redirect printk output (fd 666) to stderr
-    dup2(STDERR_FILENO, 666);
+    // Redirect printk output (fd 666) to stderr. macOS starts a process with
+    // a soft limit of 256 open files, under 666, and dup2 then fails: printk
+    // wrote nowhere. Raise it as far as Linux's usual 1024 first.
+    struct rlimit nofile;
+    if (getrlimit(RLIMIT_NOFILE, &nofile) == 0 && nofile.rlim_cur < 1024 && nofile.rlim_max >= 1024) {
+        nofile.rlim_cur = 1024;
+        setrlimit(RLIMIT_NOFILE, &nofile);
+    }
+    if (dup2(STDERR_FILENO, 666) < 0)
+        fprintf(stderr, "ish: printk output is lost: dup2(stderr, 666): %s\n", strerror(errno));
 
     static char altstack[SIGSTKSZ];
     stack_t ss = {.ss_sp = altstack, .ss_size = SIGSTKSZ};
