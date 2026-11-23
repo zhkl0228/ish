@@ -103,9 +103,16 @@ struct scm {
 #define PF_LOCAL_ 1
 #define PF_INET_ 2
 #define PF_INET6_ 10
+#define PF_PACKET_ 17
 #define AF_LOCAL_ PF_LOCAL_
 #define AF_INET_ PF_INET_
 #define AF_INET6_ PF_INET6_
+#define AF_PACKET_ PF_PACKET_
+
+// The interface ioctls (SIOCGIFINDEX and the others libpcap and ifconfig
+// ask), on any socket: fs/sock.c
+ssize_t netif_ioctl_size(int cmd);
+int netif_ioctl(int cmd, void *arg);
 static inline int sock_family_to_real(int fake) {
     switch (fake) {
         case PF_LOCAL_: return PF_LOCAL;

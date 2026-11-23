@@ -1731,6 +1731,8 @@ if get_option('kernel') == 'ish'
         'kernel/misc.c',
         'kernel/eventfd.c',
         'kernel/signalfd.c',
+        'kernel/netcap.c',
+        'kernel/packet.c',
         'kernel/pidfd.c',
         'kernel/inotify.c',
         'kernel/ipc.c',

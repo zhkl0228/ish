@@ -1,3 +1,5 @@
+#include "kernel/packet.h"
+#include "kernel/netcap.h"
 #include "kernel/inotify.h"
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -410,6 +412,8 @@ int_t sys_socket(dword_t domain, dword_t type, dword_t protocol) {
     // stub above. On unless ISH_NETLINK_STUB=0.
     if (domain == AF_NETLINK_ && ish_netlink_stub_enabled())
         return netlink_stub_socket(type, protocol);
+    if (domain == AF_PACKET_)
+        return packet_socket(type, protocol);
     int real_domain = sock_family_to_real(domain);
     if (real_domain < 0)
         return _EAFNOSUPPORT;
@@ -726,6 +730,9 @@ static int sockaddr_write(addr_t sockaddr_addr, void *sockaddr, uint_t buffer_le
 
 int_t sys_bind(fd_t sock_fd, addr_t sockaddr_addr, uint_t sockaddr_len) {
     STRACE("bind(%d, 0x%x, %d)", sock_fd, sockaddr_addr, sockaddr_len);
+    struct fd *packet = f_get(sock_fd);
+    if (fd_is_packet(packet))
+        return packet_bind(packet, sockaddr_addr, sockaddr_len);
     struct fd *sock = sock_getfd(sock_fd);
     if (sock == NULL)
         return _EBADF;
@@ -780,6 +787,8 @@ static void fill_cred(struct ucred_ *cred) {
 }
 
 int_t sys_connect(fd_t sock_fd, addr_t sockaddr_addr, uint_t sockaddr_len) {
+    if (fd_is_packet(f_get(sock_fd)))
+        return packet_unsupported(f_get(sock_fd), "connect");
     STRACE("connect(%d, 0x%x, %d)", sock_fd, sockaddr_addr, sockaddr_len);
     struct fd *sock = sock_getfd(sock_fd);
     if (sock == NULL)
@@ -791,6 +800,11 @@ int_t sys_connect(fd_t sock_fd, addr_t sockaddr_addr, uint_t sockaddr_len) {
         return err;
 
     err = connect(sock->real_fd, (void *) &sockaddr, sockaddr_len);
+    if (netcap_on()) {
+        int saved_errno = errno;
+        netcap_connect(sock, (void *) &sockaddr, err < 0 ? saved_errno : 0);
+        errno = saved_errno;
+    }
     if (err < 0)
         return errno_map();
 
@@ -837,6 +851,8 @@ int_t sys_connect(fd_t sock_fd, addr_t sockaddr_addr, uint_t sockaddr_len) {
 }
 
 int_t sys_listen(fd_t sock_fd, int_t backlog) {
+    if (fd_is_packet(f_get(sock_fd)))
+        return packet_unsupported(f_get(sock_fd), "listen");
     STRACE("listen(%d, %d)", sock_fd, backlog);
     struct fd *sock = sock_getfd(sock_fd);
     if (sock == NULL)
@@ -862,6 +878,8 @@ int_t sys_listen(fd_t sock_fd, int_t backlog) {
 }
 
 int_t sys_accept(fd_t sock_fd, addr_t sockaddr_addr, addr_t sockaddr_len_addr) {
+    if (fd_is_packet(f_get(sock_fd)))
+        return packet_unsupported(f_get(sock_fd), "accept");
     STRACE("accept(%d, 0x%x, 0x%x)", sock_fd, sockaddr_addr, sockaddr_len_addr);
     struct fd *sock = sock_getfd(sock_fd);
     if (sock == NULL)
@@ -904,6 +922,11 @@ int_t sys_accept(fd_t sock_fd, addr_t sockaddr_addr, addr_t sockaddr_len_addr) {
     // f_get() the negative number below and write through the NULL fd.
     if (client_f < 0)
         return client_f;
+    if (netcap_on() && sock->socket.domain != AF_LOCAL_) {
+        struct fd *client_fd = f_get(client_f);
+        if (client_fd != NULL)
+            netcap_accept(client_fd);
+    }
 
     if (sock->socket.domain == AF_LOCAL_) {
         // The connecting end writes its header as soon as its connect is
@@ -1007,6 +1030,9 @@ static void copy_unix_name(char *sockaddr, dword_t *sockaddr_len, struct fd *soc
 
 int_t sys_getsockname(fd_t sock_fd, addr_t sockaddr_addr, addr_t sockaddr_len_addr) {
     STRACE("getsockname(%d, 0x%x, 0x%x)", sock_fd, sockaddr_addr, sockaddr_len_addr);
+    struct fd *packet = f_get(sock_fd);
+    if (fd_is_packet(packet))
+        return packet_getsockname(packet, sockaddr_addr, sockaddr_len_addr);
     struct fd *sock = sock_getfd(sock_fd);
     if (sock == NULL)
         return _EBADF;
@@ -1057,6 +1083,8 @@ int_t sys_getsockname(fd_t sock_fd, addr_t sockaddr_addr, addr_t sockaddr_len_ad
 }
 
 int_t sys_getpeername(fd_t sock_fd, addr_t sockaddr_addr, addr_t sockaddr_len_addr) {
+    if (fd_is_packet(f_get(sock_fd)))
+        return packet_unsupported(f_get(sock_fd), "getpeername");
     STRACE("getpeername(%d, 0x%x, 0x%x)", sock_fd, sockaddr_addr, sockaddr_len_addr);
     struct fd *sock = sock_getfd(sock_fd);
     if (sock == NULL)
@@ -1143,6 +1171,8 @@ close_fake_0:
 }
 
 int_t sys_sendto(fd_t sock_fd, addr_t buffer_addr, dword_t len, dword_t flags, addr_t sockaddr_addr, dword_t sockaddr_len) {
+    if (fd_is_packet(f_get(sock_fd)))
+        return packet_unsupported(f_get(sock_fd), "sendto");
     struct fd *sock = sock_getfd(sock_fd);
     if (sock == NULL)
         return _EBADF;
@@ -1171,6 +1201,14 @@ int_t sys_sendto(fd_t sock_fd, addr_t buffer_addr, dword_t len, dword_t flags, a
 
     ssize_t res = sendto(sock->real_fd, buffer, len, real_flags,
             sockaddr_addr ? (void *) &sockaddr : NULL, sockaddr_len);
+    if (netcap_on()) {
+        int saved_errno = errno;
+        if (res >= 0)
+            netcap_send(sock, &(struct iovec) {buffer, res}, 1, res, sockaddr_addr ? (void *) &sockaddr : NULL);
+        else
+            netcap_error(sock, saved_errno);
+        errno = saved_errno;
+    }
     free(buffer);
     if (res < 0)
         return errno_map();
@@ -1247,7 +1285,20 @@ static int sock_wait_readable(int real_fd) {
     return sock_wait_for(real_fd, POLLIN, SO_RCVTIMEO);
 }
 
+// A receive that failed: a capture's RST if it was reset, then the guest's
+// error. The buffer goes.
+static int recv_failed(struct fd *sock, char *buffer) {
+    int saved_errno = errno;
+    free(buffer);
+    if (netcap_on())
+        netcap_error(sock, saved_errno);
+    errno = saved_errno;
+    return errno_map();
+}
+
 int_t sys_recvfrom(fd_t sock_fd, addr_t buffer_addr, dword_t len, dword_t flags, addr_t sockaddr_addr, addr_t sockaddr_len_addr) {
+    if (fd_is_packet(f_get(sock_fd)))
+        return packet_unsupported(f_get(sock_fd), "recvfrom");
     STRACE("recvfrom(%d, 0x%x, %d, %d, 0x%x, 0x%x)", sock_fd, buffer_addr, len, flags, sockaddr_addr, sockaddr_len_addr);
     struct fd *sock = sock_getfd(sock_fd);
     if (sock == NULL)
@@ -1319,10 +1370,8 @@ int_t sys_recvfrom(fd_t sock_fd, addr_t buffer_addr, dword_t len, dword_t flags,
                 break;
             if (errno == EINTR)
                 continue;
-            if (errno != EAGAIN && errno != EWOULDBLOCK) {
-                free(buffer);
-                return errno_map();
-            }
+            if (errno != EAGAIN && errno != EWOULDBLOCK)
+                return recv_failed(sock, buffer);
             // EAGAIN: no data yet. Wait (bounded) for readability or a
             // guest signal, then retry.
             int wr = sock_wait_readable(sock->real_fd);
@@ -1335,12 +1384,14 @@ int_t sys_recvfrom(fd_t sock_fd, addr_t buffer_addr, dword_t len, dword_t flags,
         res = recvfrom(sock->real_fd, buffer, len, real_flags,
                 sockaddr_addr != 0 ? (void *) sockaddr : NULL,
                 sockaddr_len_addr != 0 ? &sockaddr_len : NULL);
-        if (res < 0) {
-            free(buffer);
-            return errno_map();
-        }
+        if (res < 0)
+            return recv_failed(sock, buffer);
     }
 
+    // what was received: not a peek, which leaves it there
+    if (netcap_on() && !(flags & MSG_PEEK_))
+        netcap_recv(sock, &(struct iovec) {buffer, (size_t) res < len ? (size_t) res : len}, 1,
+                    (size_t) res < len ? (size_t) res : len, sockaddr_addr != 0 ? (void *) sockaddr : NULL);
     if (user_write(buffer_addr, buffer, len)) {
         free(buffer);
         return _EFAULT;
@@ -1366,6 +1417,8 @@ int_t sys_recv(fd_t sock_fd, addr_t buf, dword_t len, int_t flags) {
 }
 
 int_t sys_shutdown(fd_t sock_fd, dword_t how) {
+    if (fd_is_packet(f_get(sock_fd)))
+        return packet_unsupported(f_get(sock_fd), "shutdown");
     STRACE("shutdown(%d, %d)", sock_fd, how);
     struct fd *sock = sock_getfd(sock_fd);
     if (sock == NULL)
@@ -1373,6 +1426,8 @@ int_t sys_shutdown(fd_t sock_fd, dword_t how) {
     int err = shutdown(sock->real_fd, how);
     if (err < 0)
         return errno_map();
+    if (netcap_on())
+        netcap_shutdown(sock, how);
     return 0;
 }
 
@@ -1409,6 +1464,14 @@ static void sock_opt_unknown(const char *call, struct fd *sock, dword_t level, d
 
 int_t sys_setsockopt(fd_t sock_fd, dword_t level, dword_t option, addr_t value_addr, dword_t value_len) {
     STRACE("setsockopt(%d, %d, %d, 0x%x, %d)", sock_fd, level, option, value_addr, value_len);
+    struct fd *packet = f_get(sock_fd);
+    if (fd_is_packet(packet)) {
+        char packet_value[256];
+        uint_t packet_len = value_len < sizeof(packet_value) ? value_len : sizeof(packet_value);
+        if (user_read(value_addr, packet_value, packet_len))
+            return _EFAULT;
+        return packet_setsockopt(packet, level, option, packet_value, packet_len);
+    }
     struct fd *sock = sock_getfd(sock_fd);
     if (sock == NULL)
         return _EBADF;
@@ -1520,6 +1583,23 @@ static int tcp_state_from_darwin(unsigned state) {
 
 int_t sys_getsockopt(fd_t sock_fd, dword_t level, dword_t option, addr_t value_addr, addr_t len_addr) {
     STRACE("getsockopt(%d, %d, %d, %#x, %#x)", sock_fd, level, option, value_addr, len_addr);
+    struct fd *packet = f_get(sock_fd);
+    if (fd_is_packet(packet)) {
+        uint_t packet_len;
+        if (user_get(len_addr, packet_len))
+            return _EFAULT;
+        char packet_value[256] = {0};
+        if (packet_len > sizeof(packet_value))
+            packet_len = sizeof(packet_value);
+        if (user_read(value_addr, packet_value, packet_len))
+            return _EFAULT;
+        int_t err = packet_getsockopt(packet, level, option, packet_value, &packet_len);
+        if (err < 0)
+            return err;
+        if (user_write(value_addr, packet_value, packet_len) || user_put(len_addr, packet_len))
+            return _EFAULT;
+        return 0;
+    }
     struct fd *sock = sock_getfd(sock_fd);
     if (sock == NULL)
         return _EBADF;
@@ -1625,6 +1705,8 @@ static void scm_free(struct scm *scm) {
 }
 
 int_t sys_sendmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
+    if (fd_is_packet(f_get(sock_fd)))
+        return packet_unsupported(f_get(sock_fd), "sendmsg");
     int err;
     STRACE("sendmsg(%d, %#x, %d)", sock_fd, msghdr_addr, flags);
     struct fd *sock = sock_getfd(sock_fd);
@@ -1786,6 +1868,14 @@ int_t sys_sendmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
         goto out_free_scm;
 
     err = sendmsg(sock->real_fd, &msg, real_flags);
+    if (netcap_on()) {
+        int saved_errno = errno;
+        if (err >= 0)
+            netcap_send(sock, msg.msg_iov, msg.msg_iovlen, err, msg.msg_name);
+        else
+            netcap_error(sock, saved_errno);
+        errno = saved_errno;
+    }
     if (err < 0) {
         err = errno_map();
         goto out_free_scm;
@@ -1813,6 +1903,8 @@ out_free_iov:
 }
 
 int_t sys_recvmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
+    if (fd_is_packet(f_get(sock_fd)))
+        return packet_unsupported(f_get(sock_fd), "recvmsg");
     STRACE("recvmsg(%d, %#x, %d)", sock_fd, msghdr_addr, flags);
     struct fd *sock = sock_getfd(sock_fd);
     if (sock == NULL)
@@ -1934,6 +2026,9 @@ int_t sys_recvmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
         if (res < 0)
             err = errno_map();
     }
+    // what was received: not a peek, which leaves it there
+    if (netcap_on() && res >= 0 && !(flags & MSG_PEEK_))
+        netcap_recv(sock, msg.msg_iov, msg.msg_iovlen, res, msg.msg_name);
     // don't return err quite yet, there are outstanding mallocs
 
     // msg_iovec (changed)
@@ -2189,8 +2284,21 @@ static ssize_t sock_read(struct fd *fd, void *buf, size_t size) {
     int err;
     for (;;) {
         ssize_t res = read(fd->real_fd, buf, size);
-        if (res >= 0) { err = (int)res; break; }
-        if (errno != EINTR) { err = errno_map(); break; }
+        if (res >= 0) {
+            err = (int) res;
+            if (netcap_on())
+                netcap_recv(fd, &(struct iovec) {buf, res}, 1, res, NULL);
+            break;
+        }
+        if (errno != EINTR) {
+            if (netcap_on()) {
+                int saved_errno = errno;
+                netcap_error(fd, saved_errno);
+                errno = saved_errno;
+            }
+            err = errno_map();
+            break;
+        }
         // EINTR: only surface to guest if there is actually a pending signal
         // that the guest wants to handle. Otherwise retry (matches the
         // original realfs_read behavior for spurious EINTR).
@@ -2215,8 +2323,21 @@ static ssize_t sock_write(struct fd *fd, const void *buf, size_t size) {
     int err;
     for (;;) {
         ssize_t res = write(fd->real_fd, buf, size);
-        if (res >= 0) { err = (int)res; break; }
-        if (errno != EINTR) { err = errno_map(); break; }
+        if (res >= 0) {
+            err = (int) res;
+            if (netcap_on())
+                netcap_send(fd, &(struct iovec) {(void *) buf, res}, 1, res, NULL);
+            break;
+        }
+        if (errno != EINTR) {
+            if (netcap_on()) {
+                int saved_errno = errno;
+                netcap_error(fd, saved_errno);
+                errno = saved_errno;
+            }
+            err = errno_map();
+            break;
+        }
         if (current->sighand != NULL) {
             lock(&current->sighand->lock);
             bool pending = task_signal_pending(current);
@@ -2229,6 +2350,8 @@ static ssize_t sock_write(struct fd *fd, const void *buf, size_t size) {
 }
 
 static int sock_close(struct fd *fd) {
+    if (fd->socket.netcap != NULL || netcap_on())
+        netcap_close(fd);
     // [STAGE-0 PROBE] release the stub's socketpair write end.
     if (fd->socket.netlink_peer_fd >= 0) {
         close(fd->socket.netlink_peer_fd);
@@ -2499,6 +2622,254 @@ int sock_unix_list(struct sock_unix_entry **entries) {
     return n_socks;
 }
 
+// ===== the interface ioctls =====
+
+// Linux's struct ifreq: its union is as big as struct ifmap, of longs
+struct ifreq_ {
+    char name[16];
+    union {
+        struct {
+            uint16_t family;
+            uint8_t data[14];
+        } hwaddr;
+        // a struct sockaddr_in
+        struct {
+            uint16_t family;
+            uint16_t port;
+            uint8_t addr[4];
+            uint8_t zero[8];
+        } in;
+        int16_t flags;
+        int32_t ifindex;
+        int32_t metric;
+        int32_t mtu;
+        int32_t qlen;
+#ifdef GUEST_ARM64
+        uint64_t data;
+        uint8_t size[24];
+#else
+        uint32_t data;
+        uint8_t size[16];
+#endif
+    };
+};
+// Linux's struct ifconf
+struct ifconf_ {
+    int32_t len;
+#ifdef GUEST_ARM64
+    uint32_t pad;
+    uint64_t buf;
+#else
+    uint32_t buf;
+#endif
+};
+#ifdef GUEST_ARM64
+static_assert(sizeof(struct ifreq_) == 40, "ifreq layout");
+static_assert(sizeof(struct ifconf_) == 16, "ifconf layout");
+#else
+static_assert(sizeof(struct ifreq_) == 32, "ifreq layout");
+static_assert(sizeof(struct ifconf_) == 8, "ifconf layout");
+#endif
+
+#define SIOCGIFNAME_ 0x8910
+#define SIOCGIFCONF_ 0x8912
+#define SIOCGIFFLAGS_ 0x8913
+#define SIOCGIFADDR_ 0x8915
+#define SIOCGIFDSTADDR_ 0x8917
+#define SIOCGIFBRDADDR_ 0x8919
+#define SIOCGIFNETMASK_ 0x891b
+#define SIOCGIFMETRIC_ 0x891d
+#define SIOCGIFMTU_ 0x8921
+#define SIOCGIFHWADDR_ 0x8927
+#define SIOCGIFINDEX_ 0x8933
+#define SIOCGIFTXQLEN_ 0x8942
+#define SIOCETHTOOL_ 0x8946
+#define SIOCGIFMAP_ 0x8970
+// Linux's
+#define IFF_LOOPBACK_ 0x8
+#define ETHTOOL_GTSO_ 0x1e
+#define ETHTOOL_GUFO_ 0x21
+#define ETHTOOL_GGSO_ 0x23
+#define ETHTOOL_GGRO_ 0x2b
+
+ssize_t netif_ioctl_size(int cmd) {
+    switch (cmd) {
+        case SIOCGIFCONF_:
+            return sizeof(struct ifconf_);
+        case SIOCGIFNAME_:
+        case SIOCGIFFLAGS_:
+        case SIOCGIFADDR_:
+        case SIOCGIFDSTADDR_:
+        case SIOCGIFBRDADDR_:
+        case SIOCGIFNETMASK_:
+        case SIOCGIFMETRIC_:
+        case SIOCGIFMTU_:
+        case SIOCGIFHWADDR_:
+        case SIOCGIFINDEX_:
+        case SIOCGIFTXQLEN_:
+        case SIOCETHTOOL_:
+        case SIOCGIFMAP_:
+            return sizeof(struct ifreq_);
+    }
+    return -1;
+}
+
+// Linux's dev_ifconf: an ifreq for each IPv4 address, its interface's name
+// and the address, as many as there is room for; none, only the room they
+// need, when there is no buffer
+static int netif_conf(struct ifconf_ *ifc, const struct netlink_host_addr *addrs, size_t n_addrs) {
+    int32_t total = 0;
+    for (size_t i = 0; i < n_addrs; i++) {
+        if (addrs[i].family != AF_INET_)
+            continue;
+        if (ifc->buf != 0) {
+            if (ifc->len - total < (int32_t) sizeof(struct ifreq_))
+                break;
+            struct ifreq_ ifr = {0};
+            strncpy(ifr.name, addrs[i].name, sizeof(ifr.name) - 1);
+            ifr.in.family = AF_INET_;
+            memcpy(ifr.in.addr, addrs[i].local, 4);
+            if (user_write(ifc->buf + total, &ifr, sizeof(ifr)))
+                return _EFAULT;
+        }
+        total += sizeof(struct ifreq_);
+    }
+    ifc->len = total;
+    return 0;
+}
+
+// Linux's devinet_ioctl: the interface's first IPv4 address's. Its
+// destination is its peer's on a point-to-point link, else its own.
+static int netif_inet(int cmd, struct ifreq_ *ifr, const struct netlink_host_addr *a) {
+    if (a == NULL)
+        return _EADDRNOTAVAIL;
+    memset(&ifr->in, 0, sizeof(ifr->in));
+    ifr->in.family = AF_INET_;
+    switch (cmd) {
+        case SIOCGIFADDR_:
+            memcpy(ifr->in.addr, a->local, 4);
+            break;
+        case SIOCGIFDSTADDR_:
+            memcpy(ifr->in.addr, a->has_peer ? a->peer : a->local, 4);
+            break;
+        case SIOCGIFBRDADDR_:
+            if (a->has_brd)
+                memcpy(ifr->in.addr, a->brd, 4);
+            break;
+        case SIOCGIFNETMASK_: {
+            uint32_t mask = a->prefixlen == 0 ? 0 : htonl(~0u << (32 - a->prefixlen));
+            memcpy(ifr->in.addr, &mask, 4);
+            break;
+        }
+    }
+    return 0;
+}
+
+// The offloads are on: a made-up TCP segment is as big as a send
+// (kernel/netcap.c), and libpcap sizes an Ethernet capture's frames by them.
+// The rest are not here, as a driver may be without them.
+static int netif_ethtool(addr_t data) {
+    uint32_t cmd;
+    if (user_get(data, cmd))
+        return _EFAULT;
+    switch (cmd) {
+        case ETHTOOL_GTSO_:
+        case ETHTOOL_GUFO_:
+        case ETHTOOL_GGSO_:
+        case ETHTOOL_GGRO_: {
+            uint32_t value[2] = {cmd, 1};
+            return user_put(data, value) ? _EFAULT : 0;
+        }
+    }
+    return _EOPNOTSUPP;
+}
+
+// The interfaces as the guest knows them (fs/netlink.c): the host's, lo0 as lo
+int netif_ioctl(int cmd, void *arg) {
+    struct ifreq_ *ifr = arg;
+    struct netlink_host_link *links;
+    struct netlink_host_addr *addrs;
+    size_t n_links, n_addrs;
+    netlink_host_snapshot(&links, &n_links, &addrs, &n_addrs);
+    if (cmd == SIOCGIFCONF_) {
+        int err = netif_conf(arg, addrs, n_addrs);
+        netlink_host_free(links, addrs);
+        return err;
+    }
+    const struct netlink_host_link *link = NULL;
+    for (size_t i = 0; i < n_links && link == NULL; i++) {
+        if (cmd == SIOCGIFNAME_ ? (int) links[i].index == ifr->ifindex
+                                : strncmp(links[i].name, ifr->name, sizeof(ifr->name)) == 0)
+            link = &links[i];
+    }
+    int err = 0;
+    if (link == NULL) {
+        err = _ENODEV;
+    } else {
+        switch (cmd) {
+            case SIOCGIFNAME_:
+                memset(ifr->name, 0, sizeof(ifr->name));
+                strncpy(ifr->name, link->name, sizeof(ifr->name) - 1);
+                break;
+            case SIOCGIFINDEX_:
+                ifr->ifindex = link->index;
+                break;
+            case SIOCGIFFLAGS_:
+                // the 16 bits there are room for, as Linux's
+                ifr->flags = (int16_t) link->flags;
+                break;
+            case SIOCGIFMTU_:
+                ifr->mtu = link->mtu;
+                break;
+            case SIOCGIFADDR_:
+            case SIOCGIFDSTADDR_:
+            case SIOCGIFBRDADDR_:
+            case SIOCGIFNETMASK_: {
+                const struct netlink_host_addr *a = NULL;
+                for (size_t i = 0; i < n_addrs && a == NULL; i++)
+                    if (addrs[i].index == link->index && addrs[i].family == AF_INET_)
+                        a = &addrs[i];
+                err = netif_inet(cmd, ifr, a);
+                break;
+            }
+            // as Linux's: always 0
+            case SIOCGIFMETRIC_:
+                ifr->metric = 0;
+                break;
+            // a device's memory, I/O port, IRQ and DMA channel: none
+            case SIOCGIFMAP_:
+                memset(ifr->size, 0, sizeof(ifr->size));
+                break;
+            // as netlink says it (fs/netlink.c)
+            case SIOCGIFTXQLEN_:
+                ifr->qlen = (link->flags & IFF_LOOPBACK_) ? 1000 : 0;
+                break;
+            case SIOCGIFHWADDR_:
+                memset(&ifr->hwaddr, 0, sizeof(ifr->hwaddr));
+                ifr->hwaddr.family = link->arphrd;
+                if (link->has_lladdr)
+                    memcpy(ifr->hwaddr.data, link->lladdr, 6);
+                break;
+            case SIOCETHTOOL_:
+                err = netif_ethtool(ifr->data);
+                break;
+        }
+    }
+    netlink_host_free(links, addrs);
+    return err;
+}
+
+static ssize_t sock_ioctl_size(int cmd) {
+    ssize_t size = netif_ioctl_size(cmd);
+    return size >= 0 ? size : realfs_ioctl_size(cmd);
+}
+
+static int sock_ioctl(struct fd *fd, int cmd, void *arg) {
+    if (netif_ioctl_size(cmd) >= 0)
+        return netif_ioctl(cmd, arg);
+    return realfs_ioctl(fd, cmd, arg);
+}
+
 const struct fd_ops socket_fdops = {
     .read = sock_read,
     .write = sock_write,
@@ -2506,8 +2877,8 @@ const struct fd_ops socket_fdops = {
     .poll = realfs_poll,
     .getflags = realfs_getflags,
     .setflags = realfs_setflags,
-    .ioctl_size = realfs_ioctl_size,
-    .ioctl = realfs_ioctl,
+    .ioctl_size = sock_ioctl_size,
+    .ioctl = sock_ioctl,
 };
 
 #if is_gcc(8) || is_clang(21)

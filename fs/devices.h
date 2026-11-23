@@ -40,5 +40,7 @@
 #define DEV_CLIPBOARD_MINOR 0
 // /dev/gps
 #define DEV_LOCATION_MINOR 1
+// /dev/netcap (kernel/netcap.c)
+#define DEV_NETCAP_MINOR 2
 
 #endif

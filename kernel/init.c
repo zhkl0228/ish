@@ -12,6 +12,8 @@
 #include "kernel/calls.h"
 #include "kernel/fs.h"
 #include "kernel/init.h"
+#include "kernel/netcap.h"
+#include "fs/dyndev.h"
 #include "kernel/personality.h"
 
 int mount_root(const struct fs_ops *fs, const char *source) {
@@ -242,6 +244,10 @@ void create_some_device_nodes(void) {
     make_char_device("/dev/full", MEM_MAJOR, DEV_FULL_MINOR);
     make_char_device("/dev/random", MEM_MAJOR, DEV_RANDOM_MINOR);
     make_char_device("/dev/urandom", MEM_MAJOR, DEV_URANDOM_MINOR);
+
+    // the guest's network traffic for tcpdump -r (kernel/netcap.c): root's
+    if (dyn_dev_register(&netcap_dev, DEV_CHAR, DYN_DEV_MAJOR, DEV_NETCAP_MINOR) == 0)
+        generic_mknodat(AT_PWD, "/dev/netcap", S_IFCHR | 0600, dev_make(DYN_DEV_MAJOR, DEV_NETCAP_MINOR));
 
     // the links Linux's /dev has (udev's, OpenRC's devfs's): bash's process
     // substitution, <(...), opens /dev/fd/N. Left alone if there.

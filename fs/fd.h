@@ -106,7 +106,20 @@ struct fd {
                 uid_t_ uid;
                 uid_t_ gid;
             } unix_peer_cred;
+            // A TCP connection's packets as /dev/netcap makes them up
+            // (kernel/netcap.c), from its first while capturing. Locked by
+            // netcap_lock.
+            struct netcap_flow *netcap;
         } socket;
+
+        // /dev/netcap (kernel/netcap.c): the capture
+        struct {
+            struct netcap_reader *reader;
+        } netcap;
+        // an AF_PACKET socket (kernel/packet.c)
+        struct {
+            struct packet_sock *sock;
+        } packet;
 
         // See app/Pasteboard.m
         struct {
