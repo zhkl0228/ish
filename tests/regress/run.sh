@@ -547,7 +547,37 @@ EOF
     rm -rf "$ttydir"
 
     echo
-    echo "########## /dev/shm emptied at boot ##########"
+    echo "########## /dev/shm on a fakefs root: a fresh fakefs each boot ##########"
+    # Beside the rootfs, which must be on a filesystem iSH works on: one that
+    # keeps a file unlinked while open usable (ftruncate), which $TMPDIR or
+    # the checkout may not be (a macOS folder shared into a Linux VM).
+    shmdir=$(mktemp -d "$(cd "$(dirname "$ROOTFS")" && pwd)/regress-shm.XXXXXX")
+    if [ -x "$FAKEFSIFY" ] && "$CC_GUEST" -static -O0 -Wall -pthread -o "$shmdir/init" \
+            tests/regress/regress_shm_mount.c &&
+        python3 -I - "$shmdir" <<'EOF' &&
+import sys, tarfile
+d = sys.argv[1]
+with tarfile.open(d + '/root.tar.gz', 'w:gz') as t:
+    for name in ('.', './dev', './dev/pts', './tmp', './proc'):
+        ti = tarfile.TarInfo(name); ti.type = tarfile.DIRTYPE; ti.mode = 0o755; t.addfile(ti)
+    ti = t.gettarinfo(d + '/init', './init'); ti.uid = ti.gid = 0; ti.uname = ti.gname = 'root'
+    with open(d + '/init', 'rb') as f:
+        t.addfile(ti, f)
+EOF
+        "$FAKEFSIFY" "$shmdir/root.tar.gz" "$shmdir/fs" &&
+        timeout 30 "$ISH" -f "$shmdir/fs" /init leave
+    then
+        out=$(timeout 60 "$ISH" -f "$shmdir/fs" /init check 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+    else
+        echo "failed to set up the /dev/shm test (needs $FAKEFSIFY and python3)" >&2
+        status=1
+    fi
+    rm -rf "$shmdir"
+
+    echo
+    echo "########## /dev/shm emptied at boot (realfs root) ##########"
     "$ISH" "$MOUNT_FLAG" "$ROOTFS" /bin/sh -c 'echo left > /dev/shm/regress_left'
     if "$ISH" "$MOUNT_FLAG" "$ROOTFS" /bin/sh -c 'test ! -e /dev/shm/regress_left'; then
         echo "PASS a file left in /dev/shm is gone at the next boot"

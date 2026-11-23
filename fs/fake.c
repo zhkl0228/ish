@@ -1435,6 +1435,79 @@ int fakefs_bind_unmount(const char *linux_path) {
     return _ENOENT;
 }
 
+// rm -r of name in dirfd, not following symlinks; 0, or -1 with errno
+static int remove_host_tree(int dirfd, const char *name) {
+    if (unlinkat(dirfd, name, 0) == 0)
+        return 0;
+    if (errno != EISDIR && errno != EPERM)
+        return -1;
+    int fd = openat(dirfd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    if (fd < 0)
+        return -1;
+    DIR *dir = fdopendir(fd);
+    if (dir == NULL) {
+        close(fd);
+        return -1;
+    }
+    struct dirent *ent;
+    int result = 0;
+    while ((ent = readdir(dir)) != NULL) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
+            continue;
+        if (remove_host_tree(fd, ent->d_name) < 0) {
+            result = -1;
+            break;
+        }
+    }
+    int error = errno;
+    closedir(dir);
+    if (result < 0) {
+        errno = error;
+        return -1;
+    }
+    return unlinkat(dirfd, name, AT_REMOVEDIR);
+}
+
+int fakefs_mount_fresh(const char *dir, const char *point, mode_t_ root_mode) {
+    if (remove_host_tree(AT_FDCWD, dir) < 0 && errno != ENOENT)
+        return errno_map();
+    char path[PATH_MAX];
+    snprintf(path, sizeof(path), "%s/data", dir);
+    if (mkdir(dir, 0777) < 0 || mkdir(path, 0777) < 0)
+        return errno_map();
+
+    snprintf(path, sizeof(path), "%s/meta.db", dir);
+    sqlite3 *db;
+    int err = sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, NULL);
+    sqlite3_stmt *stat = NULL, *root = NULL;
+    if (err == SQLITE_OK)
+        err = sqlite3_exec(db, fakefs_schema, NULL, NULL, NULL);
+    if (err == SQLITE_OK)
+        err = sqlite3_prepare_v2(db, "insert into stats (stat) values (?)", -1, &stat, NULL);
+    if (err == SQLITE_OK) {
+        struct ish_stat root_stat = {.mode = S_IFDIR | root_mode};
+        sqlite3_bind_blob(stat, 1, &root_stat, sizeof(root_stat), SQLITE_TRANSIENT);
+        err = sqlite3_step(stat) == SQLITE_DONE ? SQLITE_OK : sqlite3_errcode(db);
+    }
+    if (err == SQLITE_OK)
+        err = sqlite3_prepare_v2(db, "insert into paths (path, inode) values (?, ?)", -1, &root, NULL);
+    if (err == SQLITE_OK) {
+        sqlite3_bind_blob(root, 1, "", 0, SQLITE_STATIC);
+        sqlite3_bind_int64(root, 2, sqlite3_last_insert_rowid(db));
+        err = sqlite3_step(root) == SQLITE_DONE ? SQLITE_OK : sqlite3_errcode(db);
+    }
+    if (err != SQLITE_OK)
+        printk("fakefs at %s: making its database: %s\n", dir, sqlite3_errmsg(db));
+    sqlite3_finalize(stat);
+    sqlite3_finalize(root);
+    sqlite3_close(db);
+    if (err != SQLITE_OK)
+        return _EIO;
+
+    snprintf(path, sizeof(path), "%s/data", dir);
+    return do_mount(&fakefs, path, point, "", 0);
+}
+
 static int fakefs_mount(struct mount *mount) {
     char db_path[PATH_MAX];
     strcpy(db_path, mount->source);
@@ -1451,9 +1524,12 @@ static int fakefs_mount(struct mount *mount) {
     if (err < 0)
         return err;
 
-    /* Store global reference for bind mount API */
-    g_fakefs_mount = mount;
-    memset(g_bind_mounts, 0, sizeof(g_bind_mounts));
+    /* Store global reference for bind mount API: the root's, not that of
+     * another fakefs mounted under it (/dev/shm) */
+    if (strcmp(mount->point, "") == 0) {
+        g_fakefs_mount = mount;
+        memset(g_bind_mounts, 0, sizeof(g_bind_mounts));
+    }
 
     return 0;
 }

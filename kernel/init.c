@@ -198,6 +198,29 @@ static void empty_dev_shm(void) {
     free(names);
 }
 
+// On a fakefs root, /dev/shm is a fakefs of its own, made afresh at each boot
+// beside the root's data (shm/ in the root's directory, which a reset
+// replaces with the rest): empty as a tmpfs is, and a whole filesystem, which
+// iSH's tmpfs is not (no unlink, no shared mmap). On a realfs root it stays a
+// directory of the root, emptied at boot.
+static void mount_dev_shm(void) {
+    char root_path[] = "";
+    struct mount *root = mount_find(root_path);
+    bool fake = root->fs == &fakefs;
+    char dir[MAX_PATH];
+    if (fake) {
+        // a fakefs mount's source is its data directory
+        snprintf(dir, sizeof(dir), "%s", root->source);
+        strcpy(strrchr(dir, '/') + 1, "shm");
+    }
+    mount_release(root);
+    if (!fake)
+        return;
+    int err = fakefs_mount_fresh(dir, "/dev/shm", 01777);
+    if (err < 0)
+        printk("/dev/shm: mounting a fresh fakefs at %s: %d\n", dir, err);
+}
+
 void create_some_device_nodes(void) {
     // create some device nodes
     // this will do nothing if they already exist
@@ -230,6 +253,7 @@ void create_some_device_nodes(void) {
     if (err == 0 || err == _EEXIST) {
         generic_setattrat(AT_PWD, "/dev/shm", make_attr(mode, 01777), false);
         empty_dev_shm();
+        mount_dev_shm();
     }
 }
 

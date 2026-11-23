@@ -192,6 +192,10 @@ bool is_adhoc_fd(struct fd *fd);
 // filesystems
 extern const struct fs_ops procfs;
 extern const struct fs_ops fakefs;
+// A fakefs made afresh at the host directory dir (what was there goes) and
+// mounted at point, its root directory with mode root_mode: /dev/shm, empty
+// at each boot as a tmpfs is.
+int fakefs_mount_fresh(const char *dir, const char *point, mode_t_ root_mode);
 extern const struct fs_ops devptsfs;
 extern const struct fs_ops tmpfs;
 void fs_register(const struct fs_ops *fs);

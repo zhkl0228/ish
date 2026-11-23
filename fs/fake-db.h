@@ -29,6 +29,18 @@ struct fakefs_db {
     sqlite3_mutex *lock;
 };
 
+// The tables of a fakefs made new (fakefsify, a fresh mount), at
+// user_version 3: fake_db_init's migrations bring them up to date. Here, not
+// in fake-db.c, which fakefsify does not link (it needs the kernel's printk).
+static const char *const fakefs_schema =
+    "create table meta (id integer unique default 0, db_inode integer);"
+    "insert into meta (db_inode) values (0);"
+    "create table stats (inode integer primary key, stat blob);"
+    "create table paths (path blob primary key, inode integer references stats(inode));"
+    "create index inode_to_path on paths (inode, path);"
+    // no index is needed on stats, because the rows are ordered by the primary key
+    "pragma user_version=3;";
+
 int fake_db_init(struct fakefs_db *fs, const char *db_path, int root_fd);
 int fake_db_deinit(struct fakefs_db *fs);
 
