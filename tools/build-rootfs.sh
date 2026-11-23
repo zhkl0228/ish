@@ -24,6 +24,8 @@ PACKAGES=(
     nodejs npm go openjdk25-jdk maven build-base clang21 git github-cli
     redis mariadb mariadb-client
     curl wget vim jq shellcheck 7zip xz openssh iputils bind-tools iproute2 net-tools procps-ng
+    # telnet: busybox-extras has one too, but only as `busybox-extras telnet`
+    inetutils-telnet
 )
 # Installed with npm -g, the way Claude Code's own updater expects to update it.
 NPM_PACKAGES=(@anthropic-ai/claude-code)
