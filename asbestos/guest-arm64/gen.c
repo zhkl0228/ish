@@ -1155,6 +1155,9 @@ int gen_step(struct gen_state *state, struct tlb *tlb) {
  * Returns false if the encoding is invalid.
  */
 static bool decode_bitmask_imm(uint32_t n, uint32_t imms, uint32_t immr, bool is64, uint64_t *result) {
+    // N names a 64-bit element: undefined in a 32-bit form
+    if (!is64 && n)
+        return false;
     uint32_t len = 0;
 
     // Find the highest bit set in (n:~imms)
@@ -1736,11 +1739,17 @@ static int gen_dp_imm(struct gen_state *state, uint32_t insn) {
     if ((insn & 0x1f800000) == 0x13000000) {
         uint32_t sf = (insn >> 31) & 1;
         uint32_t opc = (insn >> 29) & 0x3;
-        // uint32_t N = (insn >> 22) & 1;  // Not used for common aliases
+        uint32_t N = (insn >> 22) & 1;
         uint32_t immr = (insn >> 16) & 0x3f;
         uint32_t imms = (insn >> 10) & 0x3f;
         uint32_t rn = (insn >> 5) & 0x1f;
         uint32_t rd = insn & 0x1f;
+        // N is sf, and a 32-bit form has 5-bit immr and imms: anything else
+        // is undefined
+        if (N != sf || (!sf && ((immr | imms) & 0x20))) {
+            gen_interrupt(state, INT_UNDEFINED);
+            return 0;
+        }
 
         // Fused parameter for UBFM/SBFM: immr | imms<<8 | sf<<16 | rn<<20 | rd<<28
         uint64_t fused_param = immr | (imms << 8) | ((uint64_t)sf << 16)

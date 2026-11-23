@@ -959,6 +959,18 @@ writeback_base:
     return true;
 }
 
+// Whether a logical immediate's N:imms names a bitmask (DecodeBitMasks): N is
+// for a 64-bit element only, an element is 2 to 64 bits, and not all ones
+static bool bitmask_imm_defined(unsigned sf, unsigned n, unsigned imms) {
+    if (!sf && n)
+        return false;
+    unsigned combined = (n << 6) | (~imms & 0x3f);
+    if (combined < 2)
+        return false;
+    unsigned levels = (1u << (31 - __builtin_clz(combined))) - 1;
+    return (imms & levels) != levels;
+}
+
 // Translate one guest instruction. has_mem: set if it may bail out.
 static bool emit_insn(struct em *e, uint32_t x, uint64_t pc, unsigned spos, bool *has_mem) {
     int wrote = -1;
@@ -998,6 +1010,10 @@ static bool emit_insn(struct em *e, uint32_t x, uint64_t pc, unsigned spos, bool
         out = remap(e, x, S ? F_ZR : F_SP, F_SP, F_NONE, F_NONE, false, &wrote);
         wflags = S;
     } else if ((x & 0x1F800000u) == 0x12000000u) {         // logical immediate
+        // An undefined form would be undefined on the host too, a SIGILL in
+        // the JIT code: its gadget raises the guest's
+        if (!bitmask_imm_defined(x >> 31, (x >> 22) & 1, (x >> 10) & 0x3f))
+            return false;
         bool S = ((x >> 29) & 3) == 3;
         out = remap(e, x, S ? F_ZR : F_SP, F_ZR, F_NONE, F_NONE, false, &wrote);
         wflags = S;
@@ -1008,6 +1024,11 @@ static bool emit_insn(struct em *e, uint32_t x, uint64_t pc, unsigned spos, bool
     } else if ((x & 0x1F800000u) == 0x13000000u) {         // bitfield
         unsigned opc = (x >> 29) & 3;
         if (opc == 3) return false;
+        // N not sf, or a 6-bit immr or imms in a 32-bit form: undefined, its
+        // gadget raises SIGILL
+        unsigned sf = x >> 31, N = (x >> 22) & 1;
+        if (N != sf || (!sf && ((x >> 10) & 0x820) != 0))
+            return false;
         out = remap(e, x, F_ZR, F_ZR, F_NONE, F_NONE, opc == 1, &wrote);
     } else if ((x & 0x7FA00000u) == 0x13800000u) {         // extr
         out = remap(e, x, F_ZR, F_ZR, F_ZR, F_NONE, false, &wrote);
