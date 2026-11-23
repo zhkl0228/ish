@@ -145,7 +145,6 @@ static inline int xX_main_Xx(int argc, char *const argv[], const char *envp) {
             static const char *v8_flags[] = {
                 "--jitless",
                 "--no-lazy",
-                "--no-expose-wasm",
                 "--max-old-space-size=512",
                 // Force single-threaded V8: in jitless mode worker threads
                 // have no JIT to do, but V8 still creates them and they
