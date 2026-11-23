@@ -1044,8 +1044,20 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
                 // and is thus assumed to have no pointers left
                 if (!last_block->is_jetsam && !block->is_jetsam) {
                     for (int i = 0; i <= 1; i++) {
+                        // The slot still holds the fake ip of this very block:
+                        // target | 1 << 63 (gen.c) on arm64. Compared on its low 32
+                        // bits, as an x86 guest's (whose fake ips wrap there), no
+                        // branch to a block above 4 GB was ever chained: V8's
+                        // generated code (0x40000000000 up) left translated code at
+                        // each of its jumps, four exits to this loop in five, and a
+                        // chained slot (a host pointer) could pass for a guest
+                        // address by its low bits.
                         if (last_block->jump_ip[i] == NULL ||
+#ifdef GUEST_ARM64
+                                *last_block->jump_ip[i] != ((unsigned long) block->addr | (1UL << 63)))
+#else
                                 (*last_block->jump_ip[i] & 0xffffffff) != block->addr)
+#endif
                             continue;
 #ifdef ISH_JIT
                         if (!jit_chain_ok(last_block, i, block)) {
