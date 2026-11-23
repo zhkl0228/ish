@@ -543,14 +543,22 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
     if (CGRectEqualToRect(keyboardFrame, CGRectZero))
         return;
     CGRect intersection = CGRectIntersection(keyboardFrame, self.view.bounds);
+    // None of it over the terminal (put away, on another screen, or the
+    // scene resized under it): no pad. Its height then says nothing of an
+    // external keyboard. CGRectNull's origin is infinite, and the pad was.
+    if (CGRectIsNull(intersection))
+        intersection = CGRectMake(0, CGRectGetMaxY(self.view.bounds), self.view.bounds.size.width, 0);
+    else
+        self.hasExternalKeyboard = intersection.size.height < 100;
     keyboardFrame = intersection;
-    self.hasExternalKeyboard = keyboardFrame.size.height < 100;
     CGFloat pad = CGRectGetMaxY(self.view.bounds) - CGRectGetMinY(keyboardFrame);
     // The keyboard appears to be undocked. This means it can either be split or
     // truly floating. In the former case we want to keep the pad, but in the
     // latter we should fall back to the input accessory view instead of the
-    // keyboard.
-    if (pad != keyboardFrame.size.height && keyboardFrame.size.width != UIScreen.mainScreen.bounds.size.width) {
+    // keyboard. Docked, it is as wide as the scene (its part over the view
+    // is), which a resized scene's (Split View, a foldable's screens) is not
+    // the main screen's width.
+    if (pad != keyboardFrame.size.height && keyboardFrame.size.width < self.view.bounds.size.width) {
         pad = MAX(self.view.safeAreaInsets.bottom, self.termView.inputAccessoryView.frame.size.height);
     }
     // What the terminal's bottom is set from, and where the extra keys are:
@@ -558,6 +566,13 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
     UIView *extraKeys = self.termView.inputAccessoryView;
     NSLog(@"%@ keyboard %@ -> pad %.1f; extra keys at %@ (window %@)", notification.name, @(keyboardFrame), pad,
           @([self.view convertRect:extraKeys.bounds fromView:extraKeys]), extraKeys.window != nil ? @"yes" : @"no");
+    // Nothing to move: a layout here lays out the keyboard's window, which
+    // tells of its frame again. Done for each such notice, it went on for
+    // good when the scene was resized (a foldable unfolded, a snapshot for
+    // the app switcher): the main thread spun, the terminal never took its
+    // new size, and the watchdog killed the app (0x8BADF00D, scene-update).
+    if (self.bottomConstraint.constant == pad)
+        return;
     self.bottomConstraint.constant = pad;
 
     BOOL initialLayout = self.termView.needsUpdateConstraints;
@@ -577,6 +592,10 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
 }
 
 - (void)setHasExternalKeyboard:(BOOL)hasExternalKeyboard {
+    // Each keyboard notice sets it: restyling the keys for none that changed
+    // it laid out the keyboard's window, which told of its frame again
+    if (hasExternalKeyboard == _hasExternalKeyboard)
+        return;
     _hasExternalKeyboard = hasExternalKeyboard;
     [self _updateStyleFromPreferences:YES];
 }
