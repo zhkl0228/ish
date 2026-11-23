@@ -795,6 +795,9 @@ int realfs_setflags(struct fd *fd, dword_t flags) {
     int ret = fcntl(fd->real_fd, F_SETFL, open_flags_real_from_fake(flags));
     if (ret < 0)
         return errno_map();
+    // and the guest's, which realfs_wait_ready goes by: a pipe made
+    // non-blocking (fcntl, pipe2, FIONBIO) still waited when full or empty
+    fd->flags = (fd->flags & ~(O_APPEND_ | O_NONBLOCK_)) | (flags & (O_APPEND_ | O_NONBLOCK_));
     return 0;
 }
 

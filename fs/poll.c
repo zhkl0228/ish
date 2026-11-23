@@ -391,6 +391,25 @@ static void poll_spin_report(struct poll *poll_, unsigned spurious,
 // More than a century
 #define POLL_TIMEOUT_ENDLESS_SEC (1ULL << 32)
 
+// The edges the host has queued for edge-triggered registrations, taken now:
+// each re-arms its registration, as new data does. A wait that found its fd
+// ready by the fd's own poll took none of them, so the edge of data already
+// reported came out of the next wait's host wait as if new, and reported the
+// data again (epoll ET: one report per write). poll_->lock held.
+static void poll_take_host_edges(struct poll *poll_) {
+    struct real_poll_event e[16];
+    struct timespec now = {0, 0};
+    int n;
+    do {
+        n = real_poll_wait(&poll_->real, e, sizeof(e) / sizeof(e[0]), &now);
+        for (int i = 0; i < n; i++) {
+            struct poll_fd *pfd = rpe_data(&e[i]);
+            if (pfd != NULL && pfd->poll != NULL && (pfd->types & POLL_EDGETRIGGERED))
+                pfd->triggered_types &= ~rpe_events(&e[i]);
+        }
+    } while (n == (int) (sizeof(e) / sizeof(e[0])));
+}
+
 int poll_wait(struct poll *poll_, poll_callback_t callback, void *context, struct timespec *timeout) {
     lock(&poll_->lock);
 
@@ -430,6 +449,7 @@ int poll_wait(struct poll *poll_, poll_callback_t callback, void *context, struc
     bool woke = false;
     struct real_poll_event last_events[4];
     int last_n = 0;
+    poll_take_host_edges(poll_);
     while (true) {
         // check if any fds are ready
         struct poll_fd *poll_fd, *tmp;
@@ -437,9 +457,16 @@ int poll_wait(struct poll *poll_, poll_callback_t callback, void *context, struc
             if (poll_fd->oneshot_fired)
                 continue;
             struct fd *fd = poll_fd->fd;
+            // A file with no poll of its own (procfs's) is always ready, as
+            // Linux's DEFAULT_POLLMASK: a shell's read builtin polls before
+            // each byte, and `read x < /proc/uptime` waited forever. (epoll
+            // takes no such file: EPERM, kernel/epoll.c.) The other fds with
+            // none (an epoll fd itself) are not here: never ready.
             int poll_types = 0;
             if (fd->ops->poll)
                 poll_types = fd->ops->poll(fd);
+            else if (S_ISREG(fd->type) || S_ISDIR(fd->type))
+                poll_types = POLL_READ | POLL_WRITE;
             poll_types &= poll_fd->types | POLL_HUP | POLL_ERR;
             if (poll_fd->types & POLL_EDGETRIGGERED) {
                 poll_types &= ~poll_fd->triggered_types;
@@ -753,9 +780,11 @@ static int real_poll_init(struct real_poll *real) {
 }
 
 static int real_poll_wait(struct real_poll *real, struct real_poll_event *events, int max, struct timespec *timeout) {
+    // In whole milliseconds, rounded up as Linux's timeouts are: one cut to
+    // 0 (ppoll's 500 us) ended the wait at once, a spin for its caller
     int timeout_millis = -1;
     if (timeout != NULL)
-        timeout_millis = timeout->tv_sec * 1000 + timeout->tv_nsec / 1000000;
+        timeout_millis = timeout->tv_sec * 1000 + (timeout->tv_nsec + 999999) / 1000000;
     return epoll_wait(real->fd, (struct epoll_event *) events, max, timeout_millis);
 }
 

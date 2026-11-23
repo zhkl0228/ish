@@ -4,7 +4,7 @@
 // regress_poll_spurious.c pins the spin itself; this file pins everything
 // around it: hangups that happen before or after a wait starts, several
 // waiters on one fd, epoll registrations modified between interests, regular
-// files and directories still reported ready at once, timeout accuracy for
+// files and directories (procfs's too) still reported ready at once, timeout accuracy for
 // poll/ppoll/select/pselect/epoll_wait, EINTR, wake-up latency for pipes,
 // ptys, eventfd and timerfd, and the per-call cost of poll().
 //
@@ -59,8 +59,10 @@ static void fill_pipe(int w) {
     fcntl(w, F_SETFL, fl);
 }
 
-// Child result: 0 pass, 1 fail. Children print their own NOTE/FAIL detail.
-static int pass, fail;
+// Child result: 0 pass, 1 fail, SKIP what the root cannot do. Children print
+// their own NOTE/FAIL detail.
+#define SKIP 77
+static int pass, fail, skipped;
 static const char *only;   // argv[1]: run only cases whose name contains it
 static void run(const char *name, int (*fn)(void), int limit_ms) {
     if (only && !strstr(name, only)) return;
@@ -76,9 +78,9 @@ static void run(const char *name, int (*fn)(void), int limit_ms) {
         sleep_us(5000);
     }
     long ms = (long)((now_us() - t0) / 1000);
-    const char *what = code == 0 ? "ok" : code == -1 ? "HUNG (killed)" : "FAIL";
+    const char *what = code == 0 ? "ok" : code == SKIP ? "skipped" : code == -1 ? "HUNG (killed)" : "FAIL";
     printf("%-46s %s in %ldms\n", name, what, ms);
-    if (code == 0) pass++; else fail++;
+    if (code == 0) pass++; else if (code == SKIP) skipped++; else fail++;
 }
 
 // --- hangups ----------------------------------------------------------------
@@ -310,6 +312,28 @@ static int c_regfile_ready(void) {
             (qd.revents & POLLIN) && rs_n == 2) ? 0 : 1;
 }
 
+// procfs's files and directories too, which have no poll of their own: a
+// shell's read builtin polls before each byte, and `read x < /proc/uptime`
+// waited forever. And select with no signal mask (glibc's: pselect6's sixth
+// argument NULL) said EFAULT.
+static int c_procfs_ready(void) {
+    int f = open("/proc/uptime", O_RDONLY);
+    int s = open("/proc/self/stat", O_RDONLY);
+    int d = open("/proc", O_RDONLY | O_DIRECTORY);
+    struct pollfd q[3] = { { f, POLLIN, 0 }, { s, POLLIN, 0 }, { d, POLLIN, 0 } };
+    int64_t t0 = now_us();
+    int r = poll(q, 3, 1000);
+    int64_t us = now_us() - t0;
+    fd_set rs; FD_ZERO(&rs); FD_SET(f, &rs);
+    struct timeval tv = { 1, 0 };
+    int rs_n = select(f + 1, &rs, NULL, NULL, &tv);
+    int e = errno;
+    printf("    NOTE procfs poll r=%d in %ldus revents=%#x %#x %#x, select r=%d (%s)\n",
+           r, (long) us, q[0].revents, q[1].revents, q[2].revents, rs_n, rs_n < 0 ? strerror(e) : "ok");
+    return (r == 3 && us < 500000 && (q[0].revents & POLLIN) && (q[1].revents & POLLIN) &&
+            (q[2].revents & POLLIN) && rs_n == 1 && FD_ISSET(f, &rs)) ? 0 : 1;
+}
+
 // `tail -f` style: a reader that polls POLLIN on a growing file gets an
 // immediate answer each time (it then sleeps itself); appends are visible.
 static int c_tail_follow(void) {
@@ -411,8 +435,18 @@ static int c_latency_pipe(void) {
 // without making the line readable - exactly the spurious wakeups the backoff
 // counts), then Enter. The line must be noticed promptly, not after a 10-50 ms
 // backoff sleep.
-static int c_latency_pty_canon(void) {
+// A pty, if the root has /dev/ptmx: a realfs root has no device nodes, as the
+// host makes none for its user. -1 if not.
+static int open_pty_master(void) {
     int m = posix_openpt(O_RDWR | O_NOCTTY);
+    if (m < 0 && errno == ENOENT)
+        printf("    NOTE no /dev/ptmx: a root of no device nodes (realfs)\n");
+    return m;
+}
+
+static int c_latency_pty_canon(void) {
+    int m = open_pty_master();
+    if (m < 0) return errno == ENOENT ? SKIP : 1;
     grantpt(m); unlockpt(m);
     int s = open(ptsname(m), O_RDWR | O_NOCTTY);
     pid_t c = fork();
@@ -433,7 +467,8 @@ static int c_latency_pty_canon(void) {
     return r == 1 ? 0 : 1;
 }
 static int c_latency_pty_raw(void) {
-    int m = posix_openpt(O_RDWR | O_NOCTTY);
+    int m = open_pty_master();
+    if (m < 0) return errno == ENOENT ? SKIP : 1;
     grantpt(m); unlockpt(m);
     int s = open(ptsname(m), O_RDWR | O_NOCTTY);
     struct termios t; tcgetattr(s, &t); cfmakeraw(&t); tcsetattr(s, TCSANOW, &t);
@@ -500,6 +535,7 @@ int main(int argc, char **argv) {
     run("epoll: 2 waiters, added hup-only then MOD", c_epoll_two_waiters_mod, 5000);
     run("epoll: MOD EPOLLIN->hup-only on full pipe", c_epoll_mod_to_hup_full, 3000);
     run("file/dir always ready (poll+select)", c_regfile_ready, 3000);
+    run("procfs file/dir always ready (poll+select)", c_procfs_ready, 3000);
     run("tail -f style follow", c_tail_follow, 5000);
     run("timeouts poll/ppoll/select/pselect/epoll", c_timeouts, 30000);
     run("ppoll 500us does not return early", c_subms, 3000);
@@ -509,6 +545,7 @@ int main(int argc, char **argv) {
     run("latency: pty raw keystrokes", c_latency_pty_raw, 6000);
     run("latency: eventfd / timerfd", c_latency_eventfd_timerfd, 6000);
     run("cost: poll(timeout 0)", c_cost, 10000);
+    if (skipped) printf("%d skipped\n", skipped);
     printf("%d passed, %d failed\n", pass, fail);
     return fail ? 1 : 0;
 }

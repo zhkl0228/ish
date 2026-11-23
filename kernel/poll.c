@@ -95,6 +95,13 @@ static dword_t select_common(fd_t nfds, addr_t readfds_addr, addr_t writefds_add
     poll_destroy(poll);
     if (err < 0)
         return err;
+    // as Linux's: the bits set in the three sets, an fd ready to read and to
+    // write twice (poll_wait counts the fds)
+    if (err > 0) {
+        err = 0;
+        for (fd_t i = 0; i < nfds; i++)
+            err += !!bit_test(i, readfds) + !!bit_test(i, writefds) + !!bit_test(i, exceptfds);
+    }
 
     if (readfds_addr && user_write(readfds_addr, readfds, fdset_size))
         return _EFAULT;
@@ -223,7 +230,11 @@ dword_t sys_pselect(fd_t nfds, addr_t readfds_addr, addr_t writefds_addr, addr_t
     struct {
         addr_t mask_addr;
         dword_t mask_size;
-    } sigmask;
+    } sigmask = {0, 0};
+    // none, as glibc's select passes (pselect6's sixth argument NULL): no
+    // mask, as Linux's
+    if (sigmask_addr == 0)
+        return select_common(nfds, readfds_addr, writefds_addr, exceptfds_addr, timeout_ts_addr, "pselect");
 #ifdef GUEST_ARM64
     struct {
         uint64_t mask_addr;

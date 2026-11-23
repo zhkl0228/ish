@@ -767,6 +767,18 @@ EOF
         status=1
     fi
     echo
+    echo "########## poll, select and epoll semantics (hangups, edges, timeouts, files, latency) ##########"
+    if "$CC_GUEST" -static -O0 -Wall -pthread -o "$GUEST_ROOT/tmp/regress_poll_semantics" \
+            tests/regress/regress_poll_semantics.c; then
+        out=$(timeout 300 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_poll_semantics 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_poll_semantics"
+    else
+        echo "failed to build regress_poll_semantics" >&2
+        status=1
+    fi
+    echo
     echo "########## floating-point environment: exception flags, rounding mode ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_fenv" tests/regress/regress_fenv.c -lm; then
         out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_fenv 2>&1)
