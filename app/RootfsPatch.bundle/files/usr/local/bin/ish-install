@@ -47,7 +47,7 @@ describe() {
         claude) echo "Claude Code (and node)                   ~410 MB" ;;
         kimi)   echo "Kimi Code (and node)                     ~120 MB" ;;
         go)     echo "Go                                       ~175 MB" ;;
-        java)   echo "OpenJDK 25 and Maven                     ~360 MB" ;;
+        java)   echo "OpenJDK 25, Maven, gcompat               ~360 MB" ;;
         c)      echo "gcc, g++, make, musl-dev (build-base)    ~225 MB" ;;
         clang)  echo "clang 21 (and build-base)                ~475 MB" ;;
         db)     echo "Redis, MariaDB server and client         ~230 MB" ;;
@@ -63,8 +63,10 @@ packages() {
         claude) echo "nodejs npm" ;;
         kimi)   echo "nodejs npm" ;;
         go)     echo "go" ;;
-        # openjdk25-jdk first, so it is the java-jdk maven depends on
-        java)   echo "openjdk25-jdk maven" ;;
+        # openjdk25-jdk first, so it is the java-jdk maven depends on. gcompat
+        # runs the glibc binaries Maven plugins download for linux-aarch_64,
+        # such as protoc-gen-grpc-java (protoc itself is static).
+        java)   echo "openjdk25-jdk maven gcompat" ;;
         c)      echo "build-base" ;;
         clang)  echo "build-base clang21" ;;
         db)     echo "redis mariadb mariadb-client" ;;
