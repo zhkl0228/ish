@@ -16,7 +16,7 @@
 # it updates the root.
 set -e
 
-ALL_GROUPS="python node claude kimi go java c clang db tools"
+ALL_GROUPS="python node claude kimi go java c clang db tools svn"
 
 # --cn: apk's repositories on mirrors.aliyun.com, and for login shells (and
 # what they start: Claude Code's own updates too) npm on npmmirror, pip and go
@@ -52,6 +52,7 @@ describe() {
         clang)  echo "clang 21 (and build-base)                ~475 MB" ;;
         db)     echo "Redis, MariaDB server and client         ~230 MB" ;;
         tools)  echo "GitHub CLI, ShellCheck, 7-Zip            ~65 MB" ;;
+        svn)    echo "Subversion (svn)                         ~6 MB" ;;
     esac
 }
 
@@ -68,6 +69,7 @@ packages() {
         clang)  echo "build-base clang21" ;;
         db)     echo "redis mariadb mariadb-client" ;;
         tools)  echo "github-cli shellcheck 7zip" ;;
+        svn)    echo "subversion" ;;
     esac
 }
 
