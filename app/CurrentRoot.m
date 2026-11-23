@@ -163,13 +163,36 @@ void FsApplyOverlay(void) {
     for (NSDictionary *entry in files) {
         NSString *src = entry[@"src"];
         NSString *dst = entry[@"dst"];
-        if (src == nil || dst == nil)
-            continue;
+        NSString *link = entry[@"link"];
 
-        // Ensure parent directories exist in guest fs
-        NSString *parentDir = [dst stringByDeletingLastPathComponent];
-        if (parentDir.length > 1)
-            generic_mkdirat(AT_PWD, parentDir.UTF8String, 0755);
+        // Its directories, those missing (as /usr/share/zoneinfo/America)
+        NSString *dir = @"";
+        for (NSString *part in [dst stringByDeletingLastPathComponent].pathComponents) {
+            if ([part isEqualToString:@"/"])
+                continue;
+            dir = [dir stringByAppendingFormat:@"/%@", part];
+            generic_mkdirat(AT_PWD, dir.UTF8String, 0755);
+        }
+
+        // A symbolic link (/etc/localtime): what is at dst goes first, so
+        // that a link there is replaced rather than written through
+        if (link != nil) {
+            int err = generic_unlinkat(AT_PWD, dst.UTF8String);
+            if (err < 0 && err != _ENOENT) {
+                NSLog(@"[RootfsPatch] FAIL %@: unlink (error %d)", dst, err);
+                failed++;
+                continue;
+            }
+            err = generic_symlinkat(link.UTF8String, AT_PWD, dst.UTF8String);
+            if (err < 0) {
+                NSLog(@"[RootfsPatch] FAIL %@ -> %@: symlink (error %d)", dst, link, err);
+                failed++;
+                continue;
+            }
+            NSLog(@"[RootfsPatch] OK %@ -> %@ (link)", dst, link);
+            applied++;
+            continue;
+        }
 
         // Read file from patch bundle
         NSURL *srcURL = [patchBundle.bundleURL URLByAppendingPathComponent:src];

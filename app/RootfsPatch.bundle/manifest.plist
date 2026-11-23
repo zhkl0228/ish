@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>version</key>
-    <integer>8</integer>
+    <integer>9</integer>
     <key>files</key>
     <array>
         <dict>
@@ -36,6 +36,28 @@
             <string>files/etc/profile.d/ish-install.sh</string>
             <key>dst</key>
             <string>/etc/profile.d/ish-install.sh</string>
+        </dict>
+        <!-- the time zone: Los Angeles. The zone file is all of tzdata a
+             root needs for it; /etc/localtime links to it, as Alpine's
+             setup-timezone does, so that programs find its name too (ICU,
+             Python's tzlocal), and /etc/timezone names it. -->
+        <dict>
+            <key>src</key>
+            <string>files/usr/share/zoneinfo/America/Los_Angeles</string>
+            <key>dst</key>
+            <string>/usr/share/zoneinfo/America/Los_Angeles</string>
+        </dict>
+        <dict>
+            <key>dst</key>
+            <string>/etc/localtime</string>
+            <key>link</key>
+            <string>/usr/share/zoneinfo/America/Los_Angeles</string>
+        </dict>
+        <dict>
+            <key>src</key>
+            <string>files/etc/timezone</string>
+            <key>dst</key>
+            <string>/etc/timezone</string>
         </dict>
         <!-- installs the development tools the root leaves out -->
         <dict>
