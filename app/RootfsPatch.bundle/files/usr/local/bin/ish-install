@@ -165,3 +165,8 @@ for group in $todo; do
 done
 [ -z "$npm_installed" ] || npm cache clean --force 2> /dev/null
 echo "installed:$todo"
+case " $todo " in
+    *" java "*)
+        JAVA_PROFILE=/etc/profile.d/ish-java.sh
+        echo "JAVA_HOME is /usr/lib/jvm/default-jvm in login shells (this shell's once you run: . $JAVA_PROFILE)" ;;
+esac

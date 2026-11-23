@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>version</key>
-    <integer>19</integer>
+    <integer>20</integer>
     <key>files</key>
     <array>
         <dict>
@@ -36,6 +36,13 @@
             <string>files/etc/profile.d/ish-node.sh</string>
             <key>dst</key>
             <string>/etc/profile.d/ish-node.sh</string>
+        </dict>
+        <!-- JAVA_HOME, once ish-install java has installed the JDK -->
+        <dict>
+            <key>src</key>
+            <string>files/etc/profile.d/ish-java.sh</string>
+            <key>dst</key>
+            <string>/etc/profile.d/ish-java.sh</string>
         </dict>
         <!-- a restored tab's directory; bash history kept as commands run -->
         <dict>
