@@ -219,7 +219,13 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollHeight",
 
 - (BOOL)becomeFirstResponder {
     self.terminalFocused = YES;
-    [self reloadInputViews];
+    // No reloadInputViews here. It does nothing before the view is first
+    // responder, and once it is, becomeFirstResponder comes again when a tab
+    // is tapped or UIKit brings the keyboard back with the scene: reloading
+    // then took the extra keys off the keyboard and put them back, and the
+    // terminal kept the bottom it had been given without them, the keys
+    // covering its last line. A change of the extra keys reloads them itself
+    // (TerminalViewController's _updateStyleFromPreferences:).
     return [super becomeFirstResponder];
 }
 - (BOOL)resignFirstResponder {

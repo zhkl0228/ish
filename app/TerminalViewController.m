@@ -496,7 +496,6 @@ static NSString *_Nullable arrowKeySymbol(NSInteger tag) {
         return;
     CGRect intersection = CGRectIntersection(keyboardFrame, self.view.bounds);
     keyboardFrame = intersection;
-    NSLog(@"%@ %@", notification.name, @(keyboardFrame));
     self.hasExternalKeyboard = keyboardFrame.size.height < 100;
     CGFloat pad = CGRectGetMaxY(self.view.bounds) - CGRectGetMinY(keyboardFrame);
     // The keyboard appears to be undocked. This means it can either be split or
@@ -506,7 +505,11 @@ static NSString *_Nullable arrowKeySymbol(NSInteger tag) {
     if (pad != keyboardFrame.size.height && keyboardFrame.size.width != UIScreen.mainScreen.bounds.size.width) {
         pad = MAX(self.view.safeAreaInsets.bottom, self.termView.inputAccessoryView.frame.size.height);
     }
-    // NSLog(@"pad %f", pad);
+    // What the terminal's bottom is set from, and where the extra keys are:
+    // if they cover its last line, these say which was off.
+    UIView *extraKeys = self.termView.inputAccessoryView;
+    NSLog(@"%@ keyboard %@ -> pad %.1f; extra keys at %@ (window %@)", notification.name, @(keyboardFrame), pad,
+          @([self.view convertRect:extraKeys.bounds fromView:extraKeys]), extraKeys.window != nil ? @"yes" : @"no");
     self.bottomConstraint.constant = pad;
 
     BOOL initialLayout = self.termView.needsUpdateConstraints;
