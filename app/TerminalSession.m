@@ -21,6 +21,8 @@ NSNotificationName const TerminalSessionDidChangeNotification = @"TerminalSessio
 @property int exitCode;
 @property NSUInteger number;
 @property NSDate *startDate;
+@property (nullable) NSString *shownTitle; // displayTitle as last announced
+- (void)refreshTitle;
 @end
 
 @implementation TerminalSession
@@ -32,7 +34,47 @@ NSNotificationName const TerminalSessionDidChangeNotification = @"TerminalSessio
 - (NSString *)displayTitle {
     if (self.title.length > 0)
         return self.title;
+    NSString *running = self.runningTitle;
+    if (running != nil)
+        return running;
     return [NSString stringWithFormat:@"Shell %lu", (unsigned long) self.number];
+}
+
+// What runs in the terminal: the title the job owning it set, else, while a
+// job rather than the shell owns it, the job's program. A title set by a job
+// that has since given the terminal back is that job's, not the shell's.
+- (nullable NSString *)runningTitle {
+    if (self.state != TerminalSessionStateRunning)
+        return nil;
+    int fg_group = self.terminal.foregroundProcessGroup;
+    if (self.terminal.windowTitle.length > 0 && self.terminal.windowTitleGroup == fg_group)
+        return self.terminal.windowTitle;
+#if !ISH_LINUX
+    if (fg_group == 0 || fg_group == self.terminal.sessionId)
+        return nil;
+    // The group's leader, else whichever of it is left (a pipeline's)
+    lock(&pids_lock);
+    struct task *leader = pid_get_task(fg_group);
+    NSString *program = leader != NULL && !leader->zombie ? [NSString stringWithUTF8String:leader->comm] : nil;
+    unlock(&pids_lock);
+    return program ?: self.foregroundJobPrograms.firstObject;
+#else
+    return nil;
+#endif
+}
+
+// Announces displayTitle if it changed (TerminalSessionStore). Only while it
+// runs: a session that exited announced that already, and another change of
+// one would read as its exit again (a tab kept for a shell that died at once
+// would close).
+- (void)refreshTitle {
+    if (self.state != TerminalSessionStateRunning)
+        return;
+    NSString *title = self.displayTitle;
+    if ([title isEqualToString:self.shownTitle])
+        return;
+    self.shownTitle = title;
+    [self notifyChanged];
 }
 
 - (void)setTitle:(NSString *)title {
@@ -152,6 +194,18 @@ NSNotificationName const TerminalSessionDidChangeNotification = @"TerminalSessio
         self.mutableSessions = [NSMutableArray new];
         self.livePids = [NSMutableSet new];
         self.nextNumber = 1;
+        // Tab titles follow what runs: a title a program sets at once, the job
+        // that owns the terminal (top started, claude ended) within a second.
+        [NSNotificationCenter.defaultCenter addObserver:self
+                                               selector:@selector(terminalTitleChanged:)
+                                                   name:TerminalTitleDidChangeNotification
+                                                 object:nil];
+        __weak typeof(self) weakSelf = self;
+        NSTimer *titles = [NSTimer timerWithTimeInterval:1 repeats:YES block:^(NSTimer *_) {
+            for (TerminalSession *session in [weakSelf.mutableSessions copy])
+                [session refreshTitle];
+        }];
+        [NSRunLoop.mainRunLoop addTimer:titles forMode:NSRunLoopCommonModes];
 #if !ISH_LINUX
         [NSNotificationCenter.defaultCenter addObserver:self
                                                selector:@selector(processExited:)
@@ -262,6 +316,13 @@ static int start_process(NSArray<NSString *> *command, Terminal **terminalOut) {
     current = NULL;
 #endif
     return session;
+}
+
+- (void)terminalTitleChanged:(NSNotification *)notification {
+    for (TerminalSession *session in [self.mutableSessions copy]) {
+        if (session.terminal == notification.object)
+            [session refreshTitle];
+    }
 }
 
 - (void)closeSession:(TerminalSession *)session {

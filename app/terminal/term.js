@@ -85,6 +85,9 @@ term.io.sendString = term.io.onVTKeyStroke = (data) => {
 
 // hterm size updates native size
 term.io.onTerminalResize = () => native.resize();
+
+// A program's title (OSC 0 or 2) names its tab (Terminal.windowTitle)
+term.setWindowTitle = (title) => native.setTitle(title);
 exports.getSize = () => [term.screenSize.width, term.screenSize.height];
 
 // selection, copying

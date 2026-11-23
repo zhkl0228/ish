@@ -54,6 +54,11 @@ struct tty;
 // and its process group while the shell, not a job, owns the terminal. 0 if
 // none.
 @property (readonly) int sessionId;
+// The title a program set (OSC 0 or 2), and the process group that owned the
+// terminal then: the title is that job's (TerminalSession.displayTitle).
+// Each change posts TerminalTitleDidChangeNotification.
+@property (readonly) NSString *windowTitle; // nil until a program sets one
+@property (readonly) int windowTitleGroup;
 
 @property (readonly) WKWebView *webView;
 @property (nonatomic) BOOL enableVoiceOverAnnounce;
@@ -61,5 +66,7 @@ struct tty;
 @property (readonly) BOOL loaded;
 
 @end
+
+extern NSNotificationName const TerminalTitleDidChangeNotification;
 
 extern struct tty_driver ios_console_driver;

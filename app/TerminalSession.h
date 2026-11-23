@@ -29,6 +29,11 @@ typedef NS_ENUM(NSInteger, TerminalSessionState) {
 
 // Set by the user (tab rename). nil means use the default title.
 @property (nonatomic, copy, nullable) NSString *title;
+// The tab's title: the user's, else the title the job owning the terminal set
+// (OSC 0 or 2: claude, vim), else that job's program (top), else
+// "Shell <number>". It follows the terminal: TerminalSessionStore checks it
+// every second and on each title a program sets, and a change posts
+// TerminalSessionDidChangeNotification.
 @property (readonly) NSString *displayTitle;
 
 // The shell's working directory, or nil if it cannot be determined (e.g. after

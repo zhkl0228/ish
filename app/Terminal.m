@@ -114,7 +114,9 @@ static NSMapTable<NSUUID *, Terminal *> *terminalsByUUID;
     }
 }
 
-static NSString *const TERMINAL_HANDLERS[] = {@"load", @"log", @"sendInput", @"resize", @"propUpdate"};
+static NSString *const TERMINAL_HANDLERS[] = {@"load", @"log", @"sendInput", @"resize", @"propUpdate", @"setTitle"};
+
+NSNotificationName const TerminalTitleDidChangeNotification = @"TerminalTitleDidChangeNotification";
 
 - (WKWebView *)webView {
     if (_webView == nil) {
@@ -174,6 +176,10 @@ static NSString *const TERMINAL_HANDLERS[] = {@"load", @"log", @"sendInput", @"r
         [self syncWindowSize];
     } else if ([message.name isEqualToString:@"propUpdate"]) {
         [self setValue:message.body[1] forKey:message.body[0]];
+    } else if ([message.name isEqualToString:@"setTitle"]) {
+        _windowTitle = message.body;
+        _windowTitleGroup = self.foregroundProcessGroup;
+        [NSNotificationCenter.defaultCenter postNotificationName:TerminalTitleDidChangeNotification object:self];
     }
 }
 
