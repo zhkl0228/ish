@@ -389,6 +389,9 @@ static void poll_spin_report(struct poll *poll_, unsigned spurious,
     }
 }
 
+// More than a century
+#define POLL_TIMEOUT_ENDLESS_SEC (1ULL << 32)
+
 int poll_wait(struct poll *poll_, poll_callback_t callback, void *context, struct timespec *timeout) {
     lock(&poll_->lock);
 
@@ -403,6 +406,12 @@ int poll_wait(struct poll *poll_, poll_callback_t callback, void *context, struc
         fcntl(poll_->notify_pipe[1], F_SETFL, O_NONBLOCK);
         real_poll_update(&poll_->real, poll_->notify_pipe[0], POLL_READ, NULL);
     }
+
+    // A wait longer than the deadline below can count to is one without end,
+    // as Linux saturates it: skalibs gives a huge timeout for none, which
+    // wrapped deadline_ns to a time already past.
+    if (timeout != NULL && (uint64_t) timeout->tv_sec > POLL_TIMEOUT_ENDLESS_SEC)
+        timeout = NULL;
 
     // TODO this is pretty broken with regards to timeouts
     int res = 0;
