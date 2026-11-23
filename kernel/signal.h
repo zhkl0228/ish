@@ -149,9 +149,9 @@ void deliver_signal(struct task *task, int sig, struct siginfo_ info);
 // send a signal the task caused synchronously (a fault, a breakpoint), resetting
 // it to its default action if it is blocked or ignored (or if to_default)
 void force_signal(struct task *task, int sig, struct siginfo_ info, bool to_default);
-// send a signal to current if it's not blocked or ignored, return whether that worked
-// exists specifically for sending SIGTTIN/SIGTTOU
-bool try_self_signal(int sig);
+// Whether current has sig ignored (SIG_IGN) or blocked: tty job control lets
+// it through or refuses it rather than stop it (as Linux's is_ignored)
+bool signal_ignored_or_blocked(int sig);
 // send a signal to all processes in a group, could return ESRCH
 int send_group_signal(dword_t pgid, int sig, struct siginfo_ info);
 // Send a signal to a process as a whole (kill, SIGCHLD, SIGALRM): pending for

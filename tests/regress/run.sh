@@ -519,6 +519,34 @@ EOF
     rm -rf "$devdir"
 
     echo
+    echo "########## job control on a controlling terminal ##########"
+    # It needs /dev/ptmx, which a realfs root cannot have: a fakefs of its
+    # own, with the test as /init.
+    ttydir=$(mktemp -d)
+    if [ -x "$FAKEFSIFY" ] && "$CC_GUEST" -static -O0 -Wall -o "$ttydir/init" \
+            tests/regress/regress_tty_jobs.c &&
+        python3 -I - "$ttydir" <<'EOF' &&
+import sys, tarfile
+d = sys.argv[1]
+with tarfile.open(d + '/root.tar.gz', 'w:gz') as t:
+    for name in ('.', './dev', './dev/pts', './tmp', './proc'):
+        ti = tarfile.TarInfo(name); ti.type = tarfile.DIRTYPE; ti.mode = 0o755; t.addfile(ti)
+    ti = t.gettarinfo(d + '/init', './init'); ti.uid = ti.gid = 0; ti.uname = ti.gname = 'root'
+    with open(d + '/init', 'rb') as f:
+        t.addfile(ti, f)
+EOF
+        "$FAKEFSIFY" "$ttydir/root.tar.gz" "$ttydir/fs"
+    then
+        out=$(timeout 60 "$ISH" -f "$ttydir/fs" /init < /dev/null 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+    else
+        echo "failed to set up the job control test (needs $FAKEFSIFY and python3)" >&2
+        status=1
+    fi
+    rm -rf "$ttydir"
+
+    echo
     echo "########## /proc/stat: cpu line and btime ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_proc_stat" \
             tests/regress/regress_proc_stat.c; then

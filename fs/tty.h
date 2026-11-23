@@ -46,6 +46,7 @@ struct termios_ {
 #define ECHOK_ (1 << 5)
 #define ECHOKE_ (1 << 6)
 #define NOFLSH_ (1 << 7)
+#define TOSTOP_ (1 << 8)
 #define ECHOCTL_ (1 << 9)
 #define IEXTEN_ (1 << 15)
 

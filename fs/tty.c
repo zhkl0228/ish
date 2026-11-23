@@ -420,19 +420,55 @@ static bool tty_is_current(struct tty *tty) {
     return is_current;
 }
 
-static int tty_signal_if_background(struct tty *tty, pid_t_ current_pgid, int sig) {
-    // you can apparently access a terminal that's not your controlling
-    // terminal all you want
+// Whether no process of the group has a parent in another group of its
+// session, one that could resume it (job control): its own job stopping it
+// would leave it stopped for good. As Linux's will_become_orphaned_pgrp.
+// Caller holds pids_lock.
+static bool pgrp_orphaned(pid_t_ pgid) {
+    struct pid *pid = pid_get(pgid);
+    if (pid == NULL)
+        return true;
+    struct tgroup *tgroup;
+    list_for_each_entry(&pid->pgroup, tgroup, pgroup) {
+        struct task *parent = tgroup->leader->parent;
+        if (parent != NULL && parent->group != NULL &&
+                parent->group->pgid != pgid && parent->group->sid == tgroup->sid)
+            return false;
+    }
+    return true;
+}
+
+// A process outside the foreground group using its controlling terminal, as
+// Linux's tty_check_change: its whole process group gets sig (SIGTTIN to
+// read, SIGTTOU to write with TOSTOP or change the terminal), and the call
+// ends with EINTR. If the process ignores or blocks sig, a read fails with
+// EIO and anything else goes on; if its group is orphaned, EIO. 0 to go on.
+// (Only the calling thread got SIGTTIN, and SIGTTOU was never sent.) Takes
+// pids_lock, then the tty's lock: the caller holds neither.
+static int tty_check_background(struct tty *tty, int sig) {
+    // another terminal than its controlling one: no job control
     if (!tty_is_current(tty))
         return 0;
-    // check if we're in the foreground
-    if (tty->fg_group == 0 || current_pgid == tty->fg_group)
-        return 0;
-
-    if (!try_self_signal(sig))
-        return _EIO;
-    else
-        return _EINTR;
+    lock(&pids_lock);
+    pid_t_ pgid = current->group->pgid;
+    lock(&tty->lock);
+    pid_t_ fg_group = tty->fg_group;
+    unlock(&tty->lock);
+    int err = 0;
+    if (fg_group == 0 || pgid == fg_group) {
+        err = 0;
+    } else if (signal_ignored_or_blocked(sig)) {
+        err = sig == SIGTTIN_ ? _EIO : 0;
+    } else if (pgrp_orphaned(pgid)) {
+        err = _EIO;
+    } else {
+        struct tgroup *tgroup;
+        list_for_each_entry(&pid_get(pgid)->pgroup, tgroup, pgroup)
+            send_process_signal(tgroup, sig, (struct siginfo_) {.code = SI_KERNEL_});
+        err = _EINTR;
+    }
+    unlock(&pids_lock);
+    return err;
 }
 
 static ssize_t tty_read(struct fd *fd, void *buf, size_t bufsize) {
@@ -440,19 +476,12 @@ static ssize_t tty_read(struct fd *fd, void *buf, size_t bufsize) {
     if (bufsize == 0)
         return 0;
 
-    int err = 0;
     struct tty *tty = fd->tty;
-    lock(&pids_lock);
-    lock(&tty->lock);
-    if (tty->hung_up || pty_is_half_closed_master(tty)) {
-        unlock(&pids_lock);
-        goto error;
-    }
-
-    pid_t_ current_pgid = current->group->pgid;
-    unlock(&pids_lock);
-    err = tty_signal_if_background(tty, current_pgid, SIGTTIN_);
+    int err = tty_check_background(tty, SIGTTIN_);
     if (err < 0)
+        return err;
+    lock(&tty->lock);
+    if (tty->hung_up || pty_is_half_closed_master(tty))
         goto error;
 
     int bufsize_extra = 0;
@@ -539,6 +568,14 @@ error:
 
 static ssize_t tty_write(struct fd *fd, const void *buf, size_t bufsize) {
     struct tty *tty = fd->tty;
+    lock(&tty->lock);
+    bool tostop = tty->termios.lflags & TOSTOP_;
+    unlock(&tty->lock);
+    if (tostop) {
+        int err = tty_check_background(tty, SIGTTOU_);
+        if (err < 0)
+            return err;
+    }
     lock(&tty->lock);
     if (tty->hung_up || pty_is_half_closed_master(tty)) {
         unlock(&tty->lock);
@@ -723,6 +760,13 @@ static int tty_mode_ioctl(struct tty *in_tty, int cmd, void *arg) {
 static int tty_ioctl(struct fd *fd, int cmd, void *arg) {
     int err = 0;
     struct tty *tty = fd->tty;
+    // changing the terminal from the background (Linux: set_termios,
+    // tiocspgrp, TCFLSH)
+    if (cmd == TCSETS_ || cmd == TCSETSW_ || cmd == TCSETSF_ || cmd == TIOCSPGRP_ || cmd == TCFLSH_) {
+        err = tty_check_background(tty, SIGTTOU_);
+        if (err < 0)
+            return err;
+    }
     lock(&tty->lock);
     if (tty->hung_up) {
         unlock(&tty->lock);

@@ -295,17 +295,12 @@ void send_process_signal(struct tgroup *group, int sig, struct siginfo_ info) {
     }
 }
 
-bool try_self_signal(int sig) {
-    assert(sig == SIGTTIN_ || sig == SIGTTOU_);
-
+bool signal_ignored_or_blocked(int sig) {
     struct sighand *sighand = current->sighand;
     lock(&sighand->lock);
-    bool can_send = signal_action(sighand, sig) != SIGNAL_IGNORE &&
-        !sigset_has(current->blocked, sig);
-    if (can_send)
-        deliver_signal_unlocked(current, sig, SIGINFO_NIL, false);
+    bool ignored = sighand->action[sig].handler == SIG_IGN_ || sigset_has(current->blocked, sig);
     unlock(&sighand->lock);
-    return can_send;
+    return ignored;
 }
 
 int send_group_signal(dword_t pgid, int sig, struct siginfo_ info) {
