@@ -53,10 +53,13 @@ struct fd {
             uint64_t val;
         } eventfd;
         // signalfd (kernel/signalfd.c): the signals it reads (a sigset_t_),
-        // and its place among the signalfds
+        // the sighands of those polling it, and whether a wakeup of its
+        // pollers is waiting, in the waker's queue. Locked by signalfd_lock.
         struct {
             _Atomic uint64_t mask;
-            struct list links;
+            struct list watches;
+            struct list pending_link;
+            bool pending;
         } signalfd;
         struct {
             struct timer *timer;

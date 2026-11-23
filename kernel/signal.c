@@ -123,6 +123,7 @@ static void wake_for_signal_unlocked(struct task *task) {
 static void deliver_signal_unlocked(struct task *task, int sig, struct siginfo_ info, bool forced) {
     if (!queue_signal(&task->queue, &task->pending, sig, info, forced))
         return;
+    signalfd_notify(task->sighand, sig);
     if (sigset_has(task->blocked & ~task->waiting, sig) && signal_is_blockable(sig))
         return;
     wake_for_signal_unlocked(task);
@@ -135,7 +136,6 @@ void deliver_signal(struct task *task, int sig, struct siginfo_ info) {
     deliver_signal_unlocked(task, sig, info, true);
     unlock(&task->sighand->lock);
     cpu_poke(&task->cpu);
-    signalfd_wakeup(sig);
 }
 
 // A signal the task brought on itself synchronously: a fault, a breakpoint,
@@ -157,7 +157,6 @@ void force_signal(struct task *task, int sig, struct siginfo_ info, bool to_defa
     deliver_signal_unlocked(task, sig, info, true);
     unlock(&task->sighand->lock);
     cpu_poke(&task->cpu);
-    signalfd_wakeup(sig);
 }
 
 // SIGCONT and SIGKILL end a stop. As Linux's prepare_signal, a stopped
@@ -222,7 +221,6 @@ void send_signal(struct task *task, int sig, struct siginfo_ info) {
         cpu_poke(&task->cpu);
     }
     unlock(&sighand->lock);
-    signalfd_wakeup(sig);
 
     if (sig == SIGCONT_ || sig == SIGKILL_)
         end_stop(task->group, sig);
@@ -282,6 +280,7 @@ void send_process_signal(struct tgroup *group, int sig, struct siginfo_ info) {
         action = SIGNAL_IGNORE;
     if ((action != SIGNAL_IGNORE || blocked) &&
             queue_signal(&group->shared_queue, &group->shared_pending, sig, info, false)) {
+        signalfd_notify(sighand, sig);
         // As Linux's complete_signal: wake the named thread if it would take
         // the signal, else the first that would. None would: it stays pending
         // until a thread unblocks it or waits for it.
@@ -303,7 +302,6 @@ void send_process_signal(struct tgroup *group, int sig, struct siginfo_ info) {
         }
     }
     unlock(&sighand->lock);
-    signalfd_wakeup(sig);
 
     if (sig == SIGCONT_ || sig == SIGKILL_)
         end_stop(group, sig);
@@ -970,6 +968,7 @@ struct sighand *sighand_new(void) {
     memset(sighand, 0, sizeof(struct sighand));
     sighand->refcount = 1;
     lock_init(&sighand->lock);
+    list_init(&sighand->signalfd_watches);
     return sighand;
 }
 
@@ -983,6 +982,7 @@ struct sighand *sighand_copy(struct sighand *sighand) {
 
 void sighand_release(struct sighand *sighand) {
     if (--sighand->refcount == 0) {
+        signalfd_sighand_gone(sighand);
         free(sighand);
     }
 }

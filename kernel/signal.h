@@ -164,9 +164,13 @@ void send_process_signal(struct tgroup *group, int sig, struct siginfo_ info);
 // into info (sigtimedwait, signalfd): false if there is none. Caller holds the
 // sighand lock.
 bool dequeue_signal(sigset_t_ set, struct siginfo_ *info);
-// Wakes those polling a signalfd whose mask has sig (kernel/signalfd.c).
-// Caller holds no sighand lock.
-void signalfd_wakeup(int sig);
+struct sighand;
+// sig was queued for a process with sighand: those polling a signalfd of
+// theirs whose mask has it are woken (kernel/signalfd.c). Caller holds the
+// sighand's lock.
+void signalfd_notify(struct sighand *sighand, int sig);
+// The sighand is going: the signalfds its processes polled forget it
+void signalfd_sighand_gone(struct sighand *sighand);
 // Tells the parent of the caller's process that it stopped (CLD_STOPPED) or
 // went on (CLD_CONTINUED), by sig: its wait wakes, and it gets SIGCHLD as
 // Linux's do_notify_parent_cldstop sends it. Caller holds no lock.
@@ -181,6 +185,8 @@ void receive_signals(void);
 void sigmask_set_temp(sigset_t_ mask);
 
 struct sighand {
+    // the signalfds its processes poll (kernel/signalfd.c)
+    struct list signalfd_watches;
     atomic_uint refcount;
     struct sigaction_ action[NUM_SIGS];
     lock_t lock;
