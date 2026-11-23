@@ -30,7 +30,7 @@ def disasm(words):
 def main():
     per = int(sys.argv[3]) if len(sys.argv) > 3 else 3
     bad = collections.OrderedDict()
-    fpsr_only = runs = 0
+    runs = 0
     words = set()
     for n, i in zip(records(sys.argv[1]), records(sys.argv[2])):
         runs += 1
@@ -45,6 +45,8 @@ def main():
                     diffs.append(f'x{r} {n[X0 + r]:#x} vs {i[X0 + r]:#x}')
             if n[NZCV] != i[NZCV]:
                 diffs.append(f'nzcv {n[NZCV]:#x} vs {i[NZCV]:#x}')
+            if n[FPSR] != i[FPSR]:
+                diffs.append(f'fpsr {n[FPSR]:#x} vs {i[FPSR]:#x}')
             if n[MEM] != i[MEM]:
                 diffs.append('memory window differs')
             for r in range(32):
@@ -52,10 +54,8 @@ def main():
                     diffs.append(f'v{r} {n[V0 + r][::-1].hex()} vs {i[V0 + r][::-1].hex()}')
         if diffs:
             bad.setdefault(n[0], []).append((n[2], diffs))
-        elif n[FPSR] != i[FPSR]:
-            fpsr_only += 1
     print(f'{len(words)} instructions, {runs} runs; {len(bad)} instructions differ '
-          f'(registers/flags/memory/status); {fpsr_only} runs differ only in FPSR')
+          f'(registers/flags/FPSR/memory/status)')
     names = disasm(list(bad))
     groups = collections.defaultdict(list)
     for w, runs in bad.items():

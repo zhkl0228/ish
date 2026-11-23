@@ -37,14 +37,15 @@ words (ADR/ADRP, literal loads) and words that would move or address SP.
 ## Reading the results
 
 Each `cmp_<set>.txt` groups the differing words by mnemonic with the first
-registers that differ. Two kinds of differences are not emulation bugs:
+registers that differ, FPSR's exception flags among them. Two kinds of
+differences are not emulation bugs:
 
-- Runs that differ only in FPSR: iSH does not model the cumulative FP
-  exception flags. They are counted, not listed.
 - In `ldst_simd`, register-offset addressing (`ldr b0, [x11, x9]`) adds two
   pointers and lands outside the buffer; whether that address is mapped
   depends on the process's address space, so the native run can get SIGSEGV
   where iSH reads something, or the other way round.
+- `status native=4 ish=0`: the host CPU lacks an instruction iSH implements
+  (SM3 and SM4 on Apple cores).
 
 A `status native=0 ish=4` line means iSH raised SIGILL: the instruction is not
 implemented.

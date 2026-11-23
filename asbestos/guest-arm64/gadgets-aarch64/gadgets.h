@@ -10,6 +10,10 @@
 // =================================
 
 // Interrupt types (from emu/interrupt.h)
+// The FPCR bits a guest may set: AHP, DN, FZ, RMode and FZ16. Not the trap
+// enables, nor FEAT_AFP's FIZ, AH and NEP, which are not offered to it.
+#define FPCR_GUEST_BITS 0x07c80000
+
 #define INT_NONE -1
 #define INT_DIV 0
 #define INT_DEBUG 1

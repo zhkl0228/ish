@@ -3608,7 +3608,11 @@ msub_store:
     b 2f
 1:  mov x10, #0
 2:
+    // the bits the guest may set (fiber_enter); the others read back as 0
+    movz w11, #(FPCR_GUEST_BITS >> 16), lsl #16
+    and w10, w10, w11
     str w10, [_cpu, #CPU_fpcr]
+    msr fpcr, x10
     gret
 
 // MSR FPSR, Xt - write floating-point status register
@@ -3625,7 +3629,8 @@ msub_store:
     b 2f
 1:  mov x10, #0
 2:
-    str w10, [_cpu, #CPU_fpsr]
+    // live in the host's FPSR, saved to cpu->fpsr at fiber_exit
+    msr fpsr, x10
     gret
 
 // MSR DAIF, Xt - write interrupt mask register (NOP in emulation)
@@ -3716,11 +3721,11 @@ msub_store:
     b .Lmrs_store
 
 .Lmrs_fpcr:
-    ldr w10, [_cpu, #CPU_fpcr]
+    mrs x10, fpcr
     b .Lmrs_store
 
 .Lmrs_fpsr:
-    ldr w10, [_cpu, #CPU_fpsr]
+    mrs x10, fpsr
     b .Lmrs_store
 
 .Lmrs_rndr:
