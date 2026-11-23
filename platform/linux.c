@@ -1,4 +1,5 @@
 #include <sys/sysinfo.h>
+#include <time.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
@@ -43,8 +44,12 @@ struct mem_usage get_mem_usage() {
 struct uptime_info get_uptime() {
     struct sysinfo info;
     sysinfo(&info);
+    // sysinfo's uptime is whole seconds; /proc/uptime shows hundredths, from
+    // the clock Linux reads it from.
+    struct timespec boot;
+    clock_gettime(CLOCK_BOOTTIME, &boot);
     struct uptime_info uptime = {
-        .uptime_ticks = info.uptime * 100, // hundredths of a second
+        .uptime_ticks = (uint64_t) boot.tv_sec * 100 + boot.tv_nsec / 10000000, // hundredths of a second
         .load_1m = info.loads[0],
         .load_5m = info.loads[1],
         .load_15m = info.loads[2],
