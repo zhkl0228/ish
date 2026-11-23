@@ -408,7 +408,18 @@ static void proc_maps_show_regions(struct task *task, struct proc_data *buf, boo
             if (!(pt->data == data || (pt->flags & P_ANONYMOUS && start_pt->flags & P_ANONYMOUS)))
                 break;
             smaps_count_page(&counts, pt->flags);
-            mem_next_page(mem, &page);
+            // mem_next_page skips page tables that hold nothing, so where it
+            // goes further than the next page, there was a gap: the region
+            // ends here. Without this an anonymous mapping ran on across the
+            // gap into the next one with its permissions: a JVM's hs_err map
+            // had one rw-p line of 15TB, up to where its CDS archive starts.
+            page_t next = page;
+            mem_next_page(mem, &next);
+            if (next != page + 1) {
+                page++;
+                break;
+            }
+            page = next;
         }
         page_t end = page;
 

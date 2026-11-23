@@ -12,6 +12,10 @@
 // checks that the written page counts as Private_Dirty before the fork, and
 // that a read-only anonymous neighbour has its own entry.
 //
+// And that two anonymous mappings with address space between them that never
+// had a page table are two entries: maps and smaps walked with mem_next_page,
+// which skips such page tables, and took the next mapping for the same one.
+//
 // Build: aarch64-linux-musl-gcc -static -O0 -o regress_smaps regress_smaps.c
 // Run:   ish -r <rootfs> /tmp/regress_smaps
 
@@ -56,6 +60,51 @@ static long smaps_field(unsigned long addr, const char *field) {
     }
     fclose(f);
     return value;
+}
+
+// The /proc/self/maps entry that contains addr: 1 and its bounds, or 0
+static int maps_entry(unsigned long addr, unsigned long *from, unsigned long *to) {
+    FILE *f = fopen("/proc/self/maps", "r");
+    if (f == NULL)
+        return 0;
+    char line[512];
+    int found = 0;
+    while (!found && fgets(line, sizeof(line), f) != NULL)
+        found = sscanf(line, "%lx-%lx", from, to) == 2 && *from <= addr && addr < *to;
+    fclose(f);
+    return found;
+}
+
+// Two RW pages 64MB apart, in address space nothing had used, the first one
+// ending on a 2MB boundary: the end of one of iSH's page tables, where the
+// next page is in another, which mem_next_page skips when it is not there.
+static void gap_ends_entry(long page) {
+    char *probe = mmap(NULL, 256 << 20, PROT_NONE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+    if (probe == MAP_FAILED) {
+        printf("  SKIP no 256MB of address space to probe\n");
+        return;
+    }
+    munmap(probe, 256 << 20);
+    unsigned long two_mb = 2UL << 20;
+    char *boundary = (char *) (((unsigned long) probe + page + two_mb - 1) & ~(two_mb - 1));
+    char *want_a = boundary - page, *want_b = boundary + (64 << 20);
+    char *a = mmap(want_a, page, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+    char *b = mmap(want_b, page, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+    if (a != want_a || b != want_b) {
+        printf("  SKIP the pages were not mapped where asked\n");
+        return;
+    }
+    *a = 1;
+    *b = 1;
+    unsigned long from, to;
+    int ok = maps_entry((unsigned long) a, &from, &to) && to == (unsigned long) a + page;
+    if (!ok)
+        printf("  the entry of the first page ends at %#lx, expected %#lx\n", to, (unsigned long) a + page);
+    check(ok, "an anonymous mapping's entry ends where it does, not at the next one");
+    ok = maps_entry((unsigned long) b, &from, &to) && from == (unsigned long) b;
+    check(ok, "the next one beyond the gap has its own entry");
+    munmap(a, page);
+    munmap(b, page);
 }
 
 int main(void) {
@@ -111,6 +160,8 @@ int main(void) {
     if (shared_dirty != kb)
         printf("  Shared_Dirty in the child is %ld, expected %ld\n", shared_dirty, kb);
     check(shared_dirty == kb, "child sees the page shared dirty (redis check)");
+
+    gap_ends_entry(page);
 
     printf("%d passed, %d failed\n", passed, failed);
     return failed != 0;
