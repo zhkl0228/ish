@@ -160,6 +160,9 @@ struct fd {
     // fd again right after open, which on fakefs is a third meta.db
     // transaction per exec for a value it already had.
     struct statbuf open_stat;
+    // generic_openat opened it and reported IN_OPEN: its last close reports
+    // IN_CLOSE_WRITE or IN_CLOSE_NOWRITE (kernel/inotify.h)
+    bool inotify_opened;
     struct statbuf stat; // for adhoc fs
     struct fd_sockrestart sockrestart; // argh
 

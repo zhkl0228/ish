@@ -598,6 +598,17 @@ EOF
         status=1
     fi
     echo
+    echo "########## inotify: events of the filesystem operations ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_inotify" tests/regress/regress_inotify.c; then
+        out=$(timeout 120 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_inotify 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_inotify"
+    else
+        echo "failed to build regress_inotify" >&2
+        status=1
+    fi
+    echo
     echo "########## JIT: a host fault in native code (ish -Djit=true; skips otherwise) ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_jit_fault" tests/regress/regress_jit_fault.c; then
         for mode in resume unknown; do

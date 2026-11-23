@@ -1,3 +1,4 @@
+#include "kernel/inotify.h"
 #include "debug.h"
 #include <string.h>
 #include <sys/stat.h>
@@ -236,6 +237,8 @@ static ssize_t sys_read_buf(fd_t fd_no, void *buf, size_t size) {
         return _EBADF;
     }
 
+    if (res > 0)
+        inotify_fd(fd, IN_ACCESS_);
     if (res >= 0) {
         size_t print_size = res;
         if (print_size > 100) print_size = 100;
@@ -274,6 +277,8 @@ static ssize_t sys_write_buf(fd_t fd_no, void *buf, size_t size) {
     } else {
         return _EBADF;
     }
+    if (res > 0)
+        inotify_fd(fd, IN_MODIFY_);
     return res;
 }
 
@@ -508,6 +513,8 @@ dword_t sys_pread(fd_t f, addr_t buf_addr, dword_t size, off_t_ off) {
     }
 out:
     unlock(&fd->lock);
+    if (res > 0)
+        inotify_fd(fd, IN_ACCESS_);
     free(buf);
     return res;
 }
@@ -539,6 +546,8 @@ dword_t sys_pwrite(fd_t f, addr_t buf_addr, dword_t size, off_t_ off) {
         }
     }
     unlock(&fd->lock);
+    if (res > 0)
+        inotify_fd(fd, IN_MODIFY_);
     free(buf);
     return res;
 }
@@ -590,6 +599,8 @@ dword_t sys_preadv(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count,
     unlock(&fd->lock);
     if (res < 0)
         goto error;
+    if (res > 0)
+        inotify_fd(fd, IN_ACCESS_);
 
     size_t offset = 0;
     size_t remaining = res;
@@ -650,6 +661,8 @@ dword_t sys_pwritev(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count,
         res = _ESPIPE;
     }
     unlock(&fd->lock);
+    if (res > 0)
+        inotify_fd(fd, IN_MODIFY_);
 
 error:
     free(buf);
@@ -1072,7 +1085,10 @@ dword_t sys_utime(addr_t path_addr, addr_t times_addr) {
 static int generic_fsetattr(struct fd *fd, struct attr attr) {
     if (fd->mount->fs->fsetattr == NULL)
         return _EPERM;
-    return fd->mount->fs->fsetattr(fd, attr);
+    int err = fd->mount->fs->fsetattr(fd, attr);
+    if (err >= 0)
+        inotify_fd(fd, attr.type == attr_size ? IN_MODIFY_ : IN_ATTRIB_);
+    return err;
 }
 
 dword_t sys_fchmod(fd_t f, dword_t mode) {
@@ -1290,7 +1306,24 @@ dword_t sys_fsync(fd_t f) {
 dword_t sys_sendfile(fd_t out_fd, fd_t in_fd, addr_t offset_addr, dword_t count) {
     return sys_sendfile64(out_fd, in_fd, offset_addr, count);
 }
+// What a copy between files read and wrote, for inotify
+static void inotify_copy(fd_t in_fd, fd_t out_fd) {
+    struct fd *in = f_get(in_fd);
+    struct fd *out = f_get(out_fd);
+    if (in != NULL)
+        inotify_fd(in, IN_ACCESS_);
+    if (out != NULL)
+        inotify_fd(out, IN_MODIFY_);
+}
+
+static dword_t sendfile_copy(fd_t out_fd, fd_t in_fd, addr_t offset_addr, dword_t count);
 dword_t sys_sendfile64(fd_t out_fd, fd_t in_fd, addr_t offset_addr, dword_t count) {
+    dword_t res = sendfile_copy(out_fd, in_fd, offset_addr, count);
+    if ((int_t) res > 0)
+        inotify_copy(in_fd, out_fd);
+    return res;
+}
+static dword_t sendfile_copy(fd_t out_fd, fd_t in_fd, addr_t offset_addr, dword_t count) {
     STRACE("sendfile64(%d, %d, 0x%x, %d)", out_fd, in_fd, offset_addr, count);
     struct fd *in = f_get(in_fd);
     if (in == NULL)
@@ -1355,7 +1388,16 @@ dword_t sys_sendfile64(fd_t out_fd, fd_t in_fd, addr_t offset_addr, dword_t coun
 dword_t sys_splice(fd_t UNUSED(in_fd), addr_t UNUSED(in_off_addr), fd_t UNUSED(out_fd), addr_t UNUSED(out_off_addr), dword_t UNUSED(count), dword_t UNUSED(flags)) {
     return _EINVAL;
 }
+static dword_t copy_file_range_copy(fd_t in_fd, addr_t in_off_addr, fd_t out_fd,
+        addr_t out_off_addr, dword_t len, uint_t flags);
 dword_t sys_copy_file_range(fd_t in_fd, addr_t in_off_addr, fd_t out_fd,
+        addr_t out_off_addr, dword_t len, uint_t flags) {
+    dword_t res = copy_file_range_copy(in_fd, in_off_addr, out_fd, out_off_addr, len, flags);
+    if ((int_t) res > 0)
+        inotify_copy(in_fd, out_fd);
+    return res;
+}
+static dword_t copy_file_range_copy(fd_t in_fd, addr_t in_off_addr, fd_t out_fd,
         addr_t out_off_addr, dword_t len, uint_t flags) {
     STRACE("copy_file_range(%d, 0x%x, %d, 0x%x, %d, %d)", in_fd, in_off_addr, out_fd, out_off_addr, len, flags);
     if (flags != 0)

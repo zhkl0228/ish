@@ -27,6 +27,8 @@ struct inode_data {
     // turned into hundreds of threads parked in pthread_mutex_lock (IPS
     // 2026-09-18). Guarded by inodes_lock.
     bool orphan_pending;
+    // inode_unlinked() found it open: its last close tells inotify it is gone
+    bool gone_pending;
 
     lock_t lock;
 };
@@ -47,6 +49,10 @@ struct inode_data *inode_get_unlocked(struct mount *mount, ino_t inode);
 
 // calls mount->fs->inode_orphaned if this inode is orphaned, while holding indoes_lock
 void inode_check_orphaned(struct mount *mount, ino_t ino);
+// The inode lost its last link (generic_unlinkat, _rmdirat, _renameat): its
+// inotify watches see it gone now, or at its last close if it is open, as
+// Linux's do
+void inode_unlinked(struct mount *mount, ino_t ino);
 
 // file locking stuff (maybe should go in kernel/calls.h?)
 

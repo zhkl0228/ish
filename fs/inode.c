@@ -1,3 +1,4 @@
+#include "kernel/inotify.h"
 #include <stdlib.h>
 #include "util/list.h"
 #include "kernel/fs.h"
@@ -34,6 +35,7 @@ struct inode_data *inode_get_unlocked(struct mount *mount, ino_t ino) {
         inode->mount = mount;
         inode->socket_id = 0;
         inode->orphan_pending = false;
+        inode->gone_pending = false;
         cond_init(&inode->posix_unlock);
         list_init(&inode->posix_locks);
         list_init(&inode->chain);
@@ -66,6 +68,16 @@ void inode_check_orphaned(struct mount *mount, ino_t ino) {
     unlock(&inodes_lock);
 }
 
+void inode_unlinked(struct mount *mount, ino_t ino) {
+    lock(&inodes_lock);
+    struct inode_data *inode = inode_get_data(mount, ino);
+    if (inode != NULL)
+        inode->gone_pending = true;
+    unlock(&inodes_lock);
+    if (inode == NULL)
+        inotify_inode_gone(mount, ino);
+}
+
 void inode_retain(struct inode_data *inode) {
     lock(&inode->lock);
     inode->refcount++;
@@ -86,6 +98,8 @@ void inode_release(struct inode_data *inode) {
         if (pending && inode->mount->fs->inode_orphaned)
             inode->mount->fs->inode_orphaned(inode->mount, inode->number);
         unlock(&inodes_lock);
+        if (inode->gone_pending)
+            inotify_inode_gone(inode->mount, inode->number);
         mount_release(inode->mount);
         free(inode);
     } else {

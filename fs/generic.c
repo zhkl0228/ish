@@ -9,6 +9,7 @@
 #include "fs/dev.h"
 #include "kernel/task.h"
 #include "kernel/errno.h"
+#include "kernel/inotify.h"
 
 struct mount *find_mount_and_trim_path(char *path) {
     struct mount *mount = mount_find(path);
@@ -47,6 +48,13 @@ struct fd *generic_openat(struct fd *at, const char *path_raw, int flags, int mo
     if (err < 0)
         return ERR_PTR(err);
     struct mount *mount = find_mount_and_trim_path(path);
+    // For inotify: whether the open makes the file (IN_CREATE) or empties
+    // one that was there (IN_MODIFY)
+    bool existed = true;
+    if ((flags & O_CREAT_) && inotify_wants(IN_CREATE_ | IN_MODIFY_)) {
+        struct statbuf before;
+        existed = mount->fs->stat(mount, path, &before) >= 0;
+    }
     struct fd *fd = mount->fs->open(mount, path, flags, mode);
     if (IS_ERR(fd)) {
         // if an error happens after this point, fd_close will release the
@@ -55,6 +63,8 @@ struct fd *generic_openat(struct fd *at, const char *path_raw, int flags, int mo
         return fd;
     }
     fd->mount = mount;
+    if (!existed)
+        inotify_child(mount, path, IN_CREATE_, 0);
 
     struct statbuf stat;
     if (fd->inode != NULL) {
@@ -127,6 +137,10 @@ struct fd *generic_openat(struct fd *at, const char *path_raw, int flags, int mo
     err = _ENOTDIR;
     if (!S_ISDIR(fd->type) && flags & O_DIRECTORY_)
         goto error;
+    fd->inotify_opened = true;
+    inotify_fd(fd, IN_OPEN_);
+    if (existed && (flags & O_TRUNC_) && S_ISREG(fd->type) && (flags & (O_WRONLY_ | O_RDWR_)))
+        inotify_fd(fd, IN_MODIFY_);
     return fd;
 
 error:
@@ -183,6 +197,12 @@ int generic_linkat(struct fd *src_at, const char *src_raw, struct fd *dst_at, co
         err = _EPERM;
     else
         err = mount->fs->link(mount, src, dst);
+    if (err >= 0 && mount == dst_mount) {
+        struct statbuf linked;
+        if (inotify_wants(IN_ATTRIB_) && mount->fs->stat(mount, dst, &linked) >= 0)
+            inotify_inode(mount, linked.inode, IN_ATTRIB_);   // its link count
+        inotify_child(mount, dst, IN_CREATE_, 0);
+    }
     path_cache_invalidate();
     mount_release(mount);
     mount_release(dst_mount);
@@ -199,9 +219,18 @@ int generic_unlinkat(struct fd *at, const char *path_raw) {
     if (err < 0)
         return err;
     struct mount *mount = find_mount_and_trim_path(path);
+    // For inotify, what goes: watches on it end with its last link
+    struct statbuf gone;
+    bool watched = atomic_load(&inotify_watched) != 0 && mount->fs->stat(mount, path, &gone) >= 0;
     err = _EPERM;
     if (mount->fs->unlink)
         err = mount->fs->unlink(mount, path);
+    if (err >= 0 && watched) {
+        inotify_inode(mount, gone.inode, IN_ATTRIB_);   // its link count
+        if (gone.nlink <= 1)
+            inode_unlinked(mount, gone.inode);
+        inotify_child(mount, path, IN_DELETE_, 0);
+    }
     path_cache_invalidate();
     mount_release(mount);
     return err;
@@ -222,12 +251,32 @@ int generic_renameat(struct fd *src_at, const char *src_raw, struct fd *dst_at, 
         return _EBUSY;
     struct mount *mount = find_mount_and_trim_path(src);
     struct mount *dst_mount = find_mount_and_trim_path(dst);
+    // For inotify: what moves, and what it replaces. One file under both
+    // names is no rename at all.
+    struct statbuf from, to;
+    bool watched = atomic_load(&inotify_watched) != 0 && mount == dst_mount &&
+            mount->fs->stat(mount, src, &from) >= 0;
+    bool replaces = watched && mount->fs->stat(mount, dst, &to) >= 0;
+    if (replaces && to.inode == from.inode)
+        watched = replaces = false;
     if (mount != dst_mount)
         err = _EXDEV;
     else if (mount->fs->rename == NULL)
         err = _EPERM;
     else
         err = mount->fs->rename(mount, src, dst);
+    if (err >= 0 && watched) {
+        uint32_t isdir = S_ISDIR(from.mode) ? IN_ISDIR_ : 0;
+        uint32_t cookie = inotify_cookie();
+        inotify_child(mount, src, IN_MOVED_FROM_ | isdir, cookie);
+        inotify_child(mount, dst, IN_MOVED_TO_ | isdir, cookie);
+        inotify_inode(mount, from.inode, IN_MOVE_SELF_);
+        if (replaces) {
+            inotify_inode(mount, to.inode, IN_ATTRIB_ | (S_ISDIR(to.mode) ? IN_ISDIR_ : 0));
+            if (S_ISDIR(to.mode) || to.nlink <= 1)
+                inode_unlinked(mount, to.inode);
+        }
+    }
     path_cache_invalidate();
     mount_release(mount);
     mount_release(dst_mount);
@@ -243,6 +292,8 @@ int generic_symlinkat(const char *target, struct fd *at, const char *link_raw) {
     err = _EPERM;
     if (mount->fs->symlink)
         err = mount->fs->symlink(mount, target, link);
+    if (err >= 0)
+        inotify_child(mount, link, IN_CREATE_, 0);
     path_cache_invalidate();
     mount_release(mount);
     return err;
@@ -262,6 +313,8 @@ int generic_mknodat(struct fd *at, const char *path_raw, mode_t_ mode, dev_t_ de
     err = _EPERM;
     if (mount->fs->mknod)
         err = mount->fs->mknod(mount, path, mode, dev);
+    if (err >= 0)
+        inotify_child(mount, path, IN_CREATE_, 0);
     path_cache_invalidate();
     mount_release(mount);
     return err;
@@ -276,6 +329,8 @@ int generic_setattrat(struct fd *at, const char *path_raw, struct attr attr, boo
     err = _EPERM;
     if (mount->fs->setattr)
         err = mount->fs->setattr(mount, path, attr);
+    if (err >= 0)
+        inotify_path(mount, path, attr.type == attr_size ? IN_MODIFY_ : IN_ATTRIB_);
     mount_release(mount);
     return err;
 }
@@ -289,6 +344,8 @@ int generic_utime(struct fd *at, const char *path_raw, struct timespec atime, st
     err = _EPERM;
     if (mount->fs->utime)
         err = mount->fs->utime(mount, path, atime, mtime);
+    if (err >= 0)
+        inotify_path(mount, path, IN_ATTRIB_);
     mount_release(mount);
     return err;
 }
@@ -315,6 +372,8 @@ int generic_mkdirat(struct fd *at, const char *path_raw, mode_t_ mode) {
     err = _EPERM;
     if (mount->fs->mkdir)
         err = mount->fs->mkdir(mount, path, mode);
+    if (err >= 0)
+        inotify_child(mount, path, IN_CREATE_ | IN_ISDIR_, 0);
     path_cache_invalidate();
     mount_release(mount);
     return err;
@@ -328,9 +387,15 @@ int generic_rmdirat(struct fd *at, const char *path_raw) {
     if (contains_mount_point(path))
         return _EBUSY;
     struct mount *mount = find_mount_and_trim_path(path);
+    struct statbuf gone;
+    bool watched = atomic_load(&inotify_watched) != 0 && mount->fs->stat(mount, path, &gone) >= 0;
     err = _EPERM;
     if (mount->fs->rmdir)
         err = mount->fs->rmdir(mount, path);
+    if (err >= 0 && watched) {
+        inode_unlinked(mount, gone.inode);
+        inotify_child(mount, path, IN_DELETE_ | IN_ISDIR_, 0);
+    }
     path_cache_invalidate();
     mount_release(mount);
     return err;

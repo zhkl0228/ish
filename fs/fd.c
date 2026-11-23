@@ -1,3 +1,4 @@
+#include "kernel/inotify.h"
 #include <stdlib.h>
 #include <string.h>
 #include "debug.h"
@@ -34,6 +35,8 @@ struct fd *fd_retain(struct fd *fd) {
 int fd_close(struct fd *fd) {
     int err = 0;
     if (--fd->refcount == 0) {
+        if (fd->inotify_opened)
+            inotify_fd(fd, fd->flags & (O_WRONLY_ | O_RDWR_) ? IN_CLOSE_WRITE_ : IN_CLOSE_NOWRITE_);
         poll_cleanup_fd(fd);
         if (fd->ops->close)
             err = fd->ops->close(fd);

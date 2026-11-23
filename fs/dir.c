@@ -1,3 +1,4 @@
+#include "kernel/inotify.h"
 #include <sys/stat.h>
 #include <string.h>
 
@@ -127,6 +128,7 @@ int_t sys_getdents_common(fd_t f, addr_t dirents, dword_t count,
 #if DENTS_DEBUG
     fprintf(stderr, "getdents: returning %d bytes\n", orig_count - count);
 #endif
+    inotify_fd(fd, IN_ACCESS_);
     return orig_count - count;
 }
 

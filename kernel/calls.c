@@ -16,6 +16,7 @@
 #include "fs/fd.h"
 #include "fs/dev.h"
 #include "fs/real.h"
+#include "kernel/inotify.h"
 #ifdef ISH_JIT
 #include "asbestos/guest-arm64/jit.h"
 #endif
@@ -743,7 +744,10 @@ static inline int fast_read(struct cpu_state *cpu) {
         return -1;
 
     // Not a pipe or FIFO: a read there can wait for good, and only
-    // realfs_read lets a signal end the wait.
+    // realfs_read lets a signal end the wait. Nor while reads are watched
+    // (inotify's IN_ACCESS: sys_read_buf reports it).
+    if (inotify_wants(IN_ACCESS_))
+        return -1;
     struct fd *fd = f_get(fd_no);
     if (fd == NULL || fd->ops != &realfs_fdops || S_ISFIFO(fd->type))
         return -1;
@@ -775,7 +779,9 @@ static inline int fast_write(struct cpu_state *cpu) {
     if (size > 4096)
         return -1;
 
-    // as fast_read: not a pipe or FIFO
+    // as fast_read: not a pipe or FIFO, nor while writes are watched
+    if (inotify_wants(IN_MODIFY_))
+        return -1;
     struct fd *fd = f_get(fd_no);
     if (fd == NULL || fd->ops != &realfs_fdops || S_ISFIFO(fd->type))
         return -1;
