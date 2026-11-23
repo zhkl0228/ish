@@ -41,6 +41,9 @@
 
 @property (weak, nonatomic) IBOutlet NSLayoutConstraint *saddamHussein;
 
+// What keyboardMoved: added to the table's bottom inset
+@property CGFloat keyboardInset;
+
 @end
 
 @implementation AboutViewController
@@ -48,6 +51,10 @@
 - (void)viewDidLoad {
     [super viewDidLoad];
     [self _updateUI];
+    NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
+    [center addObserver:self selector:@selector(keyboardMoved:) name:UIKeyboardDidShowNotification object:nil];
+    [center addObserver:self selector:@selector(keyboardMoved:) name:UIKeyboardDidChangeFrameNotification object:nil];
+    [center addObserver:self selector:@selector(keyboardHidden:) name:UIKeyboardWillHideNotification object:nil];
     if (self.recoveryMode) {
         self.includeDebugPanel = YES;
         self.navigationItem.title = @"Recovery Mode";
@@ -177,6 +184,40 @@
 
 - (IBAction)disableDimmingChanged:(id)sender {
     UserPreferences.shared.shouldDisableDimming = self.disableDimmingSwitch.on;
+}
+
+// UITableViewController keeps the field being edited above the keyboard, but
+// not presented as a form sheet on a large screen (an unfolded foldable, an
+// iPad): the keyboard covered the rows at the bottom, the Claude proxy among
+// them. What of the table the keyboard still covers is added to its bottom
+// inset, and the field is scrolled into view.
+- (void)keyboardMoved:(NSNotification *)notification {
+    UIWindow *window = self.view.window;
+    if (window == nil)
+        return;
+    CGRect keyboard = [window convertRect:[notification.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue]
+                      fromCoordinateSpace:window.screen.coordinateSpace];
+    CGRect table = [self.tableView convertRect:self.tableView.bounds toView:nil];
+    CGFloat covered = CGRectGetHeight(CGRectIntersection(table, keyboard));
+    // the bottom inset without this one's: the safe area's, and the table
+    // controller's own for the keyboard when it gives one
+    CGFloat others = self.tableView.adjustedContentInset.bottom - self.keyboardInset;
+    CGFloat inset = MAX(0, covered - others);
+    UIEdgeInsets contentInset = self.tableView.contentInset;
+    contentInset.bottom += inset - self.keyboardInset;
+    self.tableView.contentInset = contentInset;
+    self.keyboardInset = inset;
+    for (UITextField *field in @[self.claudeProxyField, self.launchCommandField, self.bootCommandField]) {
+        if (field.isFirstResponder)
+            [self.tableView scrollRectToVisible:[self.tableView convertRect:field.bounds fromView:field] animated:YES];
+    }
+}
+
+- (void)keyboardHidden:(NSNotification *)notification {
+    UIEdgeInsets contentInset = self.tableView.contentInset;
+    contentInset.bottom -= self.keyboardInset;
+    self.tableView.contentInset = contentInset;
+    self.keyboardInset = 0;
 }
 
 - (IBAction)textBoxSubmit:(id)sender {
