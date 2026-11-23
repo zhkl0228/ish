@@ -223,6 +223,8 @@ static inline int sock_flags_from_real(int real) {
 #define SO_TIMESTAMP_ 29
 #define SO_PROTOCOL_ 38
 #define SO_DOMAIN_ 39
+#define SO_RCVTIMEO_OLD_ 20
+#define SO_SNDTIMEO_OLD_ 21
 #define SO_RCVTIMEO_ 66
 #define SO_SNDTIMEO_ 67
 #define IP_TOS_ 1
@@ -262,6 +264,14 @@ static inline int sock_opt_to_real(int fake, int level) {
             case SO_TIMESTAMP_: return SO_TIMESTAMP;
             case SO_RCVTIMEO_: return SO_RCVTIMEO;
             case SO_SNDTIMEO_: return SO_SNDTIMEO;
+#ifdef GUEST_ARM64
+            // What a 64-bit guest's libc calls SO_RCVTIMEO and SO_SNDTIMEO
+            // (musl's and glibc's): Linux's _OLD ones, of the same 64-bit
+            // timeval there as 66 and 67. They failed with EINVAL: iputils'
+            // ping said so on each run, and a receive timeout never came.
+            case SO_RCVTIMEO_OLD_: return SO_RCVTIMEO;
+            case SO_SNDTIMEO_OLD_: return SO_SNDTIMEO;
+#endif
             case SO_REUSEPORT_: return SO_REUSEPORT;
         } break;
         case IPPROTO_TCP: switch (fake) {

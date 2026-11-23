@@ -1426,7 +1426,7 @@ int_t sys_setsockopt(fd_t sock_fd, dword_t level, dword_t option, addr_t value_a
     // Both of Linux's numbers for it are taken: 20 is what a 64-bit guest's
     // libc uses, 66 the newer 64-bit-time one.
     if (fd_is_netlink_stub(sock)) {
-        if (level == SOL_SOCKET_ && (option == 20 || option == SO_RCVTIMEO_) && value_len >= 16) {
+        if (level == SOL_SOCKET_ && (option == SO_RCVTIMEO_OLD_ || option == SO_RCVTIMEO_) && value_len >= 16) {
             int64_t sec, usec;
             memcpy(&sec, value, 8);
             memcpy(&usec, value + 8, 8);

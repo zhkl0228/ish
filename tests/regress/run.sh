@@ -697,6 +697,17 @@ EOF
         status=1
     fi
     echo
+    echo "########## SO_RCVTIMEO and SO_SNDTIMEO as a 64-bit libc names them ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_sock_timeout" tests/regress/regress_sock_timeout.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_sock_timeout 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_sock_timeout"
+    else
+        echo "failed to build regress_sock_timeout" >&2
+        status=1
+    fi
+    echo
     echo "########## floating-point environment: exception flags, rounding mode ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_fenv" tests/regress/regress_fenv.c -lm; then
         out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_fenv 2>&1)
