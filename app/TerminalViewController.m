@@ -65,6 +65,10 @@
 @property (nullable) ClipboardStackView *stackView;
 
 @property BOOL ignoreKeyboardMotion;
+// The last keyboard notice not yet acted on, and whether a turn of the run
+// loop is to act on it (keyboardDidSomething:)
+@property (nullable) NSNotification *pendingKeyboardNotice;
+@property BOOL keyboardNoticeScheduled;
 @property (nonatomic) BOOL hasExternalKeyboard;
 
 @end
@@ -144,6 +148,10 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
     [center addObserver:self
                selector:@selector(keyboardDidSomething:)
                    name:UIKeyboardDidChangeFrameNotification
+                 object:nil];
+    [center addObserver:self
+               selector:@selector(sceneDidActivate:)
+                   name:UISceneDidActivateNotification
                  object:nil];
     [center addObserver:self
                selector:@selector(_updateBadge)
@@ -567,10 +575,46 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
     return UserPreferences.shared.hideStatusBar;
 }
 
+// A keyboard notice comes from the keyboard's window laying itself out: acted
+// on there, the view's layout made that window's layout dirty again, and the
+// next pass told of another frame, in the same commit of the layer tree for
+// as long as the two went back and forth. It started with the snapshots for
+// the app switcher, the app gone to the background or the screen locked; the
+// app, suspended, went on with it when it came back, deaf to touches, until
+// the watchdog killed it (0x8BADF00D, scene-update; build/ish-crash-reports
+// of 2026-11-22 174953 and 180445, of 2026-11-23 162024, 193015, 204457 and
+// 204518, hterm's and xterm.js's alike). So the last of the notices of a
+// turn of the run loop is acted on after it, once, and in the background not
+// at all: the last of them when the scene is active again.
 - (void)keyboardDidSomething:(NSNotification *)notification {
     if (self.ignoreKeyboardMotion)
         return;
+    self.pendingKeyboardNotice = notification;
+    if (!self.keyboardNoticeScheduled)
+        [self scheduleKeyboardNotice];
+}
 
+- (void)scheduleKeyboardNotice {
+    self.keyboardNoticeScheduled = YES;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self.keyboardNoticeScheduled = NO;
+        // kept for sceneDidActivate:
+        if (self.view.window.windowScene.activationState == UISceneActivationStateBackground)
+            return;
+        NSNotification *notice = self.pendingKeyboardNotice;
+        self.pendingKeyboardNotice = nil;
+        [self keyboardMoved:notice];
+    });
+}
+
+- (void)sceneDidActivate:(NSNotification *)notification {
+    if (notification.object != self.view.window.windowScene)
+        return;
+    if (self.pendingKeyboardNotice != nil && !self.keyboardNoticeScheduled)
+        [self scheduleKeyboardNotice];
+}
+
+- (void)keyboardMoved:(NSNotification *)notification {
     CGRect screenKeyboardFrame = [notification.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
     UIScreen *screen = UIScreen.mainScreen;
     // notification.object is nil before iOS 16.1 and the correct UIScreen after iOS 16.1
@@ -603,11 +647,7 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
     UIView *extraKeys = self.termView.inputAccessoryView;
     NSLog(@"%@ keyboard %@ -> pad %.1f; extra keys at %@ (window %@)", notification.name, @(keyboardFrame), pad,
           @([self.view convertRect:extraKeys.bounds fromView:extraKeys]), extraKeys.window != nil ? @"yes" : @"no");
-    // Nothing to move: a layout here lays out the keyboard's window, which
-    // tells of its frame again. Done for each such notice, it went on for
-    // good when the scene was resized (a foldable unfolded, a snapshot for
-    // the app switcher): the main thread spun, the terminal never took its
-    // new size, and the watchdog killed the app (0x8BADF00D, scene-update).
+    // Nothing to move: no layout, which would lay out the keyboard's window
     if (self.bottomConstraint.constant == pad)
         return;
     self.bottomConstraint.constant = pad;
