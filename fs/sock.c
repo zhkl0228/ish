@@ -228,7 +228,7 @@ static ssize_t netlink_stub_dequeue(struct fd *sock, int guest_flags, char *buf,
 
         if (current->sighand != NULL) {
             lock(&current->sighand->lock);
-            bool pending = !!(current->pending & ~current->blocked);
+            bool pending = task_signal_pending(current);
             unlock(&current->sighand->lock);
             if (pending)
                 return _EINTR;
@@ -1209,7 +1209,7 @@ static int sock_wait_for(int real_fd, short events, int timeout_opt) {
     for (;;) {
         if (current->sighand != NULL) {
             lock(&current->sighand->lock);
-            bool pending = !!(current->pending & ~current->blocked);
+            bool pending = task_signal_pending(current);
             unlock(&current->sighand->lock);
             if (pending)
                 return _EINTR;
@@ -2143,7 +2143,7 @@ static ssize_t sock_read(struct fd *fd, void *buf, size_t size) {
         // original realfs_read behavior for spurious EINTR).
         if (current->sighand != NULL) {
             lock(&current->sighand->lock);
-            bool pending = !!(current->pending & ~current->blocked);
+            bool pending = task_signal_pending(current);
             unlock(&current->sighand->lock);
             if (pending) { err = _EINTR; break; }
         }
@@ -2166,7 +2166,7 @@ static ssize_t sock_write(struct fd *fd, const void *buf, size_t size) {
         if (errno != EINTR) { err = errno_map(); break; }
         if (current->sighand != NULL) {
             lock(&current->sighand->lock);
-            bool pending = !!(current->pending & ~current->blocked);
+            bool pending = task_signal_pending(current);
             unlock(&current->sighand->lock);
             if (pending) { err = _EINTR; break; }
         }

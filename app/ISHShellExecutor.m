@@ -315,7 +315,7 @@ static dispatch_once_t _onceToken;
     lock(&pids_lock);
     struct task *task = pid_get_task((dword_t)pid);
     if (task) {
-        send_signal(task, signal, info);
+        send_process_signal(task->group, signal, info);
     }
     unlock(&pids_lock);
     return task != NULL;

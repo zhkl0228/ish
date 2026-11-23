@@ -1064,7 +1064,7 @@ static void handle_guest_kill(jbuf *j, int64_t id, const rpc_request *req) {
     lock(&pids_lock);
     struct task *task = pid_get_task((dword_t)pid);
     if (task) {
-        send_signal(task, (int)sig, info);
+        send_process_signal(task->group, (int)sig, info);
     }
     unlock(&pids_lock);
 

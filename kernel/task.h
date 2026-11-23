@@ -40,6 +40,8 @@ struct task {
     // locked by sighand->lock
     struct sighand *sighand;
     sigset_t_ blocked;
+    // Signals sent to this thread (tkill, faults, SIGPIPE), queued on queue.
+    // Those sent to its process are on the group's shared_queue.
     sigset_t_ pending;
     sigset_t_ waiting; // if nonzero, an ongoing call to sigtimedwait is waiting on these
     // Alternate signal stack (sigaltstack). Per thread, as on Linux: only the
@@ -183,7 +185,8 @@ void task_leave_session(struct task *task);
 struct posix_timer {
     struct timer *timer;
     int_t timer_id;
-    struct tgroup *tgroup;
+    struct tgroup *tgroup; // NULL for SIGEV_NONE
+    int_t method; // SIGEV_SIGNAL_: to the process; SIGEV_THREAD_ID_: to thread_pid
     pid_t_ thread_pid;
     int_t signal;
     union sigval_ sig_value;
@@ -202,6 +205,14 @@ struct tgroup {
 
     bool stopped;
     cond_t stopped_cond;
+
+    // Signals sent to the process as a whole: kill(), a process group's
+    // signal (a terminal's SIGINT), SIGCHLD, SIGALRM, a POSIX timer's
+    // SIGEV_SIGNAL. As Linux's shared_pending, any thread that does not block
+    // one takes it (send_process_signal). Locked by the sighand lock, which
+    // the threads share.
+    sigset_t_ shared_pending;
+    struct list shared_queue;
 
     struct tty *tty;
     struct timer *itimer;
@@ -244,6 +255,12 @@ struct tgroup {
     // for everything in this struct not locked by something else
     lock_t lock;
 };
+
+// Whether task has a signal waiting that it does not block, its own or its
+// process's: what ends an interruptible wait.
+static inline bool task_signal_pending(struct task *task) {
+    return ((task->pending | task->group->shared_pending) & ~task->blocked) != 0;
+}
 
 static inline bool task_is_leader(struct task *task) {
     return task->group->leader == task;

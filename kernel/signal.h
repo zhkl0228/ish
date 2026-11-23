@@ -154,6 +154,14 @@ void force_signal(struct task *task, int sig, struct siginfo_ info, bool to_defa
 bool try_self_signal(int sig);
 // send a signal to all processes in a group, could return ESRCH
 int send_group_signal(dword_t pgid, int sig, struct siginfo_ info);
+// Send a signal to a process as a whole (kill, SIGCHLD, SIGALRM): pending for
+// the process, taken by any thread that does not block it. Caller holds
+// pids_lock.
+struct tgroup;
+void send_process_signal(struct tgroup *group, int sig, struct siginfo_ info);
+// Wake threads to take the process's pending signals in set; see signal.c.
+// Caller holds pids_lock and the threads' sighand lock.
+void retarget_process_signals(struct tgroup *group, sigset_t_ set);
 // check for and deliver pending signals on current
 // must be called without pids_lock, current->group->lock, or current->sighand->lock
 void receive_signals(void);

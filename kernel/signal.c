@@ -58,20 +58,45 @@ static int signal_action(struct sighand *sighand, int sig) {
 // JSC's thread resume path uses RT signals (RTMIN/RT_1/RT_2); dropping a
 // duplicate as "already pending" loses a resume and wedges the GC handshake.
 #define SIGRTMIN_ 32
-static void deliver_signal_unlocked(struct task *task, int sig, struct siginfo_ info, bool forced) {
-    if (sig < SIGRTMIN_ && sigset_has(task->pending, sig))
-        return;
 
-    sigset_add(&task->pending, sig);
+// Queues sig on queue and pending, unless a standard signal is pending there
+// already. Returns whether it queued it.
+static bool queue_signal(struct list *queue, sigset_t_ *pending, int sig, struct siginfo_ info, bool forced) {
+    if (sig < SIGRTMIN_ && sigset_has(*pending, sig))
+        return false;
+    sigset_add(pending, sig);
     struct sigqueue *sigqueue = malloc(sizeof(struct sigqueue));
     sigqueue->info = info;
     sigqueue->info.sig = sig;
     sigqueue->forced = forced;
-    list_add_tail(&task->queue, &sigqueue->queue);
+    list_add_tail(queue, &sigqueue->queue);
+    return true;
+}
 
-    if (sigset_has(task->blocked & ~task->waiting, sig) && signal_is_blockable(sig))
-        return;
+// Takes sigqueue off its queue, and its signal off pending unless another
+// instance (of a real-time signal) is still queued.
+static void unqueue_signal(struct list *queue, sigset_t_ *pending, struct sigqueue *sigqueue) {
+    int sig = sigqueue->info.sig;
+    list_remove(&sigqueue->queue);
+    struct sigqueue *other;
+    list_for_each_entry(queue, other, queue) {
+        if (other->info.sig == sig)
+            return;
+    }
+    sigset_del(pending, sig);
+}
 
+// Whether task would take sig now: as Linux's wants_signal, a thread that has
+// not begun to exit and does not block it, or waits for it in sigtimedwait.
+static bool task_wants_signal(struct task *task, int sig) {
+    if (task->exiting)
+        return false;
+    return !signal_is_blockable(sig) || !sigset_has(task->blocked & ~task->waiting, sig);
+}
+
+// Wakes task to take a signal: out of guest code, a blocking host call, or a
+// wait. Caller holds task->sighand->lock, which this drops for a moment.
+static void wake_for_signal_unlocked(struct task *task) {
     if (task != current) {
         pthread_kill(task->thread, SIGUSR1);
 
@@ -91,6 +116,14 @@ static void deliver_signal_unlocked(struct task *task, int sig, struct siginfo_ 
         unlock(&task->waiting_cond_lock);
         lock(&task->sighand->lock);
     }
+}
+
+static void deliver_signal_unlocked(struct task *task, int sig, struct siginfo_ info, bool forced) {
+    if (!queue_signal(&task->queue, &task->pending, sig, info, forced))
+        return;
+    if (sigset_has(task->blocked & ~task->waiting, sig) && signal_is_blockable(sig))
+        return;
+    wake_for_signal_unlocked(task);
 }
 
 void deliver_signal(struct task *task, int sig, struct siginfo_ info) {
@@ -157,7 +190,11 @@ void send_signal(struct task *task, int sig, struct siginfo_ info) {
     bool blocked = sigset_has(task->blocked | task->waiting, sig);
     if (task->tgid == 1 && action != SIGNAL_CALL_HANDLER && !blocked)
         action = SIGNAL_IGNORE;
-    if (action != SIGNAL_IGNORE) {
+    // As Linux's sig_ignored, a blocked signal is never dropped as ignored:
+    // the program may take it with sigwait (a supervisor waiting for SIGCHLD,
+    // whose default is to ignore it), or have a handler by the time it
+    // unblocks it.
+    if (action != SIGNAL_IGNORE || blocked) {
         deliver_signal_unlocked(task, sig, info, false);
         // Poke the target CPU so it exits the JIT loop at the next gadget
         // boundary instead of waiting for INT_TIMER (up to 1024 cycles).
@@ -171,6 +208,90 @@ void send_signal(struct task *task, int sig, struct siginfo_ info) {
         task->group->stopped = false;
         notify(&task->group->stopped_cond);
         unlock(&task->group->lock);
+    }
+}
+
+// Wakes a thread of group that would take one of the signals in set, for
+// each: for signals pending for the process that the thread meant to take them
+// will not (it exits, or blocks them). Caller holds pids_lock (the thread
+// list) and the threads' sighand lock.
+void retarget_process_signals(struct tgroup *group, sigset_t_ set) {
+    for (int sig = 1; sig < NUM_SIGS; sig++) {
+        if (!sigset_has(set, sig))
+            continue;
+        struct task *thread;
+        list_for_each_entry(&group->threads, thread, group_links) {
+            if (task_wants_signal(thread, sig)) {
+                wake_for_signal_unlocked(thread);
+                cpu_poke(&thread->cpu);
+                break;
+            }
+        }
+    }
+}
+
+void send_process_signal(struct tgroup *group, int sig, struct siginfo_ info) {
+    if (sig == 0)
+        return;
+    if (native_offload_forward_signal(group->leader, sig))
+        return;
+
+    // The signal is addressed to the leader, unless it has left with
+    // pthread_exit; then to the first thread that has not. With none, the
+    // process has exited and the signal goes nowhere, as on Linux.
+    struct task *named = NULL;
+    if (!group->leader->exiting) {
+        named = group->leader;
+    } else {
+        struct task *thread;
+        list_for_each_entry(&group->threads, thread, group_links) {
+            if (!thread->exiting) {
+                named = thread;
+                break;
+            }
+        }
+    }
+    if (named == NULL)
+        return;
+
+    // The threads share their sighand.
+    struct sighand *sighand = named->sighand;
+    lock(&sighand->lock);
+    int action = signal_action(sighand, sig);
+    // init, and an ignored signal kept if blocked: as in send_signal, by the
+    // named thread's mask
+    bool blocked = sigset_has(named->blocked | named->waiting, sig);
+    if (group->leader->pid == 1 && action != SIGNAL_CALL_HANDLER && !blocked)
+        action = SIGNAL_IGNORE;
+    if ((action != SIGNAL_IGNORE || blocked) &&
+            queue_signal(&group->shared_queue, &group->shared_pending, sig, info, false)) {
+        // As Linux's complete_signal: wake the named thread if it would take
+        // the signal, else the first that would. None would: it stays pending
+        // until a thread unblocks it or waits for it.
+        struct task *target = NULL;
+        if (task_wants_signal(named, sig)) {
+            target = named;
+        } else {
+            struct task *thread;
+            list_for_each_entry(&group->threads, thread, group_links) {
+                if (task_wants_signal(thread, sig)) {
+                    target = thread;
+                    break;
+                }
+            }
+        }
+        if (target != NULL) {
+            wake_for_signal_unlocked(target);
+            cpu_poke(&target->cpu);
+        }
+    }
+    unlock(&sighand->lock);
+
+    if (sig == SIGCONT_ || sig == SIGKILL_) {
+        lock(&group->lock);
+        group->stopped = false;
+        notify(&group->stopped_cond);
+        unlock(&group->lock);
     }
 }
 
@@ -196,7 +317,7 @@ int send_group_signal(dword_t pgid, int sig, struct siginfo_ info) {
     }
     struct tgroup *tgroup;
     list_for_each_entry(&pid->pgroup, tgroup, pgroup) {
-        send_signal(tgroup->leader, sig, info);
+        send_process_signal(tgroup, sig, info);
     }
     unlock(&pids_lock);
     return 0;
@@ -559,11 +680,14 @@ void signal_delivery_stop(int sig, struct siginfo_ *info) {
     current->ptrace.signal = sig;
     current->ptrace.info = *info;
     unlock(&current->ptrace.lock);
+    // pids_lock comes before a sighand lock
+    unlock(&current->sighand->lock);
+    lock(&pids_lock);
     notify(&current->parent->group->child_exit);
     // TODO add siginfo
-    send_signal(current->parent, current->group->leader->exit_signal, SIGINFO_NIL);
+    send_process_signal(current->parent->group, current->group->leader->exit_signal, SIGINFO_NIL);
+    unlock(&pids_lock);
 
-    unlock(&current->sighand->lock);
     lock(&current->ptrace.lock);
     while (current->ptrace.stopped) {
         wait_for_ignore_signals(&current->ptrace.cond, &current->ptrace.lock, NULL);
@@ -601,13 +725,32 @@ void receive_signals(void) {
         current->blocked = current->saved_mask;
     }
 
-    struct sigqueue *sigqueue, *tmp;
-    list_for_each_entry_safe(&current->queue, sigqueue, tmp, queue) {
+    // The thread's own signals, then its process's, as Linux's
+    // dequeue_signal. Taking one may drop the lock (signal_delivery_stop),
+    // when another thread may take some of the process's: each search
+    // starts over.
+    struct tgroup *group = current->group;
+    for (;;) {
+        struct sigqueue *sigqueue = NULL, *entry;
+        list_for_each_entry(&current->queue, entry, queue) {
+            if (!sigset_has(blocked, entry->info.sig)) {
+                sigqueue = entry;
+                unqueue_signal(&current->queue, &current->pending, sigqueue);
+                break;
+            }
+        }
+        if (sigqueue == NULL) {
+            list_for_each_entry(&group->shared_queue, entry, queue) {
+                if (!sigset_has(blocked, entry->info.sig)) {
+                    sigqueue = entry;
+                    unqueue_signal(&group->shared_queue, &group->shared_pending, sigqueue);
+                    break;
+                }
+            }
+        }
+        if (sigqueue == NULL)
+            break;
         int sig = sigqueue->info.sig;
-        if (sigset_has(blocked, sig))
-            continue;
-        list_remove(&sigqueue->queue);
-        sigset_del(&current->pending, sig);
 
         // init drops a signal that was not forced and would take its default
         // action, as Linux's get_signal does for an unkillable init: one it
@@ -642,7 +785,7 @@ void receive_signals(void) {
             lock(&pids_lock);
             notify(&current->parent->group->child_exit);
             // TODO add siginfo
-            send_signal(current->parent, current->group->leader->exit_signal, SIGINFO_NIL);
+            send_process_signal(current->parent->group, current->group->leader->exit_signal, SIGINFO_NIL);
             unlock(&pids_lock);
         }
     }
@@ -895,18 +1038,33 @@ dword_t sys_rt_sigprocmask(dword_t how, addr_t set_addr, addr_t oldset_addr, dwo
     if (set_addr != 0) {
         struct sighand *sighand = current->sighand;
         lock(&sighand->lock);
+        sigset_t_ old_blocked = current->blocked;
         int err = do_sigprocmask(how, set);
+        // Signals pending for the process that this thread now blocks: the
+        // thread may have been woken to take them, so wake another that
+        // would (as Linux's retarget_shared_pending).
+        bool retarget = (current->group->shared_pending & current->blocked & ~old_blocked) != 0;
         unlock(&sighand->lock);
         if (err < 0)
             return err;
+        if (retarget) {
+            lock(&pids_lock); // comes before a sighand lock
+            lock(&sighand->lock);
+            retarget_process_signals(current->group, current->group->shared_pending & current->blocked);
+            unlock(&sighand->lock);
+            unlock(&pids_lock);
+        }
     }
     return 0;
 }
 
 int_t sys_rt_sigpending(addr_t set_addr, dword_t size) {
     STRACE("rt_sigpending(%#x, %d)", set_addr, size);
-    // as defined by the standard
-    sigset_t_ pending = current->pending & current->blocked;
+    // as defined by the standard: blocked and pending, for the thread or for
+    // its process
+    lock(&current->sighand->lock);
+    sigset_t_ pending = (current->pending | current->group->shared_pending) & current->blocked;
+    unlock(&current->sighand->lock);
     return user_put_sigset(set_addr, size, pending);
 }
 
@@ -1017,7 +1175,7 @@ int_t sys_rt_sigtimedwait(addr_t set_addr, addr_t info_addr, addr_t timeout_addr
     // every sleep — which also consumes a signal that was already pending on
     // entry, as POSIX requires.
     int wait_err = 0;
-    while (!(current->pending & set)) {
+    while (!((current->pending | current->group->shared_pending) & set)) {
         wait_err = wait_for(&current->pause, &current->sighand->lock, timeout_addr == 0 ? NULL : &timeout);
         if (wait_err != 0)
             break;
@@ -1029,13 +1187,25 @@ int_t sys_rt_sigtimedwait(addr_t set_addr, addr_t info_addr, addr_t timeout_addr
         return _EAGAIN;
     }
 
+    // The thread's own first, then its process's. Its pending bit goes
+    // with it: a second sigtimedwait would find the signal still pending
+    // and return EINTR at once.
     struct sigqueue *sigqueue;
     bool found = false;
     list_for_each_entry(&current->queue, sigqueue, queue) {
         if (sigset_has(set, sigqueue->info.sig)) {
             found = true;
-            list_remove(&sigqueue->queue);
+            unqueue_signal(&current->queue, &current->pending, sigqueue);
             break;
+        }
+    }
+    if (!found) {
+        list_for_each_entry(&current->group->shared_queue, sigqueue, queue) {
+            if (sigset_has(set, sigqueue->info.sig)) {
+                found = true;
+                unqueue_signal(&current->group->shared_queue, &current->group->shared_pending, sigqueue);
+                break;
+            }
         }
     }
     unlock(&current->sighand->lock);
@@ -1048,28 +1218,6 @@ int_t sys_rt_sigtimedwait(addr_t set_addr, addr_t info_addr, addr_t timeout_addr
             return _EFAULT;
     STRACE("done sigtimedwait = %d\n", info.sig);
     return info.sig;
-}
-
-// The thread a signal sent to task's process goes to: one that can take it,
-// because it does not block it or waits for it in sigwait. The thread named is
-// preferred. With none, it stays pending on the named thread. Linux keeps such
-// a signal pending for the whole process, so a thread that unblocks it later
-// takes it; iSH has no process-wide pending set. Caller holds pids_lock (the
-// thread list).
-static struct task *process_signal_target(struct task *task, int sig) {
-    struct task *target = task;
-    lock(&task->sighand->lock);
-    if (sigset_has(task->blocked & ~task->waiting, sig) && signal_is_blockable(sig)) {
-        struct task *thread;
-        list_for_each_entry(&task->group->threads, thread, group_links) {
-            if (!sigset_has(thread->blocked & ~thread->waiting, sig)) {
-                target = thread;
-                break;
-            }
-        }
-    }
-    unlock(&task->sighand->lock);
-    return target;
 }
 
 // process_directed: kill() (and its process group forms) address the whole
@@ -1086,9 +1234,10 @@ static int kill_task(struct task *task, dword_t sig, bool process_directed) {
         .kill.pid = current->pid,
         .kill.uid = current->uid,
     };
-    if (process_directed && sig != 0)
-        task = process_signal_target(task, sig);
-    send_signal(task, sig, info);
+    if (process_directed)
+        send_process_signal(task->group, sig, info);
+    else
+        send_signal(task, sig, info);
     return 0;
 }
 

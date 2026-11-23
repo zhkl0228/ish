@@ -387,6 +387,18 @@ else
         status=1
     fi
     echo
+    echo "########## signals to a process: any thread takes them ##########"
+    if "$CC_GUEST" -static -O0 -Wall -pthread -o "$GUEST_ROOT/tmp/regress_process_signals" \
+            tests/regress/regress_process_signals.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_process_signals 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_process_signals"
+    else
+        echo "failed to build regress_process_signals" >&2
+        status=1
+    fi
+    echo
     echo "########## /dev/shm: shm_open and sem_open ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_dev_shm" \
             tests/regress/regress_dev_shm.c; then

@@ -24,6 +24,43 @@ static void halt_system(void);
 // this no-op prevents an undefined symbol error.
 __attribute__((weak)) void restore_termios(void) {}
 
+// As Linux's exit_itimers: the last thread to begin exiting deletes the
+// process's timers, before its parent can reap it, since their callbacks use
+// the group. POSIX timers were never deleted: one that kept firing after the
+// process was reaped read the freed group. The timers are freed without
+// pids_lock: a callback runs holding its timer's lock and takes pids_lock to
+// send its signal, and timer_free takes the timer's lock, waiting for a
+// callback under way.
+static void delete_timers_if_last(struct task *task) {
+    struct timer *timers[1 + TIMERS_MAX];
+    int count = 0;
+    lock(&pids_lock);
+    struct tgroup *group = task->group;
+    bool last = true;
+    struct task *thread;
+    list_for_each_entry(&group->threads, thread, group_links) {
+        if (thread != task && !atomic_load(&thread->exit_started))
+            last = false;
+    }
+    if (last) {
+        // Taken off the group as they are collected: a thread that finds
+        // itself last too finds none.
+        if (group->itimer != NULL)
+            timers[count++] = group->itimer;
+        group->itimer = NULL;
+        for (int i = 0; i < TIMERS_MAX; i++) {
+            struct posix_timer *timer = &group->posix_timers[i];
+            if (timer->timer != NULL)
+                timers[count++] = timer->timer;
+            timer->timer = NULL;
+            timer->tgroup = NULL;
+        }
+    }
+    unlock(&pids_lock);
+    for (int i = 0; i < count; i++)
+        timer_free(timers[i]);
+}
+
 static bool exit_tgroup(struct task *task) {
     struct tgroup *group = task->group;
     list_remove(&task->group_links);
@@ -32,8 +69,7 @@ static bool exit_tgroup(struct task *task) {
         // don't need to lock the group since the only pointers to it come from:
         // - other threads' current->group, but there are none left thanks to that list_empty call
         // - locking pids_lock first, which do_exit did
-        if (group->itimer)
-            timer_free(group->itimer);
+        // Its timers are gone: delete_timers_if_last.
 
         // The group will be removed from its group and session by reap_if_zombie,
         // because fish tries to set the pgid to that of an exited but not reaped
@@ -81,6 +117,7 @@ noreturn void do_exit(int status) {
     // do_exit_group's safety valve not to give up on it while it waits for
     // pids_lock below.
     atomic_store(&current->exit_started, true);
+    delete_timers_if_last(current);
     sockrestart_task_exit(current);
 
     // has to happen before mm_release
@@ -158,6 +195,14 @@ noreturn void do_exit(int status) {
     // release the sighand (may already be NULL if another thread in the group
     // exited concurrently and released it, e.g. after safety-valve SIGUSR1)
     if (current->sighand != NULL) {
+        // Signals pending for the process that this thread could have taken:
+        // it may have been woken to take them. Wake another thread that
+        // would (as Linux's exit_signals).
+        lock(&current->sighand->lock);
+        sigset_t_ retarget = current->group->shared_pending & ~current->blocked;
+        if (retarget != 0)
+            retarget_process_signals(current->group, retarget);
+        unlock(&current->sighand->lock);
         sighand_release(current->sighand);
         current->sighand = NULL;
     }
@@ -216,8 +261,10 @@ noreturn void do_exit(int status) {
                 .child.utime = clock_from_timeval(group_rusage.utime),
                 .child.stime = clock_from_timeval(group_rusage.stime),
             };
+            // to the parent process, as Linux does: any of its threads may
+            // take it
             if (leader->exit_signal != 0)
-                send_signal(parent, leader->exit_signal, info);
+                send_process_signal(parent->group, leader->exit_signal, info);
         }
 
         if (exit_hook != NULL)
@@ -616,6 +663,11 @@ static bool reap_if_zombie(struct task *task, struct siginfo_ *info_out, struct 
     }
 
     // tear down group
+    struct sigqueue *sigqueue, *sigqueue_tmp;
+    list_for_each_entry_safe(&task->group->shared_queue, sigqueue, sigqueue_tmp, queue) {
+        list_remove(&sigqueue->queue);
+        free(sigqueue);
+    }
     cond_destroy(&task->group->child_exit);
     task_leave_session(task);
     list_remove(&task->group->pgroup);

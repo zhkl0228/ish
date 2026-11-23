@@ -62,6 +62,7 @@ static struct task *construct_task(struct task *parent) {
     *group = (struct tgroup) {};
     atomic_fetch_add_explicit(&ish_live_guest_procs, 1, memory_order_relaxed);   // [T-ish-freeze-watch]
     list_init(&group->threads);
+    list_init(&group->shared_queue);
     lock_init(&group->lock);
     cond_init(&group->child_exit);
     cond_init(&group->stopped_cond);

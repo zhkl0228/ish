@@ -170,6 +170,9 @@ static struct tgroup *tgroup_copy(struct tgroup *old_group) {
     *group = *old_group;
     atomic_fetch_add_explicit(&ish_live_guest_procs, 1, memory_order_relaxed);   // [T-ish-freeze-watch]
     list_init(&group->threads);
+    // as on Linux, the child has no pending signals
+    group->shared_pending = 0;
+    list_init(&group->shared_queue);
     list_add(&old_group->pgroup, &group->pgroup);
     list_add(&old_group->session, &group->session);
     if (group->tty) {

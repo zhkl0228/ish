@@ -108,11 +108,15 @@ dword_t sys_clock_settime(dword_t UNUSED(clock), addr_t UNUSED(tp)) {
     return _EPERM;
 }
 
-static void itimer_notify(struct task *task) {
+// SIGALRM goes to the process, not to the thread that set the timer (which
+// may have exited since).
+static void itimer_notify(struct tgroup *group) {
     struct siginfo_ info = {
         .code = SI_TIMER_,
     };
-    send_signal(task, SIGALRM_, info);
+    lock(&pids_lock);
+    send_process_signal(group, SIGALRM_, info);
+    unlock(&pids_lock);
 }
 
 static int itimer_set(struct tgroup *group, int which, struct timer_spec spec, struct timer_spec *old_spec) {
@@ -122,7 +126,7 @@ static int itimer_set(struct tgroup *group, int which, struct timer_spec spec, s
     }
 
     if (!group->itimer) {
-        struct timer *timer = timer_new(CLOCK_REALTIME, (timer_callback_t) itimer_notify, current);
+        struct timer *timer = timer_new(CLOCK_REALTIME, (timer_callback_t) itimer_notify, group);
         if (IS_ERR(timer))
             return PTR_ERR(timer);
         group->itimer = timer;
@@ -389,6 +393,10 @@ dword_t sys_settimeofday(addr_t UNUSED(tv), addr_t UNUSED(tz)) {
     return _EPERM;
 }
 
+#define SIGEV_SIGNAL_ 0
+#define SIGEV_NONE_ 1
+#define SIGEV_THREAD_ID_ 4
+
 static void posix_timer_callback(struct posix_timer *timer) {
     if (timer->tgroup == NULL)
         return;
@@ -398,17 +406,21 @@ static void posix_timer_callback(struct posix_timer *timer) {
         .timer.overrun = 0,
         .timer.value = timer->sig_value,
     };
+    // The timer and its group live until the group dies, when exit_tgroup
+    // frees the timer.
     lock(&pids_lock);
-    struct task *thread = pid_get_task(timer->thread_pid);
-    // TODO: solve pid reuse. currently we have two ways of referring to a task: pid_t_ and struct task *. pids get reused. task struct pointers get freed on exit or reap. need a third option for cases like this, like a refcount layer.
-    if (thread != NULL)
-        send_signal(thread, timer->signal, info);
+    if (timer->method == SIGEV_SIGNAL_) {
+        send_process_signal(timer->tgroup, timer->signal, info);
+    } else {
+        // SIGEV_THREAD_ID: the thread, unless it has exited (its pid then
+        // names no task, or one of another process)
+        struct task *thread = pid_get_task(timer->thread_pid);
+        if (thread != NULL && thread->group == timer->tgroup)
+            send_signal(thread, timer->signal, info);
+    }
     unlock(&pids_lock);
 }
 
-#define SIGEV_SIGNAL_ 0
-#define SIGEV_NONE_ 1
-#define SIGEV_THREAD_ID_ 4
 
 int_t sys_timer_create(dword_t clock, addr_t sigevent_addr, addr_t timer_addr) {
     STRACE("timer_create(%d, %#x, %#x)", clock, sigevent_addr, timer_addr);
@@ -431,11 +443,15 @@ int_t sys_timer_create(dword_t clock, addr_t sigevent_addr, addr_t timer_addr) {
     if (sigev.method != SIGEV_SIGNAL_ && sigev.method != SIGEV_NONE_ && sigev.method != SIGEV_THREAD_ID_)
         return _EINVAL;
 
+    // As Linux's good_sigevent: a thread of this process. (An unknown one
+    // returned with pids_lock still held, and iSH hung on the next use.)
     if (sigev.method == SIGEV_THREAD_ID_) {
         lock(&pids_lock);
-        if (pid_get_task(sigev.tid) == NULL)
-            return _EINVAL;
+        struct task *thread = pid_get_task(sigev.tid);
+        bool ours = thread != NULL && thread->group == current->group;
         unlock(&pids_lock);
+        if (!ours)
+            return _EINVAL;
     }
 
     struct tgroup *group = current->group;
@@ -459,19 +475,15 @@ int_t sys_timer_create(dword_t clock, addr_t sigevent_addr, addr_t timer_addr) {
     timer->timer = timer_new(real_clockid, (timer_callback_t) posix_timer_callback, timer);
     timer->signal = sigev.signo;
     timer->sig_value = sigev.value;
+    timer->method = sigev.method;
     timer->tgroup = NULL;
     if (sigev.method == SIGEV_SIGNAL_) {
         timer->tgroup = group;
-        // SIGEV_SIGNAL means "signal the process". posix_timer_callback
-        // resolves its target with pid_get_task(thread_pid), and pid 0 is
-        // never a live task, so leaving this at 0 made the lookup return
-        // NULL and the callback drop the signal -- the timer armed, the
-        // clock expired, and nothing was ever delivered. Target the group
-        // leader, which is what "the process" means here.
-        timer->thread_pid = group->leader->pid;
     } else if (sigev.method == SIGEV_THREAD_ID_) {
+        // The thread named, which glibc's and musl's SIGEV_THREAD timers wait
+        // on for the signal: it went to the leader.
         timer->tgroup = group;
-        timer->thread_pid = group->leader->pid;
+        timer->thread_pid = sigev.tid;
     }
     unlock(&group->lock);
     return 0;
