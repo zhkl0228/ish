@@ -7,6 +7,7 @@
 #include <termios.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #if __APPLE__
 #include <mach/mach.h>
 #include <sys/sysctl.h>   // [T-ish-cli-memory-governor] hw.memsize
@@ -583,5 +584,9 @@ int main(int argc, char *const argv[]) {
     create_some_device_nodes();
     do_mount(&procfs, "proc", "/proc", "", 0);
     do_mount(&devptsfs, "devpts", "/dev/pts", "", 0);
+    // This thread runs init: it holds the task as task_start's threads do,
+    // and lets go in task_run_current's cleanup (init's main thread can leave
+    // with pthread_exit).
+    atomic_fetch_add(&current->refs, 1);
     task_run_current();
 }

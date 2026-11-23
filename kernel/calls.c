@@ -242,18 +242,12 @@ void handle_interrupt(int interrupt) {
         //
         // Bail the SAME way task_run_current() does for a destroyed/leaked task:
         // pthread_exit() straight out, letting task_run_current()'s
-        // pthread_cleanup handler (task_run_tlb_cleanup) run — it honors
-        // mm_release_deferred and frees the tlb. Do NOT call do_exit() here:
-        //   * for the zeroed-struct case (group==NULL, exiting==0) do_exit()
-        //     would fall through its `if (current->exiting)` fast-path and then
-        //     dereference current->group->doing_group_exit — the same NULL crash
-        //     one line over;
-        //   * for the force-released case (exiting==1) do_exit() sets
-        //     current=NULL before pthread_exit(), which makes task_run_tlb_cleanup
-        //     skip the deferred mm_release and leak the guest address space.
-        // Reading group_exit_code for a status is pointless anyway — do_exit()
-        // ignores its argument once `exiting` is set — and unsafe, since the
-        // group may already be freed.
+        // pthread_cleanup handler (task_run_cleanup) run — it honors
+        // mm_release_deferred, frees the tlb, takes a leaked thread's task out
+        // of the pid table and lets go of the struct. (A destroyed task is
+        // poisoned with exiting set and no group; this thread's hold keeps its
+        // struct alive.) There is nothing for do_exit() to do: the group, its
+        // status and the resources are gone or going.
         if (current->exiting || current->group == NULL) {
             pthread_exit(NULL);
         }

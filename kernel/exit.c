@@ -278,10 +278,10 @@ noreturn void do_exit(int status) {
         current = NULL;  // Clear before destroy to prevent dangling access
         task_destroy(self);
     } else {
-        // Once pids_lock is released, the parent may reap the zombie and its
-        // struct be freed: nothing after may touch it. The thread's cleanup
-        // handler (task_run_tlb_cleanup) read it through current, and ASan
-        // caught it reading freed memory.
+        // Once pids_lock is released, the parent may reap the zombie, which
+        // poisons the struct (this thread's hold keeps it allocated until its
+        // cleanup handler, task_run_cleanup, is done): nothing after may use
+        // the task through current.
         current = NULL;
     }
     unlock(&pids_lock);
@@ -491,6 +491,10 @@ noreturn void do_exit_group(int status) {
                         fs_info_release(task->fs);
                         task->fs = NULL;
                     }
+                    // Its children go to init now, as do_exit would give them
+                    // away: one exiting would notify this thread's group,
+                    // freed when the process is reaped.
+                    task_give_children_to_init(task);
                     leaked++;
                 }
             }

@@ -161,6 +161,12 @@ struct task {
     cond_t *waiting_cond;
     lock_t *waiting_lock;
     lock_t waiting_cond_lock;
+
+    // Who holds this struct: the kernel until task_destroy, and the task's
+    // host thread while it runs (task_start to the cleanup of
+    // task_run_current). Freed when both are done with it. Last, so
+    // task_destroy can poison all before it.
+    _Atomic int refs;
 };
 
 // current will always give the process that is currently executing
@@ -294,6 +300,9 @@ struct pid *pid_get(dword_t pid);
 struct task *pid_get_task(dword_t pid);
 // The pid last given out (/proc/loadavg). Caller holds pids_lock.
 pid_t_ pid_last_allocated(void);
+// Its children to init (none if it is init, or init is gone), for a task that
+// leaves without do_exit giving them away. Caller holds pids_lock.
+void task_give_children_to_init(struct task *task);
 struct task *pid_get_task_zombie(dword_t id); // don't return null if the task exists as a zombie
 
 #define MAX_PID (1 << 15) // oughta be enough

@@ -399,6 +399,18 @@ else
         status=1
     fi
     echo
+    echo "########## a stuck thread's task, after its process exits ##########"
+    if "$CC_GUEST" -static -O0 -Wall -pthread -o "$GUEST_ROOT/tmp/regress_leaked_task" \
+            tests/regress/regress_leaked_task.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_leaked_task 2>&1)
+        echo "$out" | grep -v '^\[iSH\]'
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_leaked_task"
+    else
+        echo "failed to build regress_leaked_task" >&2
+        status=1
+    fi
+    echo
     echo "########## signals to a process: any thread takes them ##########"
     if "$CC_GUEST" -static -O0 -Wall -pthread -o "$GUEST_ROOT/tmp/regress_process_signals" \
             tests/regress/regress_process_signals.c; then

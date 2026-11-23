@@ -76,6 +76,7 @@ struct task *task_create_(struct task *parent) {
     *task = (struct task) {};
     if (parent != NULL)
         *task = *parent;
+    atomic_init(&task->refs, 1); // the kernel's
     task->pid = pid->id;
     task->start_ticks = get_uptime().uptime_ticks;
     pid->task = task;
@@ -132,59 +133,78 @@ struct task *task_create_(struct task *parent) {
     return task;
 }
 
-// Deferred-free list for task structs.
-// When a task is destroyed, its struct is not immediately freed — instead it's
-// placed on this list. The NEXT call to task_destroy will free previously
-// deferred structs. This gives leaked/exiting pthreads time to finish accessing
-// `current` before the memory is recycled by malloc, preventing use-after-free
-// heap corruption.
-#define DEFERRED_FREE_MAX 64
-static struct task *deferred_free_list[DEFERRED_FREE_MAX];
-static int deferred_free_count = 0;
-// Must be called with pids_lock held (task_destroy already requires this).
-static void flush_deferred_frees(void) {
-    for (int i = 0; i < deferred_free_count; i++) {
-        free(deferred_free_list[i]);
-        deferred_free_list[i] = NULL;
+void task_give_children_to_init(struct task *task) {
+    struct task *init = pid_get_task(1);
+    if (init == task)
+        init = NULL;
+    struct task *child, *tmp;
+    list_for_each_entry_safe(&task->children, child, tmp, siblings) {
+        list_remove(&child->siblings);
+        child->parent = init;
+        if (init != NULL)
+            list_add(&init->children, &child->siblings);
     }
-    deferred_free_count = 0;
 }
 
+static void task_unref(struct task *task) {
+    if (atomic_fetch_sub(&task->refs, 1) == 1)
+        free(task);
+}
+
+// Takes the task out of the pid table and its parent's children, and lets go
+// of the kernel's hold on its struct. Its host thread may still be running
+// it: a thread do_exit_group's safety valve gave up on, stuck in a host call,
+// whose leader is reaped meanwhile. That thread holds the struct too, so it
+// lives until the thread is done; until then the thread finds it poisoned (no
+// group, exiting) and leaves at its next check. (It used to be freed at the
+// next task_destroy, whenever that came: a thread still stuck by then read
+// freed memory.) Caller holds pids_lock.
 void task_destroy(struct task *task) {
-    list_remove(&task->siblings);
+    list_remove_safe(&task->siblings);
     pid_get(task->pid)->task = NULL;
 
-    // Flush old deferred frees first — they've had time to quiesce.
-    flush_deferred_frees();
+    // Children it still has go to init, as do_exit gives them away: a thread
+    // the valve gave up on never went through do_exit.
+    task_give_children_to_init(task);
 
-    // Zero the struct to poison stale `current` references, then defer the
-    // actual free. This way if a leaked pthread is still running, it will
-    // hit zeroed fields (NULL group, NULL mem) and crash cleanly rather than
-    // silently corrupting a newly-allocated task at the same address.
-    memset(task, 0, sizeof(struct task));
-
-    if (deferred_free_count < DEFERRED_FREE_MAX) {
-        deferred_free_list[deferred_free_count++] = task;
-    } else {
-        // Overflow — free immediately (rare, only with 64+ concurrent exits)
-        free(task);
+    // The guest memory of a thread the valve gave up on is released by the
+    // thread when it leaves (task_run_current's cleanup): that is kept, with
+    // the lock the cleanup takes around it.
+    bool mm_release_deferred = task->mm_release_deferred;
+    struct mm *mm = task->mm;
+    struct mem *mem = task->mem;
+    memset(task, 0, offsetof(struct task, refs));
+    lock_init(&task->general_lock);
+    if (mm_release_deferred) {
+        task->mm_release_deferred = true;
+        task->mm = mm;
+        task->mem = mem;
     }
+    task->exiting = true;
+    task_unref(task);
 }
 
-static void task_run_tlb_cleanup(void *arg) {
+struct task_run_cleanup {
+    struct tlb *tlb;
+    struct task *task;
+};
+
+static void task_run_cleanup(void *arg) {
+    struct task_run_cleanup *cleanup = arg;
 #ifdef GUEST_ARM64
-    tlb_detach((struct tlb *) arg);   // exited while running guest code
+    tlb_detach(cleanup->tlb);   // exited while running guest code
 #endif
-    tlb_free((struct tlb *)arg);
+    tlb_free(cleanup->tlb);
     // [T-ish-mm-leak-refcount-handoff] If the do_exit_group safety valve
     // orphaned this thread (stuck in an uninterruptible host syscall) it
     // deferred the mm_release to here — this runs only when the host pthread
     // actually terminates, i.e. AFTER the thread has left the read_wrlock
     // critical section, so releasing now can't UAF the mem lock. This reclaims
-    // the whole guest address space instead of leaking it forever. `current`
-    // is a __thread TLS pointer, still valid inside pthread cleanup.
-    struct task *self = current;
-    if (self != NULL && self->mm_release_deferred && self->mm != NULL) {
+    // the whole guest address space instead of leaking it forever. The task is
+    // this thread's own, held until the end of this; not current, which the
+    // ways out of do_exit set to NULL first.
+    struct task *self = cleanup->task;
+    if (self->mm_release_deferred && self->mm != NULL) {
         self->mm_release_deferred = false;
         // [T-ish-exit-mm-general-lock] Same handoff as do_exit: unpublish the
         // mm under general_lock so a procfs reader cannot lock it after we
@@ -201,6 +221,17 @@ static void task_run_tlb_cleanup(void *arg) {
                self->pid, (void *) mm, (unsigned) mm->refcount);
         mm_release_from(mm, "cleanup_handler");
     }
+
+    // A thread the valve gave up on, done at last: its task leaves the pid
+    // table now (do_exit took out the others before they got here, and a
+    // leader's goes when it is reaped). It used to stay there for good.
+    if (self->exiting && self->pid != 0 && self->pid != self->tgid) {
+        lock(&pids_lock);
+        if (pid_get_task_zombie(self->pid) == self)
+            task_destroy(self);
+        unlock(&pids_lock);
+    }
+    task_unref(self);
 }
 
 void task_run_current(void) {
@@ -213,7 +244,8 @@ void task_run_current(void) {
     // (e.g. do_exit() after a native-offloaded execve, or SIGKILL path).
     // Without this, every guest process leaks ~304KB of TLB + ~48KB of
     // fiber_frame, dominating app memory after repeated ffmpeg invocations.
-    pthread_cleanup_push(task_run_tlb_cleanup, tlb);
+    struct task_run_cleanup cleanup = {.tlb = tlb, .task = current};
+    pthread_cleanup_push(task_run_cleanup, &cleanup);
 
     while (true) {
         // Check for group exit before entering JIT — this catches threads
@@ -270,9 +302,12 @@ int task_start(struct task *task) {
     // thread was never started. Under thread-stack exhaustion (EAGAIN) that
     // has to become a guest-visible clone() failure, not a dead task or a
     // die(). [T-ish-jit-oom-abort]
+    atomic_fetch_add(&task->refs, 1); // the thread's, until task_run_cleanup
     int err = pthread_create(&task->thread, &task_thread_attr, task_thread, task);
-    if (err != 0)
+    if (err != 0) {
+        task_unref(task); // no thread; the kernel's hold stays
         return err == EAGAIN ? _EAGAIN : _ENOMEM;
+    }
     return 0;
 }
 
