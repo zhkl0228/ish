@@ -647,6 +647,66 @@ static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, 
     return err;
 }
 
+#if defined(GUEST_ARM64)
+// The name of a node or V8 option, to tell whether a program already gave one
+// that would be added: no leading dashes, no "no-" (--opt and --no-opt set
+// the same flag), no value, and '_' as '-' (V8 takes both).
+static void node_option_name(const char *opt, size_t len, char *name, size_t size) {
+    while (len > 0 && *opt == '-') {
+        opt++;
+        len--;
+    }
+    if (len >= 3 && strncmp(opt, "no-", 3) == 0) {
+        opt += 3;
+        len -= 3;
+    }
+    size_t n = 0;
+    for (; len > 0 && *opt != '=' && n + 1 < size; opt++, len--)
+        name[n++] = *opt == '_' ? '-' : *opt;
+    name[n] = '\0';
+}
+
+static bool node_option_matches(const char *given, size_t len, const char *inject, bool exact_only) {
+    if (len == strlen(inject) && strncmp(given, inject, len) == 0)
+        return true;
+    if (exact_only)
+        return false;
+    char a[64], b[64];
+    node_option_name(given, len, a, sizeof(a));
+    node_option_name(inject, strlen(inject), b, sizeof(b));
+    return strcmp(a, b) == 0;
+}
+
+// Whether node is given option inject already, by the program: among node's
+// own options on the command line (before the script) or in NODE_OPTIONS,
+// which node reads first, so an option added to the command line would
+// override the one there. --require may be given any number of times: only
+// the very same one counts.
+static bool node_option_given(const char *argv, const char *envp, const char *inject) {
+    bool exact_only = strncmp(inject, "--require", 9) == 0;
+    for (const char *a = argv + strlen(argv) + 1; *a != '\0'; a += strlen(a) + 1) {
+        if (a[0] != '-' || strcmp(a, "--") == 0)
+            break;
+        if (node_option_matches(a, strlen(a), inject, exact_only))
+            return true;
+    }
+    for (const char *e = envp; *e != '\0'; e += strlen(e) + 1) {
+        if (strncmp(e, "NODE_OPTIONS=", 13) != 0)
+            continue;
+        for (const char *p = e + 13; *p != '\0';) {
+            while (*p == ' ')
+                p++;
+            const char *start = p;
+            while (*p != '\0' && *p != ' ')
+                p++;
+            if (p > start && node_option_matches(start, p - start, inject, exact_only))
+                return true;
+        }
+    }
+    return false;
+}
+#endif
+
 int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) {
     ISH_SIGNPOST_SCOPE_BEGIN(exec, "execve", _exec_spid);
     ISH_SIGNPOST_EVENT(exec, "execve_path", "path=%{public}s", file);
@@ -858,68 +918,12 @@ dword_t sys_execve(addr_t filename_addr, addr_t argv_addr, addr_t envp_addr) {
     }
 
 #if defined(GUEST_ARM64)
-    // Force-inject environment variables into every execve'd process.
-    // mode=0: inject only if not present, mode=1: replace existing value
-    static const struct { const char *kv; size_t prefix_len; int mode; } inject_envs[] = {
-        { "PYTHONMALLOC=malloc", 13, 1 },      // FORCE bypass pymalloc arenas (mode=1: always replace)
-        { "NO_COLOR=1", 9, 0 },                // Disable color output
-        { "PIP_PROGRESS_BAR=off", 17, 0 },     // Disable pip progress bar
-        { "PYTHONDONTWRITEBYTECODE=1", 25, 0 }, // Skip .pyc generation to reduce allocs
-        // Go async preemption sends SIGURG and reads/modifies mcontext at a
-        // fixed offset. Our JIT delivers signals at gadget boundaries, not at
-        // the exact interrupted instruction, so the PC in the signal frame is
-        // imprecise. cpu_poke reduces latency but can't fix PC precision.
-        // Cooperative preemption (function-call checkpoints) works correctly.
-        { "GODEBUG=asyncpreemptoff=1", 8, 0 }, // Disable Go async preemption
-        // Limit Go threads to reduce TLB stale-pointer crashes from concurrent
-        // page table modifications. GOMAXPROCS=2 is sufficient for most Go CLI
-        // tools and eliminates nearly all multi-thread race conditions.
-        { "GOMAXPROCS=2", 11, 0 },             // Limit Go thread count
-        // libuv's default worker pool is 4 threads. On iSH jitless node,
-        // short scripts never use them but pay the futex sync cost. Setting
-        // to 1 saves ~1s on `node -e 0`. Apps that genuinely need more
-        // worker threads can override via the user environment (mode=0).
-        { "UV_THREADPOOL_SIZE=1", 19, 0 },
-    };
-    for (size_t vi = 0; vi < sizeof(inject_envs)/sizeof(inject_envs[0]); vi++) {
-        char *e = envp;
-        char *found_at = NULL;
-        while (*e != '\0') {
-            if (strncmp(e, inject_envs[vi].kv, inject_envs[vi].prefix_len) == 0)
-                found_at = e;
-            e += strlen(e) + 1;
-        }
-        size_t total_used = (e - envp) + 1; // includes final \0
-        if (found_at != NULL && inject_envs[vi].mode == 1) {
-            // Replace: remove old value, then append new one
-            size_t old_len = strlen(found_at) + 1;
-            size_t tail = total_used - (found_at - envp) - old_len;
-            memmove(found_at, found_at + old_len, tail);
-            total_used -= old_len;
-            found_at = NULL; // treat as not found so it gets appended
-        }
-        if (found_at == NULL) {
-            size_t inject_len = strlen(inject_envs[vi].kv) + 1;
-            if (total_used + inject_len + 1 <= ARGV_MAX) {
-                memcpy(envp + total_used - 1, inject_envs[vi].kv, inject_len);
-                envp[total_used - 1 + inject_len] = '\0';
-            }
-        }
-    }
-
-    // Inject V8 flags for Node.js: the default set, or the jitless set as an explicit fallback
-    // (both below). The notes that follow are about the jitless set, which was added
-    // to work around scope corruption in emulation.
-    // --jitless: disable JIT (avoids V8 code generation incompatible with our JIT)
-    // --predictable: disable concurrent GC/compilation (avoids race conditions)
-    // --no-lazy: eager compilation (avoids Zone reuse patterns that corrupt scopes)
-    // --single-generation: skip young generation (reduces GC-triggered Zone resets)
-    // --lite-mode: reduces Zone churn by disabling feedback vectors & optimizer
-    // --no-compilation-cache: prevent stale cached compilations from reusing Zones
-    // --no-flush-bytecode: keep compiled bytecode alive, avoid recompilation churn
-    // --no-lazy-compile-dispatcher: single-thread parsing to reduce concurrent Zones
-    // --no-parallel-compile-tasks: single-thread compilation to reduce concurrent Zones
-    // --no-concurrent-recompilation: disable background recompilation
+    // Add V8 flags to a program named node: the default set, or the jitless set
+    // when asked for (both below). They choose speed and memory, not
+    // correctness: node runs right with all of V8's tiers (checked 2026-11-22
+    // with node 24: GC, WebAssembly, workers, fetch, TurboFan-optimized code
+    // and npm install). An option the program gives itself, on its command
+    // line or in NODE_OPTIONS, wins over the one here (node_option_given).
     {
         const char *base = strrchr(filename, '/');
         base = base ? base + 1 : filename;
@@ -939,9 +943,8 @@ dword_t sys_execve(addr_t filename_addr, addr_t argv_addr, addr_t envp_addr) {
                 "--no-concurrent-recompilation",
                 "--no-lazy-compile-dispatcher",
                 "--predictable",
-                // [T-ish-node-cage-commit] Skip the young generation. The
-                // comment block above always described this flag but the
-                // array never carried it. Measured 2026-08-27 on iPhone 11:
+                // [T-ish-node-cage-commit] Skip the young generation.
+                // Measured 2026-08-27 on iPhone 11:
                 // V8 startup commits ~5 x 128MB cage chunks (~640MB); with
                 // --single-generation the commit drops by ~190MB
                 // (164k -> 113k guest pages) because the semi-space chunks
@@ -1021,15 +1024,7 @@ dword_t sys_execve(addr_t filename_addr, addr_t argv_addr, addr_t envp_addr) {
                     p += strlen(p) + 1;
                 size_t total_used = (p - argv) + 1;
 
-                // Check if already present
-                bool found = false;
-                char *q = argv;
-                while (*q != '\0') {
-                    if (strcmp(q, arg) == 0) { found = true; break; }
-                    q += strlen(q) + 1;
-                }
-
-                if (!found && total_used + arg_len + 1 <= ARGV_MAX) {
+                if (!node_option_given(argv, envp, arg) && total_used + arg_len + 1 <= ARGV_MAX) {
                     char *after_argv0 = argv + strlen(argv) + 1;
                     size_t tail = total_used - (after_argv0 - argv);
                     memmove(after_argv0 + arg_len, after_argv0, tail);
@@ -1039,32 +1034,6 @@ dword_t sys_execve(addr_t filename_addr, addr_t argv_addr, addr_t envp_addr) {
             }
         }
 
-        // Inject LD_PRELOAD for zero_malloc.so to zero large malloc/free.
-        // V8's Zone allocator reuses freed memory without zeroing, causing
-        // stale pointer dereferences. This library zeros blocks >= 4096 bytes
-        // on both malloc and free (Zone segments are >= 8KB).
-        if (strcmp(base, "node") == 0) {
-            static const char *ld_preload = "LD_PRELOAD=/lib/zero_free.so";
-            size_t env_len = strlen(ld_preload) + 1;
-
-            // Check if LD_PRELOAD is already set
-            bool found = false;
-            char *q = envp;
-            while (*q != '\0') {
-                if (strncmp(q, "LD_PRELOAD=", 11) == 0) { found = true; break; }
-                q += strlen(q) + 1;
-            }
-            if (!found) {
-                char *p = envp;
-                while (*p != '\0')
-                    p += strlen(p) + 1;
-                size_t total_used = (p - envp) + 1;
-                if (total_used + env_len + 1 <= ARGV_MAX) {
-                    memcpy(p, ld_preload, env_len);
-                    p[env_len] = '\0';
-                }
-            }
-        }
     }
 #endif
 

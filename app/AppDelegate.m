@@ -242,9 +242,6 @@ static void ish_install_anon_cap(void) {
         "TERM=xterm-256color\0"
         "HOME=/root\0"
         "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\0"
-#if defined(GUEST_ARM64)
-        "PYTHONMALLOC=malloc\0"
-#endif
         ;
     err = do_execve(command[0].UTF8String, command.count, argv, envp);
     if (err < 0)

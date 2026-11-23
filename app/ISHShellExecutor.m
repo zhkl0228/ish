@@ -218,9 +218,6 @@ static dispatch_once_t _onceToken;
     [envp_str appendString:@"TERM=xterm-256color\0"];
     [envp_str appendString:@"HOME=/root\0"];
     [envp_str appendString:@"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\0"];
-#if defined(GUEST_ARM64)
-    [envp_str appendString:@"PYTHONMALLOC=malloc\0"];
-#endif
 
     // Custom environment
     if (environment) {

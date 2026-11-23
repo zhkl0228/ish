@@ -1004,9 +1004,6 @@ static void handle_guest_exec(jbuf *j, int64_t id, const rpc_request *req) {
         "TERM=dumb\0"
         "HOME=/root\0"
         "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\0"
-#if defined(GUEST_ARM64)
-        "PYTHONMALLOC=malloc\0"
-#endif
         ;
 
     err = do_execve(shell, 3, argv_buf, envp);

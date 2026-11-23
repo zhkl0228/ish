@@ -529,9 +529,6 @@ int main(int argc, char *const argv[]) {
     }
     p += snprintf(envp + p, sizeof(envp) - p, "HOME=/root") + 1;
     p += snprintf(envp + p, sizeof(envp) - p, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin") + 1;
-#ifdef GUEST_ARM64
-    p += snprintf(envp + p, sizeof(envp) - p, "PYTHONMALLOC=malloc") + 1;
-#endif
     // [T-ish-cli-memory-governor] Put the CLI on the same memory governor the
     // iOS app uses, instead of leaving it on the legacy compile-time ledger.
     //
