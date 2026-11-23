@@ -345,8 +345,6 @@ static BOOL takeBarKey(UIButton *key) {
     UIKeyModifierFlags modifiers = 0;
     if (takeBarKey(self.controlKey))
         modifiers |= UIKeyModifierControl;
-    if (takeBarKey(self.altKey))
-        modifiers |= UIKeyModifierAlternate;
     return modifiers;
 }
 
@@ -356,13 +354,8 @@ static BOOL takeBarKey(UIButton *key) {
     // The bar's modifiers apply to a single key. Pasted text and the escape
     // sequences of arrows and other special keys use them up unchanged.
     UIKeyModifierFlags modifiers = [self takeBarModifiers];
-    if (text.length == 1) {
-        // Alt (Meta) sends ESC before the key, as terminals encode it.
-        if (modifiers & UIKeyModifierAlternate)
-            [self.terminal sendInput:[NSData dataWithBytes:"\x1b" length:1]];
-        if (modifiers & UIKeyModifierControl)
-            return [self insertControlChar:[text characterAtIndex:0]];
-    }
+    if (text.length == 1 && (modifiers & UIKeyModifierControl))
+        return [self insertControlChar:[text characterAtIndex:0]];
 
     text = [text stringByReplacingOccurrencesOfString:@"\n" withString:@"\r"];
     NSData *data = [text dataUsingEncoding:NSUTF8StringEncoding];

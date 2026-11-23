@@ -16,10 +16,8 @@ extern UIAccessibilityTraits UIAccessibilityTraitToggle;
 
 - (void)awakeFromNib {
     [super awakeFromNib];
-    self.layer.cornerRadius = 5;
-    self.layer.shadowOffset = CGSizeMake(0, 1);
-    self.layer.shadowOpacity = 0.4;
-    self.layer.shadowRadius = 0;
+    // Flat keys, square and without a shadow, a point apart in the row: the
+    // terminal's background shows between them.
     self.backgroundColor = self.defaultColor;
     self.keyAppearance = UIKeyboardAppearanceLight;
     self.accessibilityTraits |= UIAccessibilityTraitKeyboardKey;
@@ -28,17 +26,20 @@ extern UIAccessibilityTraits UIAccessibilityTraitToggle;
     }
 }
 
+// A key at rest: dark gray (#2E2E2E) with the dark keyboard, light gray with
+// the light one. Pressed, or ctrl toggled on: lighter with the dark keyboard,
+// darker with the light one.
 - (UIColor *)primaryColor {
     if (self.keyAppearance == UIKeyboardAppearanceLight)
-        return UIColor.whiteColor;
+        return [UIColor colorWithWhite:209/255. alpha:1];
     else
-        return [UIColor colorWithRed:1 green:1 blue:1 alpha:77/255.];
+        return [UIColor colorWithWhite:46/255. alpha:1];
 }
 - (UIColor *)secondaryColor {
     if (self.keyAppearance == UIKeyboardAppearanceLight)
-        return [UIColor colorWithRed:172/255. green:180/255. blue:190/255. alpha:1];
+        return [UIColor colorWithWhite:160/255. alpha:1];
     else
-        return [UIColor colorWithRed:147/255. green:147/255. blue:147/255. alpha:66/255.];
+        return [UIColor colorWithWhite:100/255. alpha:1];
 }
 - (UIColor *)defaultColor {
     if (self.secondary)

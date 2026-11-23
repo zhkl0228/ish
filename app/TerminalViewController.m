@@ -41,19 +41,13 @@
 
 @property (weak, nonatomic) IBOutlet UIButton *tabKey;
 @property (weak, nonatomic) IBOutlet UIButton *controlKey;
-@property (weak, nonatomic) IBOutlet UIButton *altKey;
 @property (weak, nonatomic) IBOutlet UIButton *escapeKey;
 // Repeats the arrow key being held down.
 @property NSTimer *arrowRepeat;
 @property (strong, nonatomic) IBOutletCollection(id) NSArray *barButtons;
-@property (strong, nonatomic) IBOutletCollection(id) NSArray *barControls;
 
 @property (weak, nonatomic) IBOutlet UIInputView *barView;
 @property (weak, nonatomic) IBOutlet UIStackView *bar;
-@property (weak, nonatomic) IBOutlet NSLayoutConstraint *barTop;
-@property (weak, nonatomic) IBOutlet NSLayoutConstraint *barBottom;
-@property (weak, nonatomic) IBOutlet NSLayoutConstraint *barLeading;
-@property (weak, nonatomic) IBOutlet NSLayoutConstraint *barTrailing;
 @property (weak, nonatomic) IBOutlet NSLayoutConstraint *barButtonWidth;
 @property (weak, nonatomic) IBOutlet NSLayoutConstraint *barHeight;
 
@@ -79,14 +73,34 @@
 // 1 up, 2 down, 3 left, 4 right. These are the CSI final bytes.
 static const char arrowKeyFinals[] = {[1] = 'A', [2] = 'B', [3] = 'D', [4] = 'C'};
 
-static NSString *_Nullable arrowKeySymbol(NSInteger tag) {
-    switch (tag) {
-        case 1: return @"arrow.up";
-        case 2: return @"arrow.down";
-        case 3: return @"arrow.left";
-        case 4: return @"arrow.right";
-    }
-    return nil;
+// An arrow key's face: a filled triangle pointing its way, narrower than an
+// equilateral one, `base` across and `base` * 14 / 11 from base to tip. nil
+// for a key with another tag.
+static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
+    if (tag < 1 || tag > 4)
+        return nil;
+    CGFloat length = round(base * 14 / 11);
+    bool vertical = tag <= 2;
+    CGSize size = vertical ? CGSizeMake(base, length) : CGSizeMake(length, base);
+    CGFloat w = size.width, h = size.height;
+    CGPoint corners[5][3] = {
+        [1] = {{w / 2, 0}, {w, h}, {0, h}},
+        [2] = {{0, 0}, {w, 0}, {w / 2, h}},
+        [3] = {{0, h / 2}, {w, 0}, {w, h}},
+        [4] = {{0, 0}, {w, h / 2}, {0, h}},
+    };
+    UIBezierPath *path = [UIBezierPath bezierPath];
+    [path moveToPoint:corners[tag][0]];
+    [path addLineToPoint:corners[tag][1]];
+    [path addLineToPoint:corners[tag][2]];
+    [path closePath];
+    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:size];
+    UIImage *image = [renderer imageWithActions:^(UIGraphicsImageRendererContext *_) {
+        [UIColor.blackColor setFill];
+        [path fill];
+    }];
+    // drawn in the key's tint, white or black with the keyboard
+    return [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
 }
 
 @implementation TerminalViewController
@@ -142,43 +156,42 @@ static NSString *_Nullable arrowKeySymbol(NSInteger tag) {
     self.barView.accessibilityCustomActions = @[[[UIAccessibilityCustomAction alloc] initWithName:@"Hide Keyboard" actionHandler:^BOOL(UIAccessibilityCustomAction *action) {
         return [self.termView resignFirstResponder];
     }]];
-    // Keys 44 points tall, Apple's minimum for something to tap, and as wide
-    // as the row lets them be (resizeBar); their names and symbols sized to
-    // match.
+    // The bar is a row of flat keys from the left edge, a point apart: esc,
+    // ctrl, tab, the four arrows and paste, 42 points tall on a phone (50 on
+    // an iPad) and about as wide (resizeBar). esc and ctrl are named in
+    // lowercase; tab, paste and the arrows are drawn.
     bool phone = UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone;
-    self.barHeight.constant = phone ? 44 : 50;
-    CGFloat keyFontSize = phone ? 17 : 19;
+    self.barHeight.constant = phone ? 42 : 50;
+    CGFloat keyFontSize = phone ? 18 : 21;
 
-    // The keys are named in text, in capitals as on a keyboard: few people read
-    // the Mac key symbols (⎋ ⇥ ⌃ ⌥) as Esc, Tab, Ctrl and Alt. A key is 28
-    // points wide on a 320-point screen and 36 on a 390-point one, so a name
-    // like CTRL shrinks to fit.
+    // A key is 39 points wide on a 320-point screen: a name shrinks to fit.
     NSDictionary<NSString *, UIButton *> *namedKeys = @{
-        @"ESC": self.escapeKey,
-        @"TAB": self.tabKey,
-        @"CTRL": self.controlKey,
-        @"ALT": self.altKey,
+        @"esc": self.escapeKey,
+        @"ctrl": self.controlKey,
     };
-    [namedKeys enumerateKeysAndObjectsUsingBlock:^(NSString *name, UIButton *key, BOOL *stop) {
+    [namedKeys enumerateKeysAndObjectsUsingBlock:^(NSString *name, UIButton *key, BOOL *_) {
         [key setTitle:name forState:UIControlStateNormal];
-        key.titleLabel.font = [UIFont systemFontOfSize:keyFontSize weight:UIFontWeightMedium];
+        key.titleLabel.font = [UIFont systemFontOfSize:keyFontSize weight:UIFontWeightRegular];
         key.titleLabel.adjustsFontSizeToFitWidth = YES;
         key.titleLabel.minimumScaleFactor = 0.5;
     }];
 
-    // SF Symbols is cool
-    if (@available(iOS 13, *)) {
-        UIImageSymbolConfiguration *keySymbol =
-            [UIImageSymbolConfiguration configurationWithPointSize:keyFontSize + 2 weight:UIImageSymbolWeightMedium];
-        [self.pasteButton setImage:[UIImage systemImageNamed:@"doc.on.clipboard"] forState:UIControlStateNormal];
-        [self.pasteButton setPreferredSymbolConfiguration:keySymbol forImageInState:UIControlStateNormal];
-        for (UIButton *button in self.barButtons) {
-            NSString *symbol = arrowKeySymbol(button.tag);
-            if (symbol != nil) {
-                [button setTitle:nil forState:UIControlStateNormal];
-                [button setImage:[UIImage systemImageNamed:symbol] forState:UIControlStateNormal];
-                [button setPreferredSymbolConfiguration:keySymbol forImageInState:UIControlStateNormal];
-            }
+    UIImageSymbolConfiguration *keySymbol =
+        [UIImageSymbolConfiguration configurationWithPointSize:keyFontSize weight:UIImageSymbolWeightLight];
+    NSDictionary<NSString *, UIButton *> *symbolKeys = @{
+        @"arrow.right.to.line": self.tabKey,
+        @"doc.on.clipboard": self.pasteButton,
+    };
+    [symbolKeys enumerateKeysAndObjectsUsingBlock:^(NSString *symbol, UIButton *key, BOOL *_) {
+        [key setTitle:nil forState:UIControlStateNormal];
+        [key setImage:[UIImage systemImageNamed:symbol] forState:UIControlStateNormal];
+        [key setPreferredSymbolConfiguration:keySymbol forImageInState:UIControlStateNormal];
+    }];
+    for (UIButton *button in self.barButtons) {
+        UIImage *arrow = arrowKeyImage(button.tag, round(keyFontSize * 11 / 18));
+        if (arrow != nil) {
+            [button setTitle:nil forState:UIControlStateNormal];
+            [button setImage:arrow forState:UIControlStateNormal];
         }
     }
     
@@ -447,10 +460,8 @@ static NSString *_Nullable arrowKeySymbol(NSInteger tag) {
         for (BarButton *button in self.barButtons) {
             button.keyAppearance = keyAppearance;
         }
-        UIColor *tintColor = keyAppearance == UIKeyboardAppearanceLight ? UIColor.blackColor : UIColor.whiteColor;
-        for (UIControl *control in self.barControls) {
-            control.tintColor = tintColor;
-        }
+        // the gaps between the keys and the rest of the row
+        self.barView.backgroundColor = self.view.backgroundColor;
     }];
     UIView *oldBarView = self.termView.inputAccessoryView;
     if (UserPreferences.shared.hideExtraKeysWithExternalKeyboard && self.hasExternalKeyboard) {
@@ -569,27 +580,18 @@ static NSString *_Nullable arrowKeySymbol(NSInteger tag) {
 }
 
 - (void)resizeBar {
-    CGSize bar = self.barView.bounds.size;
-    // Keys as wide as the row lets them, up to 44 points on a phone (36 on a
-    // 390-point wide iPhone, 28 on a 320-point iPhone SE) and 52 on an iPad,
-    // which in Slide Over is as narrow as a phone. Every arranged view but the
-    // spacer is a key.
+    // Keys 41 points wide on a phone and 50 on an iPad, which in Slide Over is
+    // as narrow as a phone; narrower if the row is (39 on a 320-point iPhone
+    // SE). Every arranged view but the spacer after them is a key.
     bool phone = UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone;
-    CGFloat padding = phone ? 6 : bar.width >= 450 ? 15 : 10;
     NSUInteger views = self.bar.arrangedSubviews.count;
     NSUInteger keys = views - 1;
-    CGFloat fit = (bar.width - 2 * padding - self.bar.spacing * (views - 1)) / keys;
-    [self setBarHorizontalPadding:padding verticalPadding:phone ? 6 : 8
-                      buttonWidth:MIN(phone ? 44 : 52, floor(fit))];
+    CGFloat width = UIEdgeInsetsInsetRect(self.barView.bounds, self.barView.safeAreaInsets).size.width;
+    CGFloat fit = (width - self.bar.spacing * (views - 1)) / keys;
+    self.barButtonWidth.constant = MIN(phone ? 41 : 50, floor(fit));
     [UIView performWithoutAnimation:^{
         [self.barView layoutIfNeeded];
     }];
-}
-
-- (void)setBarHorizontalPadding:(CGFloat)horizontal verticalPadding:(CGFloat)vertical buttonWidth:(CGFloat)buttonWidth {
-    self.barLeading.constant = self.barTrailing.constant = horizontal;
-    self.barTop.constant = self.barBottom.constant = vertical;
-    self.barButtonWidth.constant = buttonWidth;
 }
 
 - (IBAction)pressEscape:(id)sender {
@@ -605,14 +607,10 @@ static NSString *_Nullable arrowKeySymbol(NSInteger tag) {
 - (IBAction)pressControl:(id)sender {
     self.controlKey.selected = !self.controlKey.selected;
 }
-    
-- (IBAction)pressAlt:(id)sender {
-    self.altKey.selected = !self.altKey.selected;
-}
 
 // An arrow key sends its sequence on touch down and, while held, repeats it
-// after half a second, ten times a second, like a hardware key. Control and Alt
-// from the bar are taken once and apply to the whole press.
+// after half a second, ten times a second, like a hardware key. Ctrl from the
+// bar is taken once and applies to the whole press.
 - (IBAction)arrowKeyDown:(UIButton *)sender {
     NSString *sequence = [self.terminal arrow:arrowKeyFinals[sender.tag]
                                     modifiers:[self.termView takeBarModifiers]];
