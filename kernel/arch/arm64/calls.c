@@ -204,10 +204,10 @@ syscall_t syscall_table[] = {
     [191] = (syscall_t) syscall_stub, // semctl
     [192] = (syscall_t) syscall_stub, // semtimedop
     [193] = (syscall_t) syscall_stub, // semop
-    [194] = (syscall_t) syscall_stub, // shmget
-    [195] = (syscall_t) syscall_stub, // shmctl
-    [196] = (syscall_t) syscall_stub, // shmat
-    [197] = (syscall_t) syscall_stub, // shmdt
+    [194] = (syscall_t) sys_shmget,
+    [195] = (syscall_t) sys_shmctl,
+    [196] = (syscall_t) sys_shmat,
+    [197] = (syscall_t) sys_shmdt,
     // Socket syscalls (no multiplexer on arm64)
     [198] = (syscall_t) sys_socket,
     [199] = (syscall_t) sys_socketpair,

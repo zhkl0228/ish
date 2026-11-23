@@ -145,6 +145,12 @@ int_t sys_epoll_pwait(fd_t epoll_f, addr_t events_addr, int_t max_events, int_t 
 
 int_t sys_eventfd2(uint_t initval, int_t flags);
 int_t sys_pidfd_open(pid_t_ pid, uint_t flags);
+
+// System V shared memory (kernel/shm.c, arm64 guest)
+int_t sys_shmget(int_t key, addr_t size, int_t flags);
+addr_t sys_shmat(int_t id, addr_t addr, int_t flags);
+int_t sys_shmdt(addr_t addr);
+int_t sys_shmctl(int_t id, int_t cmd, addr_t buf_addr);
 void pidfd_notify_exit(pid_t_ pid);
 int_t sys_eventfd(uint_t initval);
 

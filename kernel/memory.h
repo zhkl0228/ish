@@ -120,6 +120,9 @@ struct data {
     // Guest module id + 1 for the ARM64 JIT (asbestos/guest-arm64/jit.c), 0
     // until looked up. Not under ISH_JIT: app code sees this struct too.
     int jit_mod;
+    // Frees it when the last reference goes, instead of munmap and free: a
+    // System V shared memory segment's (kernel/shm.c). NULL for the others.
+    void (*release)(struct data *data);
 #if LEAK_DEBUG
     int pid;
     addr_t dest;
@@ -172,6 +175,11 @@ page_t pt_find_hole_for_reservation(struct mem *mem, pages_t size);
 // ownership of memory. It will be freed with:
 // munmap(memory, pages * PAGE_SIZE)
 int pt_map(struct mem *mem, page_t start, pages_t pages, void *memory, size_t offset, unsigned flags);
+// Map pages of data, from offset, unmapping existing mappings; takes a
+// reference to it for each page
+void pt_map_data(struct mem *mem, page_t start, pages_t pages, struct data *data, size_t offset, unsigned flags);
+// Drop a reference to data; the last one frees it (data->release if set)
+void data_unref(struct data *data);
 // Map empty space into fake memory
 int pt_map_nothing(struct mem *mem, page_t page, pages_t pages, unsigned flags);
 // Unmap fake memory, return -1 if any part of the range isn't mapped and 0 otherwise

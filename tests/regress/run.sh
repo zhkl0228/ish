@@ -598,6 +598,17 @@ EOF
         status=1
     fi
     echo
+    echo "########## System V shared memory: shmget, shmat, shmdt, shmctl ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_sysv_shm" tests/regress/regress_sysv_shm.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_sysv_shm 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_sysv_shm"
+    else
+        echo "failed to build regress_sysv_shm" >&2
+        status=1
+    fi
+    echo
     echo "########## floating-point environment: exception flags, rounding mode ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_fenv" tests/regress/regress_fenv.c -lm; then
         out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_fenv 2>&1)

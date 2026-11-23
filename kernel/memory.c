@@ -605,7 +605,11 @@ int pt_map(struct mem *mem, page_t start, pages_t pages, void *memory, size_t of
         .dest = start << PAGE_BITS,
 #endif
     };
+    pt_map_data(mem, start, pages, data, offset, flags);
+    return 0;
+}
 
+void pt_map_data(struct mem *mem, page_t start, pages_t pages, struct data *data, size_t offset, unsigned flags) {
     for (page_t page = start; page < start + pages; page++) {
         if (mem_pt(mem, page) != NULL)
             pt_unmap(mem, page, 1);
@@ -614,9 +618,22 @@ int pt_map(struct mem *mem, page_t start, pages_t pages, void *memory, size_t of
         pt->data = data;
         pt->offset = ((page - start) << PAGE_BITS) + offset;
         pt->flags = flags;
-
     }
-    return 0;
+}
+
+void data_unref(struct data *data) {
+    if (--data->refcount != 0)
+        return;
+    if (data->release != NULL) {
+        data->release(data);
+        return;
+    }
+    // vdso wasn't allocated with mmap, it's just in our data segment
+    if (data->data != vdso_data)
+        munmap(data->data, data->size);
+    if (data->fd != NULL)
+        fd_close(data->fd);
+    free(data);
 }
 
 int pt_unmap(struct mem *mem, page_t start, pages_t pages) {
@@ -655,16 +672,7 @@ int pt_unmap_always(struct mem *mem, page_t start, pages_t pages) {
             atomic_fetch_sub(&anon_page_count, 1);
 #endif
         mem_pt_del(mem, page);
-        if (--data->refcount == 0) {
-            // vdso wasn't allocated with mmap, it's just in our data segment
-            if (data->data != vdso_data) {
-                munmap(data->data, data->size);
-            }
-            if (data->fd != NULL) {
-                fd_close(data->fd);
-            }
-            free(data);
-        }
+        data_unref(data);
     }
     mem_changed(mem);
     return 0;

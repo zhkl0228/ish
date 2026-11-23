@@ -705,8 +705,11 @@ dword_t sys_madvise(addr_t addr, dword_t len, dword_t advice) {
         bool any = false;
         for (addr_t p = addr; p < end; p += PAGE_SIZE) {
             read_wrlock(&current->mem->lock);
+            // A shared mapping's pages keep their contents, as on Linux: a
+            // later access reads them again from what they share (MAP_SHARED
+            // anonymous memory, a System V shared memory segment).
             struct pt_entry *pt = mem_pt(current->mem, PAGE(p));
-            bool skip = pt == NULL ||
+            bool skip = pt == NULL || (pt->flags & P_SHARED) ||
                         (!(pt->flags & P_ANONYMOUS) &&
                          pt->data != NULL && pt->data->fd != NULL);
             if (skip) {
