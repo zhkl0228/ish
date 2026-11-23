@@ -1,3 +1,4 @@
+#include "kernel/inotify.h"
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netinet/tcp.h>
@@ -486,6 +487,8 @@ static int unix_socket_get(const char *path_raw, struct fd *bind_fd, uint32_t *s
             err = mount->fs->mknod(mount, path, S_IFSOCK | mode, 0);
             if (err < 0)
                 goto out;
+            // made here, not by generic_mknodat: its inotify event too
+            inotify_child(mount, path, IN_CREATE_, 0);
             err = mount->fs->stat(mount, path, &stat);
             if (err < 0)
                 goto out;

@@ -18,8 +18,10 @@
 #include <string.h>
 #include <sys/inotify.h>
 #include <sys/ioctl.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 static int passed, failed;
@@ -265,7 +267,21 @@ int main(void) {
     take(in);
     unlink("d2/m");
 
-    // 8. the queue's end: 16384 events, then Q_OVERFLOW
+    // 8. a unix socket bound to a path: bind makes the file
+    wd = inotify_add_watch(in, "d2", IN_CREATE | IN_DELETE);
+    int sock = socket(AF_UNIX, SOCK_STREAM, 0);
+    struct sockaddr_un addr = {.sun_family = AF_UNIX};
+    snprintf(addr.sun_path, sizeof(addr.sun_path), "d2/sock");
+    int bound = bind(sock, (struct sockaddr *) &addr, sizeof(addr));
+    close(sock);
+    unlink("d2/sock");
+    take(in);
+    snprintf(detail, sizeof(detail), "bind %d: %s", bound, describe());
+    check("bind makes a socket file: CREATE", bound == 0 && equals("CREATE sock, DELETE sock"), detail);
+    inotify_rm_watch(in, wd);
+    take(in);
+
+    // 9. the queue's end: 16384 events, then Q_OVERFLOW
     touch("d2/p");
     touch("d2/q");
     wd = inotify_add_watch(in, "d2", IN_MODIFY);
