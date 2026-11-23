@@ -33,10 +33,15 @@ endif
 # without it the build is the plain gadget engine.
 ish_jit = get_option('jit')
 if ish_jit
-    if guest_arch != 'arm64' or host_machine.system() != 'darwin' or host_machine.cpu_family() != 'aarch64'
-        error('-Djit=true needs guest_arch=arm64 on an Apple arm64 host')
+    if guest_arch != 'arm64' or not ['darwin', 'linux'].contains(host_machine.system()) or host_machine.cpu_family() != 'aarch64'
+        error('-Djit=true needs guest_arch=arm64 on an arm64 host, Apple or Linux')
     endif
     add_project_arguments('-DISH_JIT=1', language: 'c')
+    if host_machine.system() == 'linux'
+        # The recorder names host addresses with dladdr(), which on Linux sees
+        # only the dynamic symbol table.
+        add_project_link_arguments('-rdynamic', language: 'c')
+    endif
     if not get_option('jit_emit')
         # Run only AOT images a target links in (asbestos/guest-arm64/aot.h);
         # never map executable memory (iOS release builds).

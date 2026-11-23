@@ -1,17 +1,23 @@
 // Native JIT for the ARM64 guest -- see jit.h. Built only with -Djit=true.
 
-#if !defined(__APPLE__) || !defined(__aarch64__)
-#error "the ARM64 JIT needs an Apple arm64 host (MAP_JIT)"
+#if !defined(__aarch64__) || !(defined(__APPLE__) || defined(__linux__))
+#error "the ARM64 JIT needs an arm64 host, Apple or Linux"
 #endif
 
+#ifdef __APPLE__
 #include <TargetConditionals.h>
+#include <libkern/OSCacheControl.h>
+#include <mach/mach.h>
+#else
+// Linux maps the code region twice from one memfd, writable and executable
+// (map_dual), as iOS does with vm_remap: no MAP_JIT, no debugger to ask.
+#define _GNU_SOURCE
+#define TARGET_OS_OSX 0
+#endif
 #include <errno.h>
 #include <unistd.h>
 #include <dlfcn.h>
 #include <fnmatch.h>
-#include <libkern/OSCacheControl.h>
-#include <mach/mach.h>
-#include <mach/mach_time.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stddef.h>
@@ -29,6 +35,18 @@
 #include "kernel/fs.h"
 #include "kernel/memory.h"
 #include "cpu-offsets.h"
+
+// A signal context's registers (as host_fault.c reads them)
+#ifdef __APPLE__
+#define UC_X(uc, n) ((uc)->uc_mcontext->__ss.__x[n])
+#define UC_PC(uc) ((uc)->uc_mcontext->__ss.__pc)
+#else
+#define UC_X(uc, n) ((uc)->uc_mcontext.regs[n])
+#define UC_PC(uc) ((uc)->uc_mcontext.pc)
+static void sys_icache_invalidate(void *start, size_t len) {
+    __builtin___clear_cache((char *) start, (char *) start + len);
+}
+#endif
 
 extern void jit_fiber_ret(void) __asm("fiber_ret");
 extern void jit_fiber_ret_chain(void) __asm("fiber_ret_chain");
@@ -90,7 +108,7 @@ static _Atomic size_t region_used;
 static _Atomic bool region_full;   // an allocation failed: what came after runs as gadgets
 
 #ifndef ISH_JIT_NO_EMIT   // AOT-only builds never map executable memory
-#if !TARGET_OS_OSX
+#if defined(__APPLE__) && !TARGET_OS_OSX
 // <sys/codesign.h>'s, which the iOS SDK leaves out
 extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 #define CS_OPS_STATUS 0
@@ -117,6 +135,29 @@ static bool may_run_written_code(void) {
 #endif
 
 static bool map_dual(void) {
+#ifndef __APPLE__
+    int fd = memfd_create("ish-jit", MFD_CLOEXEC);
+    if (fd < 0)
+        return false;
+    if (ftruncate(fd, REGION_SIZE) < 0) {
+        close(fd);
+        return false;
+    }
+    void *rw = mmap(NULL, REGION_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    void *rx = mmap(NULL, REGION_SIZE, PROT_READ | PROT_EXEC, MAP_SHARED, fd, 0);
+    close(fd);
+    if (rw == MAP_FAILED || rx == MAP_FAILED) {
+        if (rw != MAP_FAILED)
+            munmap(rw, REGION_SIZE);
+        if (rx != MAP_FAILED)
+            munmap(rx, REGION_SIZE);
+        return false;
+    }
+    region = rx;
+    rw_delta = (intptr_t) rw - (intptr_t) rx;
+    dual_map = true;
+    return true;
+#else
 #if !TARGET_OS_OSX
     if (!may_run_written_code())
         return false;
@@ -141,6 +182,7 @@ static bool map_dual(void) {
     rw_delta = (intptr_t) rw - (intptr_t) rx;
     dual_map = true;
     return true;
+#endif
 }
 
 static bool map_jit(void) {
@@ -3011,7 +3053,7 @@ static uintptr_t access_exit(uintptr_t pc, uintptr_t lo, uintptr_t hi) {
 static void sync_pinned(ucontext_t *uc, uintptr_t pc, const struct aot_module *img) {
     if (n_pinned <= 0)
         return;
-    char *cpu = (char *) uc->uc_mcontext->__ss.__x[1];
+    char *cpu = (char *) UC_X(uc, 1);
     // Faults only happen at guest accesses, which in a loop block are all in
     // the promoted body. (Blocking lock: this runs in a signal handler, but
     // only for faults inside native code, never from within loopmap_add.)
@@ -3035,10 +3077,10 @@ static void sync_pinned(ucontext_t *uc, uintptr_t pc, const struct aot_module *i
         bool donor = false;
         for (unsigned k = 0; k < lm.n; k++) donor |= lm.d[k] == pin_guest[i];
         if (!donor)
-            *(uint64_t *) (cpu + greg_off(pin_guest[i])) = uc->uc_mcontext->__ss.__x[pin_host[i]];
+            *(uint64_t *) (cpu + greg_off(pin_guest[i])) = UC_X(uc, pin_host[i]);
     }
     for (unsigned k = 0; k < lm.n; k++)
-        *(uint64_t *) (cpu + greg_off(lm.g[k])) = uc->uc_mcontext->__ss.__x[lm.h[k]];
+        *(uint64_t *) (cpu + greg_off(lm.g[k])) = UC_X(uc, lm.h[k]);
 }
 
 // The last fault in native code not at an access, until the run loop takes it
@@ -3053,7 +3095,7 @@ static __thread struct {
 
 enum jit_fault jit_native_fault(void *ucontext, uintptr_t addr, bool as_unknown, uintptr_t *resume) {
     ucontext_t *uc = ucontext;
-    uintptr_t pc = uc->uc_mcontext->__ss.__pc;
+    uintptr_t pc = UC_PC(uc);
     const struct aot_module *img = NULL;
     uintptr_t lo, hi;
     if (region != NULL && pc >= (uintptr_t) region && pc < (uintptr_t) region + REGION_SIZE) {
@@ -3614,8 +3656,12 @@ void jit_report(void) {
             "🛠  JIT(%s): blocks %llu, segments %llu, units %llu, code %llu KB, compile %.1f ms | "
             "block ends %llu (not translated %llu), direct links %llu, loop blocks %llu | "
             "unsupported insns %llu, out of regs %llu | shared %llu, AOT %llu (%u images)\n",
-            dual_map ? (pic_on ? "dual-map, PIC" : "dual-map") : (pic_on ? "MAP_JIT, PIC" : "MAP_JIT"), st_blocks, st_segments, st_units, st_bytes / 1024, jit_ticks_ms(st_ticks),
-            st_block_ends, st_block_end_fail, st_links, st_loops, st_unsupported_insns, st_fail_regs, st_shared, st_aot, aot_nimages);
+            dual_map ? (pic_on ? "dual-map, PIC" : "dual-map") : (pic_on ? "MAP_JIT, PIC" : "MAP_JIT"),
+            (unsigned long long) st_blocks, (unsigned long long) st_segments, (unsigned long long) st_units,
+            (unsigned long long) st_bytes / 1024, jit_ticks_ms(st_ticks), (unsigned long long) st_block_ends,
+            (unsigned long long) st_block_end_fail, (unsigned long long) st_links, (unsigned long long) st_loops,
+            (unsigned long long) st_unsupported_insns, (unsigned long long) st_fail_regs,
+            (unsigned long long) st_shared, (unsigned long long) st_aot, aot_nimages);
 }
 
 static pthread_once_t init_once = PTHREAD_ONCE_INIT;
