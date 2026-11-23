@@ -83,6 +83,17 @@ struct flock32_ {
     dword_t len;
     pid_t_ pid;
 } __attribute__((packed));
+// A 64-bit guest's (arm64's): its offsets 64-bit and aligned
+struct flock_arm64_ {
+    word_t type;
+    word_t whence;
+    dword_t pad;
+    sqword_t start;
+    sqword_t len;
+    pid_t_ pid;
+    dword_t pad2;
+};
+_Static_assert(sizeof(struct flock_arm64_) == 32, "arm64's struct flock");
 
 int fcntl_getlk(struct fd *fd, struct flock_ *flock);
 // cmd should be either F_SETLK or F_SETLKW
