@@ -20,6 +20,11 @@ static void *real_tty_read_thread(void *_tty) {
     char ch;
     for (;;) {
         int err = read(STDIN_FILENO, &ch, 1);
+        // At its end (< /dev/null) nothing more comes: reading on spun,
+        // printing this, and real_tty_cleanup's cancel could take the thread
+        // in printk, leaving its lock held for the exit's printk to wait on.
+        if (err == 0)
+            return NULL;
         if (err != 1) {
             printk("tty read returned %d\n", err);
             if (err < 0)

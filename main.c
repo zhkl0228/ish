@@ -94,7 +94,8 @@ static void crash_handler(int sig, siginfo_t *info, void *ctx) {
     void *bt[20];
     int n = backtrace(bt, 20);
     backtrace_symbols_fd(bt, n, STDERR_FILENO);
-    _exit(139);
+    // as a shell reports a death by the signal: abort's is 134
+    _exit(128 + sig);
 }
 
 static struct termios saved_termios;

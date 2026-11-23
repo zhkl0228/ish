@@ -1,3 +1,4 @@
+#include <fcntl.h>
 #include <signal.h>
 #include <string.h>
 #include <time.h>
@@ -283,12 +284,22 @@ int create_stdio(const char *file, int major, int minor) {
     return 0;
 }
 
+// A host stdio fd for the first process (create_piped_stdio): a copy of it,
+// which the guest closes as it likes. Closing the host's own closed iSH's
+// stdin, stdout or stderr (init taking the console, a daemon leaving the
+// terminal): iSH's own writes to them were lost, restoring the terminal at
+// exit failed and aborted, and a file opened later could take the number
+// and get what was written to stdout or stderr.
 static struct fd *open_fd_from_actual_fd(int fd_no) {
+    int copy = fcntl(fd_no, F_DUPFD_CLOEXEC, STDERR_FILENO + 1);
+    if (copy < 0)
+        return NULL;
     struct fd *fd = adhoc_fd_create(&realfs_fdops);
     if (fd == NULL) {
+        close(copy);
         return NULL;
     }
-    fd->real_fd = fd_no;
+    fd->real_fd = copy;
     fd->dir = NULL;
     // Populate stat from host fd so guest fstat() returns valid metadata.
     // Node.js (libuv) calls fstat on stdout/stderr to determine if it's a
