@@ -1,5 +1,9 @@
+#include <TargetConditionals.h>
 #include <mach/mach.h>
 #include <sys/sysctl.h>
+#if TARGET_OS_IPHONE
+#include <os/proc.h>
+#endif
 #include <sys/time.h>
 #include "platform/platform.h"
 #include "debug.h"
@@ -57,6 +61,28 @@ unsigned get_per_cpu_usage(struct cpu_usage *usage, unsigned max) {
 }
 
 struct mem_usage get_mem_usage(void) {
+#if TARGET_OS_IPHONE
+    // An app has a memory limit of its own, well under the device's memory,
+    // and iOS kills it past that: the guest's memory is that limit (what the
+    // app takes now and what it may still take), its free memory what it may
+    // still take. Programs that size themselves by the memory (Java's default
+    // heap, a fourth of it) stay under the limit. os_proc_available_memory()
+    // is 0 for a process with no limit (the simulator, an iPad app on a Mac):
+    // the device's memory then, below.
+    size_t available = os_proc_available_memory();
+    if (available != 0) {
+        task_vm_info_data_t vm = {};
+        mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+        task_info(mach_task_self(), TASK_VM_INFO, (task_info_t) &vm, &count);
+        struct mem_usage app = {
+            .total = vm.phys_footprint + available,
+            .free = available,
+            .active = vm.phys_footprint,
+            .inactive = 0,
+        };
+        return app;
+    }
+#endif
     // Last successful reading; served as a fallback so a transient (or
     // OS-beta-induced) host_info failure degrades /proc/meminfo instead of
     // aborting the whole app. Benign data race: stale/torn stats are fine here.

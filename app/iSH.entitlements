@@ -10,5 +10,9 @@
 	<array>
 		<string>$(PRODUCT_APP_GROUP_IDENTIFIER)</string>
 	</array>
+	<!-- A higher memory limit for the app: node programs (Claude Code,
+	     Kimi Code) take 0.8 GB and more each, as the emulator's guest memory. -->
+	<key>com.apple.developer.kernel.increased-memory-limit</key>
+	<true/>
 </dict>
 </plist>
