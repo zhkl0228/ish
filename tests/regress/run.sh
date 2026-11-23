@@ -375,6 +375,18 @@ else
         status=1
     fi
     echo
+    echo "########## SO_PEERCRED, listen twice, abstract names freed ##########"
+    if "$CC_GUEST" -static -O0 -Wall -pthread -o "$GUEST_ROOT/tmp/regress_peercred" \
+            tests/regress/regress_peercred.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_peercred 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_peercred"
+    else
+        echo "failed to build regress_peercred" >&2
+        status=1
+    fi
+    echo
     echo "########## /dev/shm: shm_open and sem_open ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_dev_shm" \
             tests/regress/regress_dev_shm.c; then

@@ -15,7 +15,10 @@ void sockrestart_begin_listen(struct fd *sock) {
     if (sock->ops != &socket_fdops)
         return;
     lock(&sockrestart_lock);
-    list_add(&listen_fds, &sock->sockrestart.listen);
+    // listen() again (to change the backlog, which Linux allows) must not add
+    // the socket twice: closing it would leave it on the list, freed.
+    if (list_null(&sock->sockrestart.listen))
+        list_add(&listen_fds, &sock->sockrestart.listen);
     unlock(&sockrestart_lock);
 }
 

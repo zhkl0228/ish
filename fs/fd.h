@@ -67,6 +67,12 @@ struct fd {
             struct unix_abstract *unix_name_abstract;
             uint8_t unix_name_len;
             char unix_name[108];
+            // The id behind the name bind() gave (inode->socket_id or the
+            // abstract name's), 0 before. Connect finds the listener by it.
+            uint32_t unix_socket_id;
+            // On the list of listening unix sockets (sys_listen). Locked by
+            // peer_lock.
+            struct list unix_listening;
             struct fd *unix_peer; // locked by peer_lock, for simplicity
             // A connection the other end has not accepted yet (sys_connect),
             // or NULL. Locked by peer_lock.
@@ -81,15 +87,16 @@ struct fd {
             uint32_t netlink_owe_seq;
             bool netlink_owe_done;
             long netlink_rcvtimeo_ms; // SO_RCVTIMEO; 0 = wait
-            cond_t unix_got_peer;
             // Queue of struct scm for sending file descriptors
             // locked by fd->lock
             struct list unix_scm;
+            // What SO_PEERCRED gives: as on Linux, taken when the connection
+            // is made and kept. Locked by peer_lock.
             struct ucred_ {
                 pid_t_ pid;
                 uid_t_ uid;
                 uid_t_ gid;
-            } unix_cred;
+            } unix_peer_cred;
         } socket;
 
         // See app/Pasteboard.m
