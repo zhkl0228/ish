@@ -53,6 +53,14 @@ dword_t sys_sethostname(addr_t UNUSED(hostname_addr), dword_t UNUSED(hostname_le
 #if __APPLE__
 static void sysinfo_specific(struct sys_info *info) {
     struct mem_usage usage = get_mem_usage();
+    // The app's own limit (iOS), as /proc/meminfo shows it: not capped, and
+    // free what the app may still take
+    if (usage.app_limit) {
+        info->totalram = usage.total;
+        info->freeram = usage.free;
+        info->mem_unit = 1;
+        return;
+    }
     uint64_t total_ram = usage.total;
     // Cap reported RAM to avoid musl/V8 allocating enormous arenas.
     // Must be consistent with MEMINFO_MAX_RAM in fs/proc/root.c.

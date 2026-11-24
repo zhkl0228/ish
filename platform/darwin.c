@@ -159,6 +159,7 @@ struct mem_usage get_mem_usage(void) {
             .free = available,
             .active = vm.phys_footprint,
             .inactive = 0,
+            .app_limit = true,
         };
         return app;
     }
@@ -193,7 +194,7 @@ struct mem_usage get_mem_usage(void) {
         return fallback;
     }
 
-    struct mem_usage usage;
+    struct mem_usage usage = {};
     usage.total = basic.max_mem;
     usage.free = vm.free_count * vm_page_size;
     usage.active = vm.active_count * vm_page_size;

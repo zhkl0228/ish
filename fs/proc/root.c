@@ -100,10 +100,13 @@ static int proc_show_meminfo(struct proc_entry *UNUSED(entry), struct proc_data 
     // Cap reported memory to match sys_sysinfo limit.
     // Reporting full host RAM (e.g. 24GB) causes V8 to set heap_size_limit=4GB
     // which exhausts the emulator's limited address space.
+    // The app's own limit (iOS) is shown as it is: it is all the app may take
+    // (6 GB with the increased-memory-limit entitlement, V8's heap a fourth of
+    // it), and capped, the guest saw 4 GB of it, all of it free.
     #define MEMINFO_MAX_RAM (4ULL * 1024 * 1024 * 1024)
-    if (usage.total > MEMINFO_MAX_RAM)
+    if (!usage.app_limit && usage.total > MEMINFO_MAX_RAM)
         usage.total = MEMINFO_MAX_RAM;
-    if (usage.free > MEMINFO_MAX_RAM)
+    if (!usage.app_limit && usage.free > MEMINFO_MAX_RAM)
         usage.free = MEMINFO_MAX_RAM;
     // no more active or inactive than there is (the host's, said of a total
     // capped above)

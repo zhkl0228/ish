@@ -50,7 +50,7 @@ unsigned get_per_cpu_usage(struct cpu_usage *usage, unsigned max) {
 // In bytes, as on Darwin (the host's /proc/meminfo has kB: the guest's showed
 // 7.9 MB of memory for 7.9 GB)
 struct mem_usage get_mem_usage() {
-    struct mem_usage usage;
+    struct mem_usage usage = {};
     char buf[1234];
 
     read_proc_line("/proc/meminfo", "MemTotal:", buf);

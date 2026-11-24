@@ -18,6 +18,10 @@ struct mem_usage {
     uint64_t free;
     uint64_t active;
     uint64_t inactive;
+    // The total is the app's own limit (iOS), past which the OS ends it: the
+    // guest's memory as it is. Otherwise the host's memory, which the guest
+    // is shown no more of than 4 GB (/proc/meminfo, sysinfo).
+    bool app_limit;
 };
 struct mem_usage get_mem_usage(void);
 
