@@ -292,6 +292,13 @@ int path_normalize_via(struct fd *at, const char *path, char *out, int flags, bo
         at = current->fs->pwd;
     unlock(&current->fs->lock);
 
+    // A path from a directory fd that is no directory is ENOTDIR, as Linux's
+    // path walk says. Its path (a terminal's, a pipe's, one of no mount) was
+    // asked for and failed the assert below: fstatat(0, "x") aborted iSH
+    // (CPython's test_posix test_stat_dir_fd, dir_fd=False).
+    if (at != NULL && !S_ISDIR(at->type))
+        return _ENOTDIR;
+
     char at_path[MAX_PATH];
     if (at != NULL) {
         int err = generic_getpath(at, at_path);

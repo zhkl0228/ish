@@ -892,6 +892,17 @@ EOF
         status=1
     fi
     echo
+    echo "########## *at calls from a directory fd that is no directory: ENOTDIR (iSH aborted) ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_dirfd_not_dir" tests/regress/regress_dirfd_not_dir.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_dirfd_not_dir 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_dirfd_not_dir"
+    else
+        echo "failed to build regress_dirfd_not_dir" >&2
+        status=1
+    fi
+    echo
     echo "########## truncate(2) of a path (iSH aborted) ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_truncate_path" tests/regress/regress_truncate_path.c; then
         out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_truncate_path 2>&1)
