@@ -9,7 +9,8 @@
 // the kill comes first): a SIGSEGV sent by kill has no ESR; a load from an
 // unmapped page has one of a data abort (EC 0x24), not a write, a translation
 // fault (DFSC 0x07 here; its level is the hardware's natively); a store to a
-// read-only page one of a data abort, a write (WnR), a permission fault.
+// read-only page, read before, one of a data abort, a write (WnR), a
+// permission fault.
 // Natively passes.
 //
 // Build: aarch64-linux-musl-gcc -static -O0 -o regress_sigsegv_esr regress_sigsegv_esr.c
@@ -93,7 +94,10 @@ int main(void) {
     check("a load from an unmapped page: a data abort, a read, a translation fault",
           have_esr && (esr >> 26 & 0x3f) == 0x24 && !(esr >> 6 & 1) && (esr & 0x3c) == 0x04, detail);
 
+    // read first: natively a page never touched has no page table entry, and
+    // a store to it is a translation fault, whatever its protection
     char *ro = mmap(NULL, 4096, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    (void) *(volatile char *) ro;
     if (sigsetjmp(back, 1) == 0)
         *(volatile char *) ro = 1;
     describe(detail, sizeof(detail));
