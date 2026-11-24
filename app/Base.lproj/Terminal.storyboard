@@ -200,9 +200,6 @@
                                     <constraints>
                                         <constraint firstAttribute="width" constant="31" id="1Ax-5U-2CI"/>
                                     </constraints>
-                                    <connections>
-                                        <action selector="paste:" destination="dkx-z0-nzr" eventType="primaryActionTriggered" id="cfw-0C-OAd"/>
-                                    </connections>
                                 </button>
                             </subviews>
                             <constraints>

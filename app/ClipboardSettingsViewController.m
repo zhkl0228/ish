@@ -286,8 +286,7 @@ static SettingsSection *Section(NSString *title, NSString *footer, NSArray<Setti
             [button setTitle:row.value() forState:UIControlStateNormal];
             button.menu = row.menu();
             button.showsMenuAsPrimaryAction = YES;
-            if (@available(iOS 15, *))
-                button.changesSelectionAsPrimaryAction = NO;
+            button.changesSelectionAsPrimaryAction = NO;
             [button sizeToFit];
             cell.accessoryView = button;
             cell.selectionStyle = UITableViewCellSelectionStyleNone;

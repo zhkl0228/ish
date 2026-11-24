@@ -35,13 +35,11 @@ static void patch_if_needed(void) {
 }
 
 __attribute__((constructor)) void accessibilityfixes_init(void) {
-    if (@available(iOS 15.7, *)) {
-        [NSNotificationCenter.defaultCenter addObserverForName:UIAccessibilityVoiceOverStatusDidChangeNotification
-                                                        object:nil
-                                                         queue:nil
-                                                    usingBlock:^(NSNotification *notification) {
-            patch_if_needed();
-        }];
+    [NSNotificationCenter.defaultCenter addObserverForName:UIAccessibilityVoiceOverStatusDidChangeNotification
+                                                    object:nil
+                                                     queue:nil
+                                                usingBlock:^(NSNotification *notification) {
         patch_if_needed();
-    }
+    }];
+    patch_if_needed();
 }
