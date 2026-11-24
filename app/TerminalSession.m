@@ -6,7 +6,6 @@
 #import "TerminalSession.h"
 #import "AppDelegate.h"
 #import "UserPreferences.h"
-#import "LinuxInterop.h"
 #include <stdatomic.h>
 #include "kernel/init.h"
 #include "kernel/task.h"
@@ -66,7 +65,6 @@ NSNotificationName const TerminalSessionDidChangeNotification = @"TerminalSessio
 }
 
 - (nullable NSString *)foregroundProgram {
-#if !ISH_LINUX
     if (self.state != TerminalSessionStateRunning)
         return nil;
     int fg_group = self.terminal.foregroundProcessGroup;
@@ -78,9 +76,6 @@ NSNotificationName const TerminalSessionDidChangeNotification = @"TerminalSessio
     NSString *program = leader != NULL && !leader->zombie ? [NSString stringWithUTF8String:leader->comm] : nil;
     unlock(&pids_lock);
     return program ?: self.foregroundJobPrograms.firstObject;
-#else
-    return nil;
-#endif
 }
 
 // The working directory as a tab shows it: ~ for root's home, else its last
@@ -156,7 +151,6 @@ NSNotificationName const TerminalSessionDidChangeNotification = @"TerminalSessio
 }
 
 - (NSString *)currentDirectory {
-#if !ISH_LINUX
     if (self.state != TerminalSessionStateRunning)
         return nil;
     // login forks the shell, so the process that owns the terminal (the shell, or
@@ -176,13 +170,9 @@ NSNotificationName const TerminalSessionDidChangeNotification = @"TerminalSessio
     }
     unlock(&pids_lock);
     return directory;
-#else
-    return nil;
-#endif
 }
 
 - (BOOL)shellIsForeground {
-#if !ISH_LINUX
     if (self.state != TerminalSessionStateRunning)
         return NO;
     // The shell leads the session (login execs it there) and owns the terminal
@@ -203,13 +193,9 @@ NSNotificationName const TerminalSessionDidChangeNotification = @"TerminalSessio
     NSString *comm = task != NULL ? [NSString stringWithUTF8String:task->comm] : nil;
     unlock(&pids_lock);
     return comm != nil && [shells containsObject:comm];
-#else
-    return YES; // can't tell, so don't get in the way
-#endif
 }
 
 - (NSArray<NSString *> *)foregroundJobPrograms {
-#if !ISH_LINUX
     if (self.state != TerminalSessionStateRunning)
         return @[];
     // The session's leader is the shell (login execs it), and its process
@@ -230,9 +216,6 @@ NSNotificationName const TerminalSessionDidChangeNotification = @"TerminalSessio
     }
     unlock(&pids_lock);
     return programs.array;
-#else
-    return @[]; // can't tell, so don't get in the way
-#endif
 }
 
 @end
@@ -273,12 +256,10 @@ NSNotificationName const TerminalSessionDidChangeNotification = @"TerminalSessio
                 [session refreshState];
         }];
         [NSRunLoop.mainRunLoop addTimer:titles forMode:NSRunLoopCommonModes];
-#if !ISH_LINUX
         [NSNotificationCenter.defaultCenter addObserver:self
                                                selector:@selector(processExited:)
                                                    name:ProcessExitedNotification
                                                  object:nil];
-#endif
     }
     return self;
 }
@@ -295,7 +276,6 @@ NSNotificationName const TerminalSessionDidChangeNotification = @"TerminalSessio
     return nil;
 }
 
-#if !ISH_LINUX
 // As Linux starts the logins after the boot's sysinit actions, a session's
 // process runs once the boot (/usr/libexec/ish-sysinit) is done: its login
 // is then recorded with utmpd (w, who), which the boot starts. A login before
@@ -383,38 +363,6 @@ static int start_process(NSArray<NSString *> *command, NSString *directory, Term
         return err;
     return current->pid;
 }
-#else
-// A session of the Linux kernel starts at home: directory is not used.
-static int start_process(NSArray<NSString *> *command, NSString *directory, Terminal **terminalOut) {
-    const char *argv_arr[command.count + 1];
-    for (NSUInteger i = 0; i < command.count; i++)
-        argv_arr[i] = command[i].UTF8String;
-    argv_arr[command.count] = NULL;
-    const char *envp_arr[] = {
-        "TERM=xterm-256color",
-        NULL,
-    };
-    const char *const *argv = argv_arr;
-    const char *const *envp = envp_arr;
-    __block Terminal *terminal = nil;
-    __block int sessionPid = 0;
-    __block int err = 1;
-    sync_do_in_workqueue(^(void (^done)(void)) {
-        linux_start_session(argv[0], argv, envp, ^(int retval, int pid, nsobj_t term) {
-            err = retval;
-            if (term)
-                terminal = CFBridgingRelease(term);
-            sessionPid = pid;
-            done();
-        });
-    });
-    NSCAssert(err <= 0, @"session start did not finish??");
-    if (err < 0)
-        return err;
-    *terminalOut = terminal;
-    return sessionPid;
-}
-#endif
 
 - (TerminalSession *)startSessionWithError:(int *)errorOut {
     return [self startSessionInDirectory:nil restoredOutput:nil error:errorOut];
@@ -444,7 +392,6 @@ static int start_process(NSArray<NSString *> *command, NSString *directory, Term
     // Before the process runs: ahead of anything it writes
     if (output != nil)
         [terminal sendOutput:output.bytes length:(int) output.length];
-#if !ISH_LINUX
     if (boot_is_awaited())
         current->before_run = wait_for_boot;
     task_start(current);
@@ -452,7 +399,6 @@ static int start_process(NSArray<NSString *> *command, NSString *directory, Term
     // from main (e.g. SIGHUP on close) would take the "signalling myself" path and
     // not wake the task's thread.
     current = NULL;
-#endif
     return session;
 }
 
@@ -473,7 +419,6 @@ static int start_process(NSArray<NSString *> *command, NSString *directory, Term
     [session notifyChanged];
 }
 
-#if !ISH_LINUX
 - (void)processExited:(NSNotification *)notif {
     int pid = [notif.userInfo[@"pid"] intValue];
     int code = [notif.userInfo[@"code"] intValue];
@@ -496,6 +441,5 @@ static int start_process(NSArray<NSString *> *command, NSString *directory, Term
         }
     }
 }
-#endif
 
 @end

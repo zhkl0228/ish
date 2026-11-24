@@ -27,7 +27,7 @@ fi
 if [ -f "$aot/build.ninja" ]; then
     meson configure "$aot" -Dcli_aot="$images"
 else
-    CC=${CC:-clang} meson setup "$aot" -Dguest_arch=arm64 -Djit=true -Djit_emit=false -Dbuildtype=release -Dcli_aot="$images"
+    CC=${CC:-clang} meson setup "$aot" -Djit=true -Djit_emit=false -Dbuildtype=release -Dcli_aot="$images"
 fi
 ninja -C "$aot" ish
 "$aot/ish" -f "$root" /bin/cat /proc/ish/jit | grep -E 'images:|  ok|rejected'

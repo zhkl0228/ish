@@ -88,12 +88,10 @@ struct task *task_create_(struct task *parent) {
     // copied from the parent, which is in its clone
     atomic_store(&task->in_syscall, false);
 
-#ifdef GUEST_ARM64
     // Invalidate exclusive monitor after copying parent state.
     // Child must not inherit parent's LDXR reservation, as any context
     // switch or interrupt (including fork/clone) invalidates exclusive state.
     task->cpu.excl_addr = UINT64_MAX;
-#endif
 
     // The poke flag must not be inherited: poked_ptr would alias the parent's
     // _poked byte (cross-task pokes), and a copied _poked=true seeds a
@@ -196,9 +194,7 @@ struct task_run_cleanup {
 
 static void task_run_cleanup(void *arg) {
     struct task_run_cleanup *cleanup = arg;
-#ifdef GUEST_ARM64
     tlb_detach(cleanup->tlb);   // exited while running guest code
-#endif
     tlb_free(cleanup->tlb);
     // [T-ish-mm-leak-refcount-handoff] If the do_exit_group safety valve
     // orphaned this thread (stuck in an uninterruptible host syscall) it
@@ -271,15 +267,11 @@ void task_run_current(void) {
             pthread_exit(NULL);
         }
         read_wrlock_after_writers(&self->mem->lock);
-#ifdef GUEST_ARM64
         tlb->cpu = cpu;
         tlb_attach(tlb, &self->mem->mmu);
-#endif
         tlb_refresh(tlb, &self->mem->mmu);
         int interrupt = cpu_run_to_interrupt(cpu, tlb);
-#ifdef GUEST_ARM64
         tlb_detach(tlb);
-#endif
         read_wrunlock(&self->mem->lock);
         handle_interrupt(interrupt);
     }

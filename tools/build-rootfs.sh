@@ -14,7 +14,7 @@
 # app/GuestARM64.xcconfig), so the usual run is
 #   tools/build-rootfs.sh build-arm64 deps/rootfs/arm64-root.tar.gz
 #
-# The build dir must be an arm64-guest build (meson setup -Dguest_arch=arm64)
+# The build dir is any build of ish (meson setup)
 # with ish, tools/fakefsify and tools/unfakefsify built:
 #   ninja -C <build dir> ish tools/fakefsify tools/unfakefsify
 # Packages are installed by running apk inside iSH, so this needs network

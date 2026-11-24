@@ -24,9 +24,7 @@
 
 #include <stddef.h>
 #include <sys/resource.h>
-#ifdef GUEST_ARM64
 #include "asbestos/guest-arm64/host_fault.h"
-#endif
 
 #ifdef __aarch64__
 // Host register access in a signal ucontext: Darwin keeps a pointer to the
@@ -61,7 +59,7 @@ const char *__asan_default_options(void) {
 #endif
 
 static void crash_handler(int sig, siginfo_t *info, void *ctx) {
-#if defined(__aarch64__) && defined(GUEST_ARM64)
+#if defined(__aarch64__)
     // A fault in translated guest code goes on (asbestos/guest-arm64/host_fault.c)
     if (asbestos_host_fault(sig, info, ctx))
         return;
@@ -226,7 +224,6 @@ static void microbench_signal_dump(int sig) {
     (void)sig;
     dump_pc_hist();
     dump_pc_trace();
-#ifdef GUEST_ARM64
     // Walk all tasks, dump guest x21 if available (microbench counter reg).
     extern struct pid pids[];
     for (int i = 1; i < 8; i++) {
@@ -235,7 +232,6 @@ static void microbench_signal_dump(int sig) {
             fprintf(stderr, "guest_pid=%d  x21=%llu\n", i, (unsigned long long)t->cpu.x21);
         }
     }
-#endif
     _exit(0);
 }
 
@@ -350,9 +346,7 @@ static void ish_cli_memory_governor_start(void) {
 int main(int argc, char *const argv[]) {
     ish_signpost_init();
     atexit(dump_pc_hist);
-#ifdef GUEST_ARM64
     { extern void dump_wx_stats(void); atexit(dump_wx_stats); }
-#endif
     // Write watchpoint (diagnostic): ISH_WATCH_PAGE=<hex page addr> arms the
     // per-store page check in the write gadgets; ISH_WATCH_LO/HI narrow which
     // hits get recorded.

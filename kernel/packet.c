@@ -110,11 +110,7 @@ static_assert(sizeof(struct packet_mreq_) == 16, "packet_mreq layout");
 // a TPACKET_V2 frame's headers before its data
 #define TPACKET_HDRLEN_ (TPACKET_ALIGN(sizeof(struct tpacket2_hdr_)) + sizeof(struct sockaddr_ll_))
 // TPACKET_V1's header, struct tpacket_hdr: its tp_status is a long
-#ifdef GUEST_ARM64
 #define TPACKET1_HDR_SIZE 32
-#else
-#define TPACKET1_HDR_SIZE 24
-#endif
 // the most memory a ring may have
 #define RING_MAX (64u << 20)
 

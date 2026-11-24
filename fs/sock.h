@@ -55,7 +55,6 @@ struct msghdr_ {
     int_t msg_flags;
 };
 
-#ifdef GUEST_ARM64
 // ARM64 Linux uses 64-bit pointers and size_t in msghdr
 struct msghdr64_ {
     uint64_t msg_name;       // void *
@@ -68,16 +67,11 @@ struct msghdr64_ {
     int32_t  msg_flags;
     int32_t  _pad1;
 };
-#endif
 
 // A control message header as the guest lays it out. cmsg_len is a size_t:
 // 4 bytes on x86, 8 on arm64, where the data then starts at offset 16. Each
 // message is aligned to its size, as musl's CMSG_NXTHDR aligns to a long.
-#ifdef GUEST_ARM64
 typedef uint64_t cmsg_len_t_;
-#else
-typedef dword_t cmsg_len_t_;
-#endif
 struct cmsghdr_ {
     cmsg_len_t_ len;
     int_t level;
@@ -276,14 +270,12 @@ static inline int sock_opt_to_real(int fake, int level) {
             case SO_TIMESTAMP_: return SO_TIMESTAMP;
             case SO_RCVTIMEO_: return SO_RCVTIMEO;
             case SO_SNDTIMEO_: return SO_SNDTIMEO;
-#ifdef GUEST_ARM64
             // What a 64-bit guest's libc calls SO_RCVTIMEO and SO_SNDTIMEO
             // (musl's and glibc's): Linux's _OLD ones, of the same 64-bit
             // timeval there as 66 and 67. They failed with EINVAL: iputils'
             // ping said so on each run, and a receive timeout never came.
             case SO_RCVTIMEO_OLD_: return SO_RCVTIMEO;
             case SO_SNDTIMEO_OLD_: return SO_SNDTIMEO;
-#endif
             case SO_REUSEPORT_: return SO_REUSEPORT;
         } break;
         case IPPROTO_TCP: switch (fake) {

@@ -3,8 +3,9 @@
 **Fork 自 [ish-app/ish](https://github.com/ish-app/ish)** — iOS 上的用户态 Linux 模拟器。
 
 本 fork 在上游 iSH 的 threaded-code 解释器（**Asbestos**，2024 年之前叫 *jit*，上游重命名是因为
-它本来就不是真正的 JIT）之上**新增了 ARM64 guest 后端**，在 Apple Silicon 上模拟 AArch64 Linux，
-与原版 x86 (i386) guest 后端并存。结果是一个性能和兼容性大幅提升的 Linux 环境，
+它本来就不是真正的 JIT）之上**新增了 ARM64 guest 后端**，在 Apple Silicon 上模拟 AArch64 Linux。
+当初与之并存的原版 x86 (i386) guest 后端、以及上游的 Linux 内核变体（iSH+Linux）都已删除，
+guest 只支持 AArch64。结果是一个性能和兼容性大幅提升的 Linux 环境，
 能在 iPhone / iPad 上直接运行 **Python、Node.js、Go、Rust 和原生 CLI 工具**。
 
 > ## 🚢 生产环境使用
@@ -20,7 +21,7 @@
 >
 > 本 fork 所做的是在这个 Asbestos 框架里**新增一个 ARM64 guest 后端**：
 > 新的 gadget（`asbestos/guest-arm64/gadgets-aarch64/`）把 AArch64 guest 指令映射到若干条
-> ARM64 host 指令——同架构分派，每条 guest 指令只需几条 host 指令。上游 x86 后端依然并存。
+> ARM64 host 指令——同架构分派，每条 guest 指令只需几条 host 指令。上游的 x86 后端已不在本 fork 中。
 > 下文部分地方用 "JIT" 作为简写，请理解为"同架构 gadget 分派"，而非运行时代码生成。
 >
 > 英文版: [README_arm64.md](README_arm64.md)
@@ -32,7 +33,7 @@
 原始 iSH 在 ARM64 主机上翻译 **x86 (i386) 指令** — 每条 guest 指令都要跨架构解码和模拟。
 这对简单工具还行，但有根本限制：
 
-| 限制 | x86（原版） | ARM64（本 fork） |
+| 限制 | x86（上游 iSH） | ARM64（本 fork） |
 |---|---|---|
 | 架构翻译 | i386 → ARM64（跨架构） | AArch64 → AArch64（同架构） |
 | 地址空间 | 32-bit (4 GB) | 48-bit (256 TB) |
@@ -199,16 +200,17 @@ fakefs_bind_mount("/host/path/to/data", "/mnt/data", /*read_only=*/true);
 
 | Target | Scheme | xcconfig | Guest Arch | Bundle ID 后缀 |
 |--------|--------|----------|------------|------------------|
-| x86（原版） | iSH | `App.xcconfig` | i386 | — |
 | ARM64 | iSH-ARM64 | `AppARM64.xcconfig` | aarch64 | `.arm64` |
 | ARM64 + FFmpeg | iSH-ARM64-ffmpeg | `AppARM64-ffmpeg.xcconfig` | aarch64 | `.arm64` |
 
-ARM64 target 直接链接 `build-arm64-release/` 中 meson 构建的库
-（`libish.a`、`libish_emu.a`、`libfakefs.a`），避免 Xcode 自动发现 x86 的 library target。
+ARM64 target 直接链接 meson 构建目录中的库
+（`libish.a`、`libish_emu.a`、`libfakefs.a`），避免 Xcode 自动发现那几个 library target。
+
+iSH 只能在 AArch64 主机上构建和运行（Apple silicon、iPhone / iPad、arm64 Linux）。
 
 ```bash
-# 构建 ARM64 CLI（macOS，测试用）
-meson setup build-arm64-release -Dguest_arch=arm64 --buildtype=release
+# 构建 CLI（macOS 或 arm64 Linux，测试用）
+meson setup build-arm64-release --buildtype=release
 ninja -C build-arm64-release
 
 # 运行
@@ -227,12 +229,16 @@ tests/regress/run.sh -i build-arm64-release/ish -r ./alpine-arm64-plain
 tests/smoke/run.sh -i build-arm64-release/ish -f ./alpine-arm64-fakefs
 ```
 
+CI（`.github/workflows/ci.yml`）在 macOS 上编译给手机用的 App（不签名），在 arm64 Linux
+runner 上运行 `tests/regress/ci.sh`：以 release 编译 CLI（不许有警告），再在 Alpine aarch64
+minirootfs 上跑回归测试。
+
 **AddressSanitizer。** iSH 自身的堆越界或 use-after-free 通常要过一阵才在 `malloc`、`free`
 里崩，或者根本不崩。`tools/build-asan.sh` 构建 ASan 版的 `ish`，它停在出错的那次访问上，
 报出位置以及那块内存在哪分配、在哪释放：
 
 ```bash
-tools/build-asan.sh build-asan -Dguest_arch=arm64
+tools/build-asan.sh build-asan
 tests/regress/run.sh -i build-asan/ish -r ./alpine-arm64-plain
 tests/smoke/run.sh -i build-asan/ish -f ./alpine-arm64-fakefs
 ```
@@ -246,7 +252,8 @@ tests/smoke/run.sh -i build-asan/ish -f ./alpine-arm64-fakefs
 ## 性能
 
 使用 `benchmark/run.sh` 在 macOS 26.4.1 / Apple Silicon 上测试，采用 guest 内置计时
-（排除启动开销）。完整数据见
+（排除启动开销）。测量时本 fork 还同时编译上游的 x86 后端，表中 x86 一列即是它；
+现在的 `benchmark/run.sh` 只比较 ARM64 与原生。完整数据见
 **[benchmark/BENCHMARK_PERF.md](benchmark/BENCHMARK_PERF.md)**。
 
 ### 相对原生的开销（按负载类型）
@@ -277,7 +284,8 @@ tests/smoke/run.sh -i build-asan/ish -f ./alpine-arm64-fakefs
 
 223 项测试覆盖 18 个分类（基础 OS、文件操作、文本处理、构建、Python、Node.js、
 Go/Rust/Perl/…、网络、VCS、编辑器、Shell、数据库、多媒体、加密、系统监控、调试、
-包管理、信号）。两个架构在相同 fakefs 环境下安装相同软件包后测试。完整报告见
+包管理、信号）。两个架构在相同 fakefs 环境下安装相同软件包后测试（当时本 fork 还编译
+x86 后端，现在的 `benchmark/run.sh` 只测 ARM64）。完整报告见
 **[benchmark/BENCHMARK_COMPAT.md](benchmark/BENCHMARK_COMPAT.md)**。
 
 | 架构 | 通过 | 失败 | 通过率 |

@@ -2,7 +2,7 @@
 # Run the instruction differential test for one ELF: natively and under iSH.
 #
 # usage: tools/insndiff/run.sh <ish> <fakefs-rootfs> <elf> [workdir]
-#   <ish>            an iSH CLI built with -Dguest_arch=arm64
+#   <ish>            an iSH CLI
 #   <fakefs-rootfs>  a fakefs directory (ish -f) to run the guest side in
 #   <elf>            aarch64 binary whose .text supplies the instruction words
 # Needs an aarch64 Linux host with gcc, objcopy and objdump. Results:

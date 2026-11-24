@@ -126,17 +126,10 @@ bool mount_param_flag(const char *info, const char *flag);
  * values on x86, musl's O_LARGEFILE (1<<15) read as O_NOFOLLOW, so the
  * dynamic loader could not open a library through a symlink ("Error loading
  * shared library libz.so.1: Symbolic link loop") and apk did not run. */
-#ifdef GUEST_ARM64
 #define O_DIRECTORY_ (1 << 14)
 #define O_NOFOLLOW_ (1 << 15)
 #define O_DIRECT_ (1 << 16)
 #define O_LARGEFILE_ (1 << 17)
-#else
-#define O_DIRECT_ (1 << 14)
-#define O_LARGEFILE_ (1 << 15)
-#define O_DIRECTORY_ (1 << 16)
-#define O_NOFOLLOW_ (1 << 17)
-#endif
 #define O_NOATIME_ (1 << 18)
 #define O_CLOEXEC_ (1 << 19)
 #define O_PATH_ (1 << 21)

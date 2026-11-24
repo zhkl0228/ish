@@ -20,10 +20,11 @@ foreach channel : log_on + log_off
     endif
 endforeach
 add_project_arguments('-DLOG_HANDLER_' + get_option('log_handler').to_upper() + '=1', language: 'c')
-add_project_arguments('-DENGINE_' + get_option('engine').to_upper() + '=1', language: 'c')
 
-guest_arch = get_option('guest_arch')
-add_project_arguments('-DGUEST_' + guest_arch.to_upper() + '=1', language: 'c')
+# The guest is AArch64 Linux, run on an AArch64 host: the gadgets are AArch64's
+if host_machine.cpu_family() != 'aarch64'
+    error('iSH runs on an AArch64 host (Apple silicon, an arm64 Linux), not ' + host_machine.cpu_family())
+endif
 
 if get_option('no_crlf')
     add_project_arguments('-DNO_CRLF', language: 'c')
@@ -33,8 +34,8 @@ endif
 # without it the build is the plain gadget engine.
 ish_jit = get_option('jit')
 if ish_jit
-    if guest_arch != 'arm64' or not ['darwin', 'linux'].contains(host_machine.system()) or host_machine.cpu_family() != 'aarch64'
-        error('-Djit=true needs guest_arch=arm64 on an arm64 host, Apple or Linux')
+    if not ['darwin', 'linux'].contains(host_machine.system())
+        error('-Djit=true needs an Apple or Linux host')
     endif
     add_project_arguments('-DISH_JIT=1', language: 'c')
     if host_machine.system() == 'linux'
@@ -65,79 +66,36 @@ libdl = cc.find_library('dl', required: false)
 sqlite3 = cc.find_library('sqlite3')
 dependencies = [librt, libm, libdl, threads, sqlite3]
 
-# vdso is arch-specific
-if guest_arch == 'x86'
-    subdir('vdso/x86')
-    vdso_inc = include_directories('vdso/x86')
-elif guest_arch == 'arm64'
-    subdir('vdso/arm64')
-    vdso_inc = include_directories('vdso/arm64')
-endif
-includes += vdso_inc
+subdir('vdso/arm64')
+includes += include_directories('vdso/arm64')
 
 offsets = custom_target('offsets',
     output: 'cpu-offsets.h', input: 'asbestos/offsets.c', depfile: 'cpu-offsets.h.d',
     command: [find_program('tools/staticdefine.sh'), '@OUTDIR@/compile_commands.json', '@INPUT@', '@OUTPUT@', '@DEPFILE@'])
 
-# Common emu sources
+gadgets = 'asbestos/guest-arm64/gadgets-aarch64'
 emu_src = [
     'emu/tlb.c',
+    'asbestos/asbestos.c',
+    'asbestos/guest-arm64/gen.c',
+    'asbestos/guest-arm64/host_fault.c',
+    'asbestos/guest-arm64/crypto_helpers.c',
+    # Symbol-level native offload. Companion to the binary-level offload in
+    # kernel/native_offload.c.
+    'kernel/native_offload_sym.c',
+    'kernel/native_offload_sym_builtins.c',
+    # Pre-built gadget offload: whole-function specialized blocks.
+    'kernel/native_offload_prebuilt.c',
+    gadgets+'/entry.S',
+    gadgets+'/memory.S',
+    gadgets+'/control.S',
+    gadgets+'/math.S',
+    gadgets+'/bits.S',
+    gadgets+'/crypto.S',
+    offsets,
 ]
-
-# Architecture-specific emu sources
-if guest_arch == 'x86'
-    emu_src += [
-        'emu/arch/x86/fpu.c',
-        'emu/arch/x86/vec.c',
-        'emu/arch/x86/mmx.c',
-        'emu/arch/x86/float80.c',
-    ]
-    gadgets_base = 'asbestos/guest-x86/gadgets-'
-elif guest_arch == 'arm64'
-    emu_src += [
-    ]
-    gadgets_base = 'asbestos/guest-arm64/gadgets-'
-endif
-
-gadgets = gadgets_base + host_machine.cpu_family()
-if guest_arch == 'x86'
-    emu_src += [
-        'asbestos/asbestos.c',
-        'asbestos/guest-x86/gen.c',
-        'asbestos/helpers.c',
-        gadgets+'/entry.S',
-        gadgets+'/memory.S',
-        gadgets+'/control.S',
-        gadgets+'/math.S',
-        gadgets+'/bits.S',
-        gadgets+'/string.S',
-        gadgets+'/misc.S',
-        offsets,
-    ]
-elif guest_arch == 'arm64'
-    emu_src += [
-        'asbestos/asbestos.c',
-        'asbestos/guest-arm64/gen.c',
-        'asbestos/guest-arm64/host_fault.c',
-        'asbestos/guest-arm64/crypto_helpers.c',
-        'asbestos/helpers.c',
-        # Symbol-level native offload (ARM64 guest only). Companion to the
-        # binary-level offload in kernel/native_offload.c.
-        'kernel/native_offload_sym.c',
-        'kernel/native_offload_sym_builtins.c',
-        # Pre-built gadget offload: whole-function specialized blocks (ARM64 only).
-        'kernel/native_offload_prebuilt.c',
-        gadgets+'/entry.S',
-        gadgets+'/memory.S',
-        gadgets+'/control.S',
-        gadgets+'/math.S',
-        gadgets+'/bits.S',
-        gadgets+'/crypto.S',
-        offsets,
-    ]
-    if ish_jit
-        emu_src += 'asbestos/guest-arm64/jit.c'
-    endif
+if ish_jit
+    emu_src += 'asbestos/guest-arm64/jit.c'
 endif
 
 libish_emu = library('ish_emu', emu_src, include_directories: includes)
@@ -148,12 +106,12 @@ libish_emu = library('ish_emu', emu_src, include_directories: includes)
 # product core has NO test hook), so their objects must be link_whole'd to
 # survive dead-strip. Added to `offload_test_libs`, link_whole'd into ish below.
 offload_test_libs = []
-if get_option('offload_test_symbol') and guest_arch == 'arm64'
+if get_option('offload_test_symbol')
     offload_test_libs += static_library('offload_test_symbol',
         ['kernel/offload_tests/symbol/register.c'],
         include_directories: includes)
 endif
-if get_option('offload_test_prebuilt') and guest_arch == 'arm64'
+if get_option('offload_test_prebuilt')
     offload_test_libs += static_library('offload_test_prebuilt',
         ['kernel/offload_tests/prebuilt/register.c',
          'kernel/offload_tests/prebuilt/spec_bbjit_poc.c',
@@ -1695,171 +1653,125 @@ libfakefs = library('fakefs',
     include_directories: includes,
     dependencies: sqlite3)
 
-subdir('deps')
+arch_kernel_src = ['kernel/arch/arm64/calls.c', 'kernel/sysvipc.c', 'kernel/shm.c', 'kernel/msg.c', 'kernel/sem.c']
 
-if get_option('kernel') == 'ish'
-    if get_option('engine') != 'asbestos'
-        error('Only asbestos is supported with ish kernel')
+src = [
+    'kernel/init.c',
+    'kernel/errno.c',
+
+    'kernel/calls.c',] + arch_kernel_src + [
+    'kernel/memory.c',
+    'kernel/user.c',
+    'kernel/vdso.c', vdso,
+    'kernel/task.c',
+    'kernel/group.c',
+    'kernel/log.c',
+
+    'kernel/fork.c',
+    'kernel/exec.c',
+    'kernel/exit.c',
+    'kernel/time.c',
+    'kernel/mmap.c',
+    'kernel/uname.c',
+    'kernel/tls.c',
+    'kernel/futex.c',
+    'kernel/getset.c',
+    'kernel/signal.c',
+    'kernel/resource.c',
+    'kernel/random.c',
+    'kernel/misc.c',
+    'kernel/eventfd.c',
+    'kernel/signalfd.c',
+    'kernel/netcap.c',
+    'kernel/packet.c',
+    'kernel/pidfd.c',
+    'kernel/inotify.c',
+    'kernel/ipc.c',
+    'kernel/ptrace.c',
+    'kernel/native_offload.c',
+    'kernel/native_offload_policy.c',
+
+    'kernel/fs.c',
+    'kernel/fs_info.c',
+    'fs/mount.c',
+    'fs/fd.c',
+    'fs/inode.c',
+    'fs/stat.c',
+    'fs/dir.c',
+    'fs/generic.c',
+    'fs/path.c',
+    'fs/real.c',
+    'fs/fake.c',
+
+    'fs/proc.c',
+    'fs/proc/entry.c',
+    'fs/proc/ish.c',
+    'fs/proc/net.c',
+    'fs/proc/root.c',
+    'fs/proc/pid.c',
+
+    'fs/dyndev.c',
+
+    'fs/adhoc.c',
+    'fs/sock.c',
+    'fs/netlink.c',
+    'fs/pipe.c',
+    'fs/sockrestart.c',
+    'fs/lock.c',
+
+    'fs/dev.c',
+    'fs/mem.c',
+    'fs/tty.c',
+    'fs/tty-real.c',
+    'fs/pty.c',
+    'fs/tmp.c',
+
+    'fs/poll.c',
+    'kernel/poll.c',
+    'kernel/epoll.c',
+
+    'util/timer.c',
+    'util/sync.c',
+    'util/fifo.c',
+    'util/verbosetrace.c',
+    'util/fchdir.c',
+    'util/signpost.c',
+
+    'platform/' + host_machine.system() + '.c',
+]
+
+libish = library('ish', src,
+    include_directories: includes)
+ish = declare_dependency(
+    link_with: [libish, libish_emu, libfakefs],
+    # cpu-offsets.h is generated, and main.c includes it: every target
+    # using ish waits for it before compiling (else a fresh build dir can
+    # compile main.c before the header exists or while it is written).
+    sources: offsets,
+    # link_whole so the offload test handlers' self-registering constructors
+    # survive dead-strip (empty unless -Doffload_test_*=true).
+    link_whole: offload_test_libs,
+    dependencies: dependencies,
+    include_directories: includes)
+
+if not meson.is_cross_build()
+    # AOT images are not part of ish: the CLI links them in only when
+    # given (-Dcli_aot=aot_<name>.S from tools/jit_aot/gen.py, or the .o
+    # another assembler made of it: clang 18's is quadratic on the largest).
+    cli_aot = get_option('cli_aot')
+    if cli_aot.length() > 0 and not ish_jit
+        error('-Dcli_aot needs -Djit=true (the images register with the JIT runtime)')
     endif
-
-    # Architecture-specific kernel sources
-    if guest_arch == 'x86'
-        arch_kernel_src = ['kernel/arch/x86/calls.c']
-    elif guest_arch == 'arm64'
-        arch_kernel_src = ['kernel/arch/arm64/calls.c', 'kernel/sysvipc.c', 'kernel/shm.c', 'kernel/msg.c', 'kernel/sem.c']
-    endif
-
-    src = [
-        'kernel/init.c',
-        'kernel/errno.c',
-
-        'kernel/calls.c',] + arch_kernel_src + [
-        'kernel/memory.c',
-        'kernel/user.c',
-        'kernel/vdso.c', vdso,
-        'kernel/task.c',
-        'kernel/group.c',
-        'kernel/log.c',
-
-        'kernel/fork.c',
-        'kernel/exec.c',
-        'kernel/exit.c',
-        'kernel/time.c',
-        'kernel/mmap.c',
-        'kernel/uname.c',
-        'kernel/tls.c',
-        'kernel/futex.c',
-        'kernel/getset.c',
-        'kernel/signal.c',
-        'kernel/resource.c',
-        'kernel/random.c',
-        'kernel/misc.c',
-        'kernel/eventfd.c',
-        'kernel/signalfd.c',
-        'kernel/netcap.c',
-        'kernel/packet.c',
-        'kernel/pidfd.c',
-        'kernel/inotify.c',
-        'kernel/ipc.c',
-        'kernel/ptrace.c',
-        'kernel/native_offload.c',
-        'kernel/native_offload_policy.c',
-
-        'kernel/fs.c',
-        'kernel/fs_info.c',
-        'fs/mount.c',
-        'fs/fd.c',
-        'fs/inode.c',
-        'fs/stat.c',
-        'fs/dir.c',
-        'fs/generic.c',
-        'fs/path.c',
-        'fs/real.c',
-        'fs/fake.c',
-
-        'fs/proc.c',
-        'fs/proc/entry.c',
-        'fs/proc/ish.c',
-        'fs/proc/net.c',
-        'fs/proc/root.c',
-        'fs/proc/pid.c',
-
-        'fs/dyndev.c',
-
-        'fs/adhoc.c',
-        'fs/sock.c',
-        'fs/netlink.c',
-        'fs/pipe.c',
-        'fs/sockrestart.c',
-        'fs/lock.c',
-
-        'fs/dev.c',
-        'fs/mem.c',
-        'fs/tty.c',
-        'fs/tty-real.c',
-        'fs/pty.c',
-        'fs/tmp.c',
-
-        'fs/poll.c',
-        'kernel/poll.c',
-        'kernel/epoll.c',
-
-        'util/timer.c',
-        'util/sync.c',
-        'util/fifo.c',
-        'util/verbosetrace.c',
-        'util/fchdir.c',
-        'util/signpost.c',
-
-        'platform/' + host_machine.system() + '.c',
-    ]
-
-    libish = library('ish', src,
-        include_directories: includes)
-    ish = declare_dependency(
-        link_with: [libish, libish_emu, libfakefs],
-        # cpu-offsets.h is generated, and main.c includes it: every target
-        # using ish waits for it before compiling (else a fresh build dir can
-        # compile main.c before the header exists or while it is written).
-        sources: offsets,
-        # link_whole so the offload test handlers' self-registering constructors
-        # survive dead-strip (empty unless -Doffload_test_*=true).
-        link_whole: offload_test_libs,
-        dependencies: dependencies,
-        include_directories: includes)
-
-    if not meson.is_cross_build()
-        # AOT images are not part of ish: the CLI links them in only when
-        # given (-Dcli_aot=aot_<name>.S from tools/jit_aot/gen.py, or the .o
-        # another assembler made of it: clang 18's is quadratic on the largest).
-        cli_aot = get_option('cli_aot')
-        if cli_aot.length() > 0 and not ish_jit
-            error('-Dcli_aot needs -Djit=true (the images register with the JIT runtime)')
+    cli_aot_src = []
+    cli_aot_obj = []
+    foreach f : cli_aot
+        if f.endswith('.o')
+            cli_aot_obj += f
+        else
+            cli_aot_src += f
         endif
-        cli_aot_src = []
-        cli_aot_obj = []
-        foreach f : cli_aot
-            if f.endswith('.o')
-                cli_aot_obj += f
-            else
-                cli_aot_src += f
-            endif
-        endforeach
-        executable('ish', ['main.c'] + files(cli_aot_src), objects: files(cli_aot_obj), dependencies: ish)
-    endif
-
-elif get_option('kernel') == 'linux'
-    kernel_src = [
-        'linux/main.c',
-        'linux/fakefs.c',
-    ]
-    user_src = []
-    emu_deps = []
-
-    if get_option('engine') == 'asbestos'
-        user_src += 'linux/emu_asbestos.c'
-        emu_deps += declare_dependency(link_with: libish_emu)
-    elif get_option('engine') == 'unicorn'
-        user_src += 'linux/emu_unicorn.c'
-        kernel_src += 'linux/emu_unicorn_kernel.c'
-        emu_deps += declare_dependency(
-            dependencies: [cc.find_library('unicorn', dirs: [meson.current_source_dir()+'/deps/unicorn/build'])],
-            include_directories: include_directories('deps/unicorn/include'),
-        )
-    endif
-
-    modules = static_library('linux_modules', kernel_src, dependencies: [linux_headers, sqlite3])
-    user_modules = static_library('linux_user', user_src, dependencies: [user_linux_headers] + emu_deps)
-    executable('ish',
-        build_linux,
-        link_with: [libfakefs],
-        dependencies: [
-            liblinux,
-            libm,
-            libdl,
-            threads,
-            declare_dependency(link_whole: [modules, user_modules]),
-        ] + emu_deps)
+    endforeach
+    executable('ish', ['main.c'] + files(cli_aot_src), objects: files(cli_aot_obj), dependencies: ish)
 endif
 
 subdir('tools')
@@ -1871,12 +1783,3 @@ foreach script : gdb_scripts
         command: ['ln', '-sf', '@INPUT@', '@OUTPUT@'],
         build_by_default: true)
 endforeach
-
-if not meson.is_cross_build() and guest_arch == 'x86'
-    # test for floating point library (x86 only)
-    float80_test = executable('float80_test', ['emu/arch/x86/float80.c', 'emu/arch/x86/float80-test.c'], dependencies: [libm])
-    test('float80', float80_test)
-endif
-
-e2e_test = find_program('tests/e2e/e2e.bash')
-test('e2e', e2e_test, args: ['-y'], timeout: 180)

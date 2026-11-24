@@ -45,7 +45,7 @@ curl -sSf --retry 3 -o deps/rootfs/arm64-root.tar.gz "$url"
 
 say "the recording ish ($jit)"
 [ -f "$jit/build.ninja" ] ||
-    CC=${CC:-clang} meson setup "$jit" -Dguest_arch=arm64 -Djit=true -Djit_emit=true -Dbuildtype=release
+    CC=${CC:-clang} meson setup "$jit" -Djit=true -Djit_emit=true -Dbuildtype=release
 ninja -C "$jit" ish tools/fakefsify
 rm -rf "$root" "$root.ready"
 "$jit/tools/fakefsify" deps/rootfs/arm64-root.tar.gz "$root"

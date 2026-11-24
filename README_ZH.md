@@ -11,7 +11,7 @@
 </a>
 </p>
 
-iSH 是一个运行在 iOS 上的 Linux shell。本项目使用了 x86 用户模式仿真和系统调用翻译转换。
+iSH 是一个运行在 iOS 上的 Linux shell。本项目使用了 AArch64（ARM64）用户模式仿真和系统调用翻译转换。iSH 只能在 AArch64 主机上构建和运行：Apple silicon Mac、iPhone/iPad，或 arm64 Linux（命令行工具）。
 
 请查看 issue 和提交记录以了解本项目当前的状态。
 
@@ -35,15 +35,13 @@ iSH 是一个运行在 iOS 上的 Linux shell。本项目使用了 x86 用户模
 
 ## 创建iOS应用
 
-使用 Xcode 打开项目，选择 iSH.xcconfig，并且修改 `ROOT_BUNDLE_IDENTIFIER` 为你的[唯一值](https://help.apple.com/xcode/mac/current/#/dev91fe7130a)。此外，还需要在项目（project）的构建设置（build settings）中更新开发团队 ID，注意这里指的不是目标（target）的构建设置（build settings）。然后点击 `运行`，之后应该有脚本帮你自动执行相关操作。如果遇到了任何问题，请提交 issue，我们会帮你解决。
+使用 Xcode 打开项目，选择 iSH.xcconfig，并且修改 `ROOT_BUNDLE_IDENTIFIER` 为你的[唯一值](https://help.apple.com/xcode/mac/current/#/dev91fe7130a)。此外，还需要在项目（project）的构建设置（build settings）中更新开发团队 ID，注意这里指的不是目标（target）的构建设置（build settings）。然后选择 `iSH-ARM64` scheme 并点击 `运行`，之后应该有脚本帮你自动执行相关操作（包括下载 App 自带的根文件系统和 AOT 镜像）。如果遇到了任何问题，请提交 issue，我们会帮你解决。
 
 ## 为测试构建命令行工具
 
-在项目目录中运行命令 `meson build`，之后 `build` 目录会被创建。进入到 `build` 目录并运行命令 `ninja`。
+在项目目录中运行命令 `meson setup build`，之后 `build` 目录会被创建。进入到 `build` 目录并运行命令 `ninja`。
 
-为了建立一个自有的 Alpine linux 文件系统，请从 [Alpine 网站](https://alpinelinux.org/downloads/) 下载 `Alpine minirotfs tarball for i386` 并运行 `tools/fakefsify` 。将 minirotfs tarball 指定为第一个参数，将输出目录的名称（如`alpine`）指定为第二个参数，即 `tools/fakefsify $MinirotfsTarballFilename alpine` 然后在 Alpine 文件系统中运行 `/ish -f alpine/bin/sh`。如果 `build` 目录下找不到 `tools/fakefsify`，可能是系统上找不到 `libarchive` 的依赖（请参照前面的章节进行安装）。
-
-除了可以使用 `ish`，你也可以使用 `tools/ptraceomatic` 替代它，以便在某个真实进程中单步比较寄存器。我通常使用它来进行调试（需要 64 位 Linux 4.11 或更高版本）。
+为了建立一个自有的 Alpine linux 文件系统，请从 [Alpine 网站](https://alpinelinux.org/downloads/) 下载 `Alpine minirootfs tarball for aarch64` 并运行 `tools/fakefsify` 。将 minirotfs tarball 指定为第一个参数，将输出目录的名称（如`alpine`）指定为第二个参数，即 `tools/fakefsify $MinirotfsTarballFilename alpine` 然后在 Alpine 文件系统中运行 `/ish -f alpine/bin/sh`。如果 `build` 目录下找不到 `tools/fakefsify`，可能是系统上找不到 `libarchive` 的依赖（请参照前面的章节进行安装）。
 
 ## 日志
 

@@ -120,11 +120,9 @@ noreturn void do_exit(int status) {
         dump_pc_hist();
         if (current->pid == 1) dump_pc_trace();
     }
-#ifdef GUEST_ARM64
     { extern void dump_wx_stats(void);
       static int wx_dumped = 0;
       if (!wx_dumped && current && current->pid == 1) { wx_dumped = 1; dump_wx_stats(); } }
-#endif
     // If this thread was already marked as leaked by the safety valve,
     // the group leader has finished exiting and the group struct may be
     // freed. Don't touch any shared state — just kill the host thread.
@@ -137,14 +135,10 @@ noreturn void do_exit(int status) {
     // pids_lock below.
     atomic_store(&current->exit_started, true);
     bool last = delete_timers_if_last(current);
-#ifdef GUEST_ARM64
     // before the parent hears of it, as Linux's exit_sem: a semaphore the
     // process held with SEM_UNDO is free once wait returns
     if (last)
         sem_exit(current->group);
-#else
-    (void) last;
-#endif
     sockrestart_task_exit(current);
 
     // has to happen before mm_release
@@ -616,10 +610,8 @@ static void halt_system(void) {
     restore_termios();
     extern void dump_pc_hist(void);
     dump_pc_hist();
-#ifdef GUEST_ARM64
     extern void dump_wx_stats(void);
     dump_wx_stats();
-#endif
 
     // The caller exits the host process, which also ends any guest thread
     // still running (stuck in JIT loops after do_exit_group force cleanup).

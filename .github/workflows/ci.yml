@@ -6,55 +6,29 @@ on:
       branches: [master]
 
 jobs:
-  build-linux:
-    runs-on: ubuntu-24.04
-    strategy:
-      matrix:
-        cc: [clang, gcc]
-        kernel: [ish, linux]
+  linux:
+    # The CLI on an AArch64 host, and tests/regress run with it
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
-        with:
-            submodules: true
-      - uses: actions/setup-python@v6
-        with:
-            python-version: '3.x'
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install libarchive-dev
-          pip3 install meson ninja
-      - name: Clone Linux
-        if: matrix.kernel == 'linux'
-        run: deps/clone-linux.sh
-      - name: Build
-        run: |
-          meson build -Dengine=asbestos -Dkernel=${{matrix.kernel}}
-          ninja -C build
-        env:
-          CC: ${{matrix.cc}}
-      - name: Test
-        if: matrix.kernel == 'ish'
-        run: ninja -C build test
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang lld meson ninja-build pkg-config libsqlite3-dev libarchive-dev \
+              musl-tools python3 curl
+      - name: Build and test
+        run: tests/regress/ci.sh "$RUNNER_TEMP/ci"
 
-  build-mac:
+  mac:
+    # The app as it is built for a phone, unsigned
     runs-on: macos-26
-    strategy:
-      matrix:
-        kernel: [ish, linux]
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v6
         with:
             submodules: true
       - name: Install dependencies
         run: |
           brew install llvm lld ninja libarchive meson
-      - name: Clone Linux
-        if: matrix.kernel == 'linux'
-        run: deps/clone-linux.sh
       - name: Build
-        if: matrix.kernel == 'ish'
-        run: xcodebuild -project iSH.xcodeproj -scheme iSH -arch arm64 -sdk iphoneos CODE_SIGNING_ALLOWED=NO
-      - name: Build
-        if: matrix.kernel == 'linux'
-        run: xcodebuild -project iSH.xcodeproj -scheme iSH+Linux -arch x86_64 -sdk iphonesimulator CODE_SIGNING_ALLOWED=NO
+        run: xcodebuild -project iSH.xcodeproj -scheme iSH-ARM64 -arch arm64 -sdk iphoneos CODE_SIGNING_ALLOWED=NO

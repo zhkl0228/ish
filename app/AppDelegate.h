@@ -12,9 +12,7 @@
 @property (strong, nonatomic) UIWindow *window;
 - (void)exitApp;
 
-#if !ISH_LINUX
 + (int)bootError;
-#endif
 
 /// Once per launch, offers to reset the default filesystem if the built-in one
 /// has changed since it was set up.
@@ -25,9 +23,5 @@
 
 @end
 
-#if !ISH_LINUX
 extern NSString *const ProcessExitedNotification;
-#else
-extern NSString *const KernelPanicNotification;
-#endif
 

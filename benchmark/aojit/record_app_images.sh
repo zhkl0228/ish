@@ -49,7 +49,7 @@ say() { printf '\n== %s\n' "$*"; }
 
 say "1. the recording ish ($jit)"
 [ -f "$jit/build.ninja" ] ||
-    CC=${CC:-clang} meson setup "$jit" -Dguest_arch=arm64 -Djit=true -Djit_emit=true -Dbuildtype=release
+    CC=${CC:-clang} meson setup "$jit" -Djit=true -Djit_emit=true -Dbuildtype=release
 ninja -C "$jit" ish
 ninja -C "$jit" tools/fakefsify ||
     { echo "❌ no fakefsify: meson found no libarchive (brew install libarchive, then rm -rf $jit)"; exit 1; }

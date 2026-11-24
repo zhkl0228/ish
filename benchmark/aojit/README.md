@@ -254,7 +254,7 @@ is the abi of the recording build.
 ### 1. Recording build: JIT with run-time translation
 
 ```sh
-meson setup build-arm64-jit -Dguest_arch=arm64 -Djit=true -Djit_emit=true -Dbuildtype=release
+meson setup build-arm64-jit -Djit=true -Djit_emit=true -Dbuildtype=release
 ninja -C build-arm64-jit
 ISH_JIT_PIC=1 build-arm64-jit/ish -r $R /bin/cat /proc/ish/jit | grep -o 'abi [0-9a-f]*'   # -> ABI
 ```
@@ -313,7 +313,7 @@ Mac CLI (pure AOT, no executable memory at run time, as on iOS):
 
 ```sh
 S=$PWD/benchmark/aojit/images/$ABI/latest/S
-meson setup build-arm64-aot -Dguest_arch=arm64 -Djit=true -Djit_emit=false -Dbuildtype=release \
+meson setup build-arm64-aot -Djit=true -Djit_emit=false -Dbuildtype=release \
     -Dcli_aot=$(ls $S/aot_*.S | paste -sd, -)
 ninja -C build-arm64-aot
 ```

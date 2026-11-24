@@ -7,13 +7,13 @@
 #   ./run.sh shell       # Performance only (Shell + Python + Node.js + Go + C)
 #   ./run.sh compat      # Compatibility only (205 tests across 18 categories)
 #
-# Performance: assets/shellbench.sh runs guest-side inside each architecture
+# Performance: assets/shellbench.sh runs natively and guest-side inside iSH
 # with monotonic-clock timing, so fakefs startup cost is excluded.
-# Pre-compiled C binaries (cbench_lite_x86, cbench_lite_arm64, cbench_lite_macos)
-# avoid slow in-emulator gcc compilation.
+# Pre-compiled C binaries (cbench_lite_arm64, cbench_lite_macos) avoid slow
+# in-emulator gcc compilation.
 #
 # Assets:  assets/shellbench.sh, assets/cbench_lite.c (source),
-#          assets/cbench_lite_{x86,arm64,macos} (prebuilt binaries)
+#          assets/cbench_lite_{arm64,macos} (prebuilt binaries)
 # Reports: BENCHMARK_PERF.md, BENCHMARK_COMPAT.md
 # Data:    results/
 # ═══════════════════════════════════════════════════════════════════════
@@ -26,9 +26,7 @@ RESULTS_DIR="$SCRIPT_DIR/results"
 ASSETS_DIR="$SCRIPT_DIR/assets"
 DATE=$(date +%Y%m%d_%H%M%S)
 
-ISH_X86="$PROJECT_DIR/build-x86-release/ish"
 ISH_ARM64="$PROJECT_DIR/build-arm64-release/ish"
-FAKEFS_X86="$PROJECT_DIR/alpine-x86-fakefs"
 FAKEFS_ARM64="$PROJECT_DIR/alpine-arm64-fakefs"
 
 PERF_MD="$SCRIPT_DIR/BENCHMARK_PERF.md"
@@ -50,9 +48,7 @@ hr()   { echo "─────────────────────�
 # ── Preflight ───────────────────────────────────────────────────────
 preflight() {
     local ok=1
-    [ -x "$ISH_X86" ]       || { fail "x86 binary: $ISH_X86"; ok=0; }
     [ -x "$ISH_ARM64" ]     || { fail "ARM64 binary: $ISH_ARM64"; ok=0; }
-    [ -d "$FAKEFS_X86" ]    || { fail "x86 fakefs: $FAKEFS_X86"; ok=0; }
     [ -d "$FAKEFS_ARM64" ]  || { fail "ARM64 fakefs: $FAKEFS_ARM64"; ok=0; }
     [ $ok -eq 0 ] && exit 1
 }
@@ -86,7 +82,6 @@ _fmti() {
 }
 
 # ── Run ISH helpers ─────────────────────────────────────────────────
-ish_x86()  { "$ISH_X86" -f "$FAKEFS_X86" /bin/sh -c "$1"; }
 ish_arm()  { "$ISH_ARM64" -f "$FAKEFS_ARM64" /bin/sh -c "$1"; }
 
 # Push a file into the ARM64 fakefs data directory
@@ -108,104 +103,61 @@ suite_shell() {
     hr
 
     # Purge stale blocking special files (see _purge_fakefs_special_files).
-    _purge_fakefs_special_files "$FAKEFS_X86" "x86"
     _purge_fakefs_special_files "$FAKEFS_ARM64" "ARM64"
 
-    # Push benchmark scripts + prebuilt binaries into both rootfs
+    # Push benchmark scripts + the prebuilt binary into the rootfs
     for asset in shellbench.sh cbench_lite.c; do
         [ -f "$ASSETS_DIR/$asset" ] || continue
-        cat "$ASSETS_DIR/$asset" | timeout 10 "$ISH_X86" -f "$FAKEFS_X86" /bin/sh -c "cat > /tmp/$asset" 2>/dev/null || true
         cat "$ASSETS_DIR/$asset" | timeout 10 "$ISH_ARM64" -f "$FAKEFS_ARM64" /bin/sh -c "cat > /tmp/$asset" 2>/dev/null || true
     done
-    # Push prebuilt C binaries (avoids slow in-emulator compilation)
-    if [ -f "$ASSETS_DIR/cbench_lite_x86" ]; then
-        cat "$ASSETS_DIR/cbench_lite_x86" | timeout 10 "$ISH_X86" -f "$FAKEFS_X86" /bin/sh -c "cat > /tmp/cbench_prebuilt && chmod +x /tmp/cbench_prebuilt" 2>/dev/null || true
-    fi
+    # Push the prebuilt C binary (avoids slow in-emulator compilation)
     if [ -f "$ASSETS_DIR/cbench_lite_arm64" ]; then
         cat "$ASSETS_DIR/cbench_lite_arm64" | timeout 10 "$ISH_ARM64" -f "$FAKEFS_ARM64" /bin/sh -c "cat > /tmp/cbench_prebuilt && chmod +x /tmp/cbench_prebuilt" 2>/dev/null || true
     fi
 
-    # Run inside each platform, capture "cat|name|ms" output
+    # Run natively and inside iSH, capture "cat|name|ms" output
     log "Running on Native..."
     local native_out; native_out=$(mktemp)
     bash "$ASSETS_DIR/shellbench.sh" > "$native_out" 2>/dev/null
-
-    log "Running on x86..."
-    local x86_out; x86_out=$(mktemp)
-    timeout 900 "$ISH_X86" -f "$FAKEFS_X86" /bin/sh -c "sh /tmp/shellbench.sh" > "$x86_out" 2>/dev/null || true
 
     log "Running on ARM64..."
     local arm_out; arm_out=$(mktemp)
     timeout 900 "$ISH_ARM64" -f "$FAKEFS_ARM64" /bin/sh -c "sh /tmp/shellbench.sh" > "$arm_out" 2>/dev/null || true
 
     echo ""
-    printf "${BOLD}%-9s %-18s │ %8s │ %8s │ %8s │ %8s │ %8s${NC}\n" \
-        "Cat" "Test" "Native" "x86" "ARM64" "x86/Nat" "x86/A64"
+    printf "${BOLD}%-9s %-18s │ %8s │ %8s │ %8s${NC}\n" \
+        "Cat" "Test" "Native" "ARM64" "A64/Nat"
     hr
 
     local rows=()
 
-    # Parse native results into associative-like arrays (POSIX sh compat via temp files)
-    local nat_data; nat_data=$(mktemp)
-    local x86_data; x86_data=$(mktemp)
-    local arm_data; arm_data=$(mktemp)
-    cp "$native_out" "$nat_data"
-    cp "$x86_out" "$x86_data"
-    cp "$arm_out" "$arm_data"
-
     # Iterate over ARM64 results (superset — has Python/Node/Go if installed)
     while IFS='|' read -r cat name arm_ms; do
         [ -z "$cat" ] && continue
-        local nat_ms x86_ms
-        nat_ms=$(grep "^${cat}|${name}|" "$nat_data" | head -1 | cut -d'|' -f3)
-        x86_ms=$(grep "^${cat}|${name}|" "$x86_data" | head -1 | cut -d'|' -f3)
+        local nat_ms
+        nat_ms=$(grep "^${cat}|${name}|" "$native_out" | head -1 | cut -d'|' -f3)
         [ -z "$nat_ms" ] && nat_ms="—"
-        [ -z "$x86_ms" ] && x86_ms="—"
-
-        # Detect failed measurements on x86:
-        # - Near-timeout value (≥29000ms when tests use timeout 30): treat as hang
-        # - Node.js non-startup tests that finish "suspiciously fast" (faster than
-        #   ARM64 AND less than 500ms AND ARM64 > 800ms) likely crashed before work
-        if [ "$x86_ms" != "—" ] && [ "$x86_ms" -ge 29000 ] 2>/dev/null; then
-            x86_ms="FAIL"
-        fi
-        if [ "$cat" = "Node.js" ] && [ "$name" != "startup" ] && \
-           [ "$x86_ms" != "—" ] && [ "$x86_ms" != "FAIL" ] && \
-           [ "$arm_ms" -gt 800 ] 2>/dev/null && \
-           [ "$x86_ms" -lt 500 ] 2>/dev/null; then
-            x86_ms="FAIL"
-        fi
 
         # Format times
-        local nat_f x86_f arm_f xn_r xa_r
+        local nat_f arm_f an_r
         [ "$nat_ms" = "—" ] && nat_f="—" || nat_f="${nat_ms}ms"
-        if [ "$x86_ms" = "—" ]; then x86_f="—"
-        elif [ "$x86_ms" = "FAIL" ]; then x86_f="FAIL"
-        else x86_f="${x86_ms}ms"
-        fi
         arm_f="${arm_ms}ms"
 
-        # Ratios — skip when either side is non-numeric
-        if [ "$nat_ms" != "—" ] && [ "$x86_ms" != "—" ] && [ "$x86_ms" != "FAIL" ] && \
-           [ "$nat_ms" -gt 0 ] 2>/dev/null; then
-            xn_r=$(awk "BEGIN{printf\"%.1fx\",$x86_ms/$nat_ms}")
+        # Ratio — skipped when the native side is non-numeric
+        if [ "$nat_ms" != "—" ] && [ "$nat_ms" -gt 0 ] 2>/dev/null; then
+            an_r=$(awk "BEGIN{printf\"%.1fx\",$arm_ms/$nat_ms}")
         else
-            xn_r="—"
-        fi
-        if [ "$x86_ms" != "—" ] && [ "$x86_ms" != "FAIL" ] && [ "$arm_ms" -gt 0 ] 2>/dev/null; then
-            xa_r=$(awk "BEGIN{printf\"%.1fx\",$x86_ms/$arm_ms}")
-        else
-            xa_r="—"
+            an_r="—"
         fi
 
-        printf "%-9s %-18s │ %8s │ %8s │ %8s │ %8s │ %8s\n" \
-            "$cat" "$name" "$nat_f" "$x86_f" "$arm_f" "$xn_r" "$xa_r"
+        printf "%-9s %-18s │ %8s │ %8s │ %8s\n" \
+            "$cat" "$name" "$nat_f" "$arm_f" "$an_r"
 
-        echo "shell,$cat,$name,$nat_ms,$x86_ms,$arm_ms" >> "$CSV"
-        rows+=("$cat|$name|$nat_f|$x86_f|$arm_f|$xn_r|$xa_r")
+        echo "shell,$cat,$name,$nat_ms,$arm_ms" >> "$CSV"
+        rows+=("$cat|$name|$nat_f|$arm_f|$an_r")
     done < "$arm_out"
 
-    rm -f "$native_out" "$x86_out" "$arm_out" "$nat_data" "$x86_data" "$arm_data"
+    rm -f "$native_out" "$arm_out"
     echo ""
     if [ ${#rows[@]} -gt 0 ]; then
         _md_shell_section "${rows[@]}"
@@ -215,7 +167,7 @@ suite_shell() {
 _md_shell_section() {
     local rows=("$@") prev=""
     {
-        echo "## 1. Shell Benchmark (Native vs x86 vs ARM64)"
+        echo "## 1. Shell Benchmark (Native vs ARM64)"
         echo ""
         echo "> **Guest-side timing** — each test measured inside the emulator with"
         echo "> monotonic clock. Startup overhead (fakefs init) is excluded."
@@ -224,16 +176,16 @@ _md_shell_section() {
     } >> "$PERF_MD"
 
     for r in "${rows[@]}"; do
-        IFS='|' read -r cat name nat x86 arm xn xa <<< "$r"
+        IFS='|' read -r cat name nat arm an <<< "$r"
         if [ "$cat" != "$prev" ]; then
             [ -n "$prev" ] && echo "" >> "$PERF_MD"
             echo "### $cat" >> "$PERF_MD"
             echo "" >> "$PERF_MD"
-            echo "| Test | Native | x86 | ARM64 | x86/Native | **x86/ARM64** |" >> "$PERF_MD"
-            echo "|------|:---:|:---:|:---:|:---:|:---:|" >> "$PERF_MD"
+            echo "| Test | Native | ARM64 | **ARM64/Native** |" >> "$PERF_MD"
+            echo "|------|:---:|:---:|:---:|" >> "$PERF_MD"
             prev="$cat"
         fi
-        echo "| $name | $nat | $x86 | $arm | $xn | **$xa** |" >> "$PERF_MD"
+        echo "| $name | $nat | $arm | **$an** |" >> "$PERF_MD"
     done
     echo "" >> "$PERF_MD"
 }
@@ -241,16 +193,15 @@ _md_shell_section() {
 # NOTE: Python, Node.js, Go, and C benchmarks all run inside suite_shell
 # via assets/shellbench.sh. The separate suite_python / suite_node / suite_c
 # functions were removed — shellbench.sh performs identical work with
-# guest-side timing (no startup overhead) and produces comparable x86 data.
+# guest-side timing (no startup overhead).
 
 # ═══════════════════════════════════════════════════════════════════
-# SUITE 2: Compatibility — pass/fail across x86 and ARM64
+# SUITE 2: Compatibility — pass/fail on ARM64
 # ═══════════════════════════════════════════════════════════════════
 
-# ── All compatibility tests (both x86 and ARM64 attempt every test) ──
+# ── All compatibility tests ──
 # Derived from bench/scripts/test_200_core_software.sh (264 items),
 # deduplicated and restructured into a flat array.
-# x86 rootfs must have packages pre-installed via apk before running.
 COMPAT_TESTS=(
     # 1. Basic System Tools (28)
     "Core|ls|ls / >/dev/null"
@@ -528,9 +479,7 @@ COMPAT_TESTS=(
     "Skill|meitu-cli (meitu-skills 119★)|npx -y meitu-cli@latest --help 2>&1 | head -1 >/dev/null"
     "Skill|node-edge-tts (edge-tts 29★)|npx -y node-edge-tts 2>&1 | head -1 | grep -q Usage"
 
-    # AI CLIs — bun/JSC (claude) and Rust/tokio (codex) runtimes. ARM64-only
-    # (no 32-bit builds of these tools exist); x86 FAIL is an expected
-    # architecture limitation, like automake/perl/go/nslookup above. The
+    # AI CLIs — bun/JSC (claude) and Rust/tokio (codex) runtimes. The
     # claude/codex tests verify the runtime reaches its application layer
     # (auth/prompt) without deadlocking or crashing — no real API key needed.
     "AICLIs|bun lang+stdlib|/root/.bun/bin/bun /tmp/bun_lang_test.js 2>&1 | grep -q BUN_JS_TEST_PASS"
@@ -628,32 +577,28 @@ _purge_fakefs_special_files() {
 }
 
 suite_compat() {
-    log "Compatibility tests (x86 vs ARM64)"
+    log "Compatibility tests (ARM64)"
     hr
 
     # Purge stale blocking special files before anything touches the fakefs.
-    _purge_fakefs_special_files "$FAKEFS_X86" "x86"
     _purge_fakefs_special_files "$FAKEFS_ARM64" "ARM64"
 
-    # Auto-install missing packages on both architectures
-    _ensure_packages "$ISH_X86" -f "$FAKEFS_X86" "x86"
+    # Auto-install missing packages
     _ensure_packages "$ISH_ARM64" -f "$FAKEFS_ARM64" "ARM64"
 
-    # Push test assets used by COMPAT_TESTS into both rootfs (e.g. the bun
-    # language/stdlib conformance script). Deployed to both archs; x86 will
-    # still FAIL the bun test since bun isn't installed there.
+    # Push test assets used by COMPAT_TESTS into the rootfs (e.g. the bun
+    # language/stdlib conformance script).
     for asset in bun_lang_test.js; do
         [ -f "$ASSETS_DIR/$asset" ] || continue
-        cat "$ASSETS_DIR/$asset" | timeout 10 "$ISH_X86" -f "$FAKEFS_X86" /bin/sh -c "cat > /tmp/$asset" 2>/dev/null || true
         cat "$ASSETS_DIR/$asset" | timeout 10 "$ISH_ARM64" -f "$FAKEFS_ARM64" /bin/sh -c "cat > /tmp/$asset" 2>/dev/null || true
     done
     echo ""
 
     local total=${#COMPAT_TESTS[@]} n=0
-    local x86p=0 x86f=0 armp=0 armf=0
+    local armp=0 armf=0
     local rows=()
 
-    printf "${BOLD}%-9s %-22s │ %6s │ %6s${NC}\n" "Cat" "Test" "x86" "ARM64"
+    printf "${BOLD}%-9s %-22s │ %6s${NC}\n" "Cat" "Test" "ARM64"
     hr
 
     for line in "${COMPAT_TESTS[@]}"; do
@@ -674,81 +619,67 @@ suite_compat() {
             # "claude --version" keeps the 15s default (measured ~3-5s)
         esac
 
-        local xr ar
-        if timeout "$t" "$ISH_X86" -f "$FAKEFS_X86" /bin/sh -c "$cmd" >/dev/null 2>&1; then
-            xr="PASS"; x86p=$((x86p+1))
-        else
-            xr="FAIL"; x86f=$((x86f+1))
-        fi
+        local ar
         if timeout "$t" "$ISH_ARM64" -f "$FAKEFS_ARM64" /bin/sh -c "$cmd" >/dev/null 2>&1; then
             ar="PASS"; armp=$((armp+1))
         else
             ar="FAIL"; armf=$((armf+1))
         fi
 
-        local xs as
-        [ "$xr" = "PASS" ] && xs="${GREEN}PASS${NC}" || xs="${RED}FAIL${NC}"
+        local as
         [ "$ar" = "PASS" ] && as="${GREEN}PASS${NC}" || as="${RED}FAIL${NC}"
-        printf "%-9s %-22s │ %b │ %b\n" "$cat" "$name" "$xs" "$as"
-        rows+=("$cat|$name|$xr|$ar")
+        printf "%-9s %-22s │ %b\n" "$cat" "$name" "$as"
+        rows+=("$cat|$name|$ar")
     done
 
     echo ""
-    ok "x86:   $x86p / $total pass ($(( x86p * 100 / total ))%)"
     ok "ARM64: $armp / $total pass ($(( armp * 100 / total ))%)"
 
-    _md_compat "$x86p" "$x86f" "$armp" "$armf" "$total" "${rows[@]}"
+    _md_compat "$armp" "$armf" "$total" "${rows[@]}"
 }
 
 _md_compat() {
-    local x86p="$1" x86f="$2" armp="$3" armf="$4" total="$5"
-    shift 5; local rows=("$@")
+    local armp="$1" armf="$2" total="$3"
+    shift 3; local rows=("$@")
 
     cat > "$COMPAT_MD" << EOF
-# iSH Compatibility: x86 vs ARM64
+# iSH Compatibility: ARM64
 
 > **Generated:** $(date '+%Y-%m-%d %H:%M:%S') | **Tests:** $total | **Host:** macOS $(sw_vers -productVersion)
 >
-> Both architectures use **fakefs** mode with virtual device nodes.
-> x86 rootfs = Alpine x86 minirootfs (busybox only)
-> ARM64 rootfs = Alpine aarch64 full rootfs (apk, python3, node, gcc, go, etc.)
->
-> All tests attempt to run on both architectures. x86 failures in the
-> software/language categories reflect genuine 32-bit architecture limitations
-> (no python3/node/gcc packages available for i386, or runtime VA requirements).
+> **fakefs** mode with virtual device nodes; the rootfs is Alpine aarch64
+> with apk, python3, node, gcc, go, etc.
 
-| Architecture | Pass | Fail | Rate |
+| | Pass | Fail | Rate |
 |:---:|:---:|:---:|:---:|
-| **x86** (Jitter) | $x86p | $x86f | **$(( x86p * 100 / total ))%** |
 | **ARM64** (Asbestos JIT) | $armp | $armf | **$(( armp * 100 / total ))%** |
 
 ---
 
 EOF
 
-    local prev="" cp=0 cf=0 ap=0 af=0 pending=()
+    local prev="" ap=0 af=0 pending=()
 
     flush() {
         if [ -n "$prev" ]; then
-            local t=$((cp+cf))
+            local t=$((ap+af))
             echo "### $prev ($t tests)" >> "$COMPAT_MD"
             echo "" >> "$COMPAT_MD"
-            echo "| Test | x86 | ARM64 |" >> "$COMPAT_MD"
-            echo "|------|:---:|:---:|" >> "$COMPAT_MD"
+            echo "| Test | ARM64 |" >> "$COMPAT_MD"
+            echo "|------|:---:|" >> "$COMPAT_MD"
             for r in "${pending[@]}"; do echo "$r" >> "$COMPAT_MD"; done
             echo "" >> "$COMPAT_MD"
-            echo "> x86: $cp/$t — ARM64: $ap/$t" >> "$COMPAT_MD"
+            echo "> ARM64: $ap/$t" >> "$COMPAT_MD"
             echo "" >> "$COMPAT_MD"
         fi
-        pending=(); cp=0; cf=0; ap=0; af=0
+        pending=(); ap=0; af=0
     }
 
     for entry in "${rows[@]}"; do
-        IFS='|' read -r cat name xr ar <<< "$entry"
+        IFS='|' read -r cat name ar <<< "$entry"
         if [ "$cat" != "$prev" ]; then flush; prev="$cat"; fi
-        [ "$xr" = "PASS" ] && cp=$((cp+1)) || cf=$((cf+1))
         [ "$ar" = "PASS" ] && ap=$((ap+1)) || af=$((af+1))
-        pending+=("| $name | $xr | $ar |")
+        pending+=("| $name | $ar |")
     done
     flush
 
@@ -757,22 +688,10 @@ EOF
     echo "" >> "$COMPAT_MD"
     echo "## Failures" >> "$COMPAT_MD"
     echo "" >> "$COMPAT_MD"
-    echo "### x86 only" >> "$COMPAT_MD"
-    echo "" >> "$COMPAT_MD"
     local any=0
     for e in "${rows[@]}"; do
-        IFS='|' read -r c n x a <<< "$e"
-        [ "$x" = "FAIL" ] && [ "$a" = "PASS" ] && { echo "- \`$n\` ($c)" >> "$COMPAT_MD"; any=1; }
-    done
-    [ $any -eq 0 ] && echo "_None_" >> "$COMPAT_MD"
-
-    echo "" >> "$COMPAT_MD"
-    echo "### ARM64 only" >> "$COMPAT_MD"
-    echo "" >> "$COMPAT_MD"
-    any=0
-    for e in "${rows[@]}"; do
-        IFS='|' read -r c n x a <<< "$e"
-        [ "$a" = "FAIL" ] && [ "$x" = "PASS" ] && { echo "- \`$n\` ($c)" >> "$COMPAT_MD"; any=1; }
+        IFS='|' read -r c n a <<< "$e"
+        [ "$a" = "FAIL" ] && { echo "- \`$n\` ($c)" >> "$COMPAT_MD"; any=1; }
     done
     [ $any -eq 0 ] && echo "_None_" >> "$COMPAT_MD"
 
@@ -789,17 +708,15 @@ write_perf_header() {
 
 > **Generated:** $(date '+%Y-%m-%d %H:%M:%S')
 > **Host:** macOS $(sw_vers -productVersion) / $(uname -m)
-> **x86:** $(basename "$ISH_X86") ($(ls -lh "$ISH_X86" | awk '{print $5}'), fakefs)
 > **ARM64:** $(basename "$ISH_ARM64") ($(ls -lh "$ISH_ARM64" | awk '{print $5}'), fakefs)
 > **Runs:** $RUNS (median) | **Timeout:** ${TIMEOUT_S}s
 
-| | x86 Emulation | ARM64 JIT |
-|---|:---:|:---:|
-| Engine | Interpreter (Jitter) | JIT Compiler (Asbestos) |
-| Guest | i386 → ARM64 host | AArch64 → AArch64 host |
-| Address | 32-bit (4 GB) | 48-bit (256 TB) |
-| SIMD | Partial SSE/SSE2 | Full NEON + Crypto |
-| Node/Go/Rust | Not possible | Supported |
+| | ARM64 JIT |
+|---|:---:|
+| Engine | JIT Compiler (Asbestos) |
+| Guest | AArch64 → AArch64 host |
+| Address | 48-bit (256 TB) |
+| SIMD | Full NEON + Crypto |
 
 ---
 
@@ -822,7 +739,7 @@ main() {
 
     preflight
 
-    echo "suite,category,name,native_time,native_insns,x86_time,x86_insns,arm64_time,arm64_insns" > "$CSV"
+    echo "suite,category,name,native_ms,arm64_ms" > "$CSV"
 
     case "$suite" in
         all)

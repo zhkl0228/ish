@@ -11,7 +11,7 @@
 </a>
 </p>
 
-iSHは、ユーザーモードのx86エミュレーションとシステムコールの翻訳を使用して、iOS上でLinuxシェルを実行するプロジェクトです。
+iSHは、ユーザーモードのAArch64（ARM64）エミュレーションとシステムコールの翻訳を使用して、iOS上でLinuxシェルを実行するプロジェクトです。iSHはAArch64ホスト（Apple silicon Mac、iPhone/iPad、またはコマンドラインツールならarm64 Linux）でのみビルド・実行できます。
 
 プロジェクトの現状については、issueタブとコミットログを確認してください。
 
@@ -35,15 +35,13 @@ iSHは、ユーザーモードのx86エミュレーションとシステムコ�
 
 ## iOS用にビルドする
 
-プロジェクトをXcodeで開き、iSH.xcconfigを開いて、`ROOT_BUNDLE_IDENTIFIER`を一意の値に変更します。また、プロジェクト（ターゲットではなく！）のビルド設定で開発チームIDを更新する必要があります。その後、実行をクリックします。他のすべてを自動的に行うスクリプトがあります。問題が発生した場合は、issueを開いてください。お手伝いします。
+プロジェクトをXcodeで開き、iSH.xcconfigを開いて、`ROOT_BUNDLE_IDENTIFIER`を一意の値に変更します。また、プロジェクト（ターゲットではなく！）のビルド設定で開発チームIDを更新する必要があります。その後、`iSH-ARM64`スキームを選択して実行をクリックします。他のすべてを自動的に行うスクリプトがあります。問題が発生した場合は、issueを開いてください。お手伝いします。
 
 ## テスト用のコマンドラインツールをビルドする
 
-環境を設定するには、プロジェクトディレクトリに移動し、`meson build`を実行して`build`ディレクトリを作成します。その後、buildディレクトリに移動し、`ninja`を実行します。
+環境を設定するには、プロジェクトディレクトリに移動し、`meson setup build`を実行して`build`ディレクトリを作成します。その後、buildディレクトリに移動し、`ninja`を実行します。
 
-自己完結型のAlpine linuxファイルシステムを設定するには、[Alpineウェブサイト](https://alpinelinux.org/downloads/)からi386用のAlpine minirootfs tarballをダウンロードし、`./tools/fakefsify`を実行します。minirootfs tarballを最初の引数として、出力ディレクトリの名前を2番目の引数として指定します。その後、`./ish -f alpine /bin/sh`を使用して、Alpineファイルシステム内でコマンドを実行できます。出力ディレクトリの名前が`alpine`であると仮定します。`tools/fakefsify`がbuildディレクトリに存在しない場合、それはシステム上でlibarchiveを見つけられなかったためかもしれません（インストール方法については上記を参照してください）。
-
-`ish`を`tools/ptraceomatic`に置き換えることで、実際のプロセスでプログラムを実行し、各ステップでレジスタを比較しながらシングルステップ実行できます。デバッグに使用します。64ビットLinux 4.11以降が必要です。
+自己完結型のAlpine linuxファイルシステムを設定するには、[Alpineウェブサイト](https://alpinelinux.org/downloads/)からaarch64用のAlpine minirootfs tarballをダウンロードし、`./tools/fakefsify`を実行します。minirootfs tarballを最初の引数として、出力ディレクトリの名前を2番目の引数として指定します。その後、`./ish -f alpine /bin/sh`を使用して、Alpineファイルシステム内でコマンドを実行できます。出力ディレクトリの名前が`alpine`であると仮定します。`tools/fakefsify`がbuildディレクトリに存在しない場合、それはシステム上でlibarchiveを見つけられなかったためかもしれません（インストール方法については上記を参照してください）。
 
 ## ロギング
 

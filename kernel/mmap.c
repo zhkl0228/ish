@@ -10,9 +10,7 @@
 #include "kernel/memory.h"
 #include "util/verbosetrace.h"
 #include "kernel/mm.h"
-#ifdef GUEST_ARM64
 #include "asbestos/guest-arm64/host_fault.h"
-#endif
 
 #if ANON_MMAP_LIMIT_PAGES > 0
 _Atomic long anon_page_count;
@@ -333,7 +331,6 @@ static addr_t do_mmap(addr_t addr, uint64_t len, dword_t prot, dword_t flags, fd
         if (PGOFFSET(addr) != 0)
             return _EINVAL;
         page = PAGE(addr);
-#ifdef GUEST_ARM64
         // Reject hints that would overlap the stack region in low 4GB
         // or exceed the 48-bit user address limit.
         // Hints within low 4GB (up to the stack) are unchanged — V8
@@ -357,12 +354,10 @@ static addr_t do_mmap(addr_t addr, uint64_t len, dword_t prot, dword_t flags, fd
                 page = 0;
             }
         }
-#endif
         if (addr != 0 && !(flags & MMAP_FIXED) && !pt_is_hole(current->mem, page, pages))
             addr = 0;
     }
     if (addr == 0) {
-#ifdef GUEST_ARM64
         // V8 reserves its heap cage with:
         //     mmap(NULL, chunk_size, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0)
         //     (typical chunk_size: 128MB, reserved before mprotect'ing
@@ -393,9 +388,6 @@ static addr_t do_mmap(addr_t addr, uint64_t len, dword_t prot, dword_t flags, fd
             page = pt_find_hole_for_reservation(current->mem, pages);
         else
             page = pt_find_hole(current->mem, pages);
-#else
-        page = pt_find_hole(current->mem, pages);
-#endif
         if (page == BAD_PAGE)
             return _ENOMEM;
     }
@@ -407,7 +399,6 @@ static addr_t do_mmap(addr_t addr, uint64_t len, dword_t prot, dword_t flags, fd
         // PROT_NONE mappings (guard regions) don't consume real memory,
         // so don't count them against the anonymous page limit.
         bool is_prot_none = !(prot & P_READ) && !(prot & P_WRITE) && !(prot & P_EXEC);
-#ifdef GUEST_ARM64
         // Three kinds of mapping are address space, not memory, and become a
         // lazy mem_reservation: no host memory until a page is mprotect'ed or
         // touched (mem_ptr's demand-map path, pt_set_flags' commit).
@@ -454,7 +445,6 @@ static addr_t do_mmap(addr_t addr, uint64_t len, dword_t prot, dword_t flags, fd
                 return err;
             return page << PAGE_BITS;
         }
-#endif
 #if ANON_MMAP_LIMIT_PAGES > 0
         if (!is_prot_none && !anon_pages_reserve((long)pages)) {
             anon_limit_report("mmap", (long)pages);
@@ -501,7 +491,6 @@ addr_t sys_mmap2(addr_t addr, dword_t len, dword_t prot, dword_t flags, fd_t fd_
     return mmap_common(addr, len, prot, flags, fd_no, offset << PAGE_BITS);
 }
 
-#if defined(GUEST_ARM64)
 // ARM64 mmap syscall: offset is passed directly (not shifted like mmap2)
 // and takes 6 direct arguments (not a pointer to a struct like x86 mmap)
 addr_t sys_mmap64(addr_t addr, addr_t len, dword_t prot, dword_t flags, fd_t fd_no, qword_t offset) {
@@ -518,7 +507,6 @@ addr_t sys_mmap64(addr_t addr, addr_t len, dword_t prot, dword_t flags, fd_t fd_
     write_wrunlock(&current->mem->lock);
     return res;
 }
-#endif
 
 struct mmap_arg_struct {
     dword_t addr, len, prot, flags, fd, offset;
@@ -660,7 +648,6 @@ _Atomic uint64_t st_dontneed_zeroed;
 
 dword_t sys_madvise(addr_t addr, dword_t len, dword_t advice) {
     STRACE("madvise(0x%llx, 0x%x, %d)", (unsigned long long)addr, len, advice);
-#ifdef GUEST_ARM64
     // tests/regress/regress_jit_fault.c, with ISH_JIT_FAULT_TEST set: the host
     // memory behind [addr, addr + len) goes away until an access faults on
     // it, the TLB left as it is. len is whole host pages.
@@ -672,7 +659,6 @@ dword_t sys_madvise(addr_t addr, dword_t len, dword_t advice) {
             return _EINVAL;
         return host_fault_test_arm(host, len) ? 0 : _EINVAL;
     }
-#endif
     if (advice == 4 && vma_trace_hits_file(addr, len))
         fprintf(stderr, "[vma] madvise(0x%llx, 0x%x, DONTNEED) [file-backed] pid=%d\n",
                 (unsigned long long)addr, len, current->pid);
