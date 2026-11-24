@@ -14,5 +14,10 @@
 	     Kimi Code) take 0.8 GB and more each, as the emulator's guest memory. -->
 	<key>com.apple.developer.kernel.increased-memory-limit</key>
 	<true/>
+	<!-- A larger address space for the app: every guest process's mappings
+	     are host mappings in it, and without this iOS caps it so low that,
+	     fragmented, it had no free range of 256MB for node's code range. -->
+	<key>com.apple.developer.kernel.extended-virtual-addressing</key>
+	<true/>
 </dict>
 </plist>
