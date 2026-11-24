@@ -252,7 +252,43 @@ static int realfs_wait_ready(struct fd *fd, short events) {
     }
 }
 
+// Darwin's poll never says a FIFO's read end ready once its last writer has
+// gone: no POLLIN, no POLLHUP, where read says 0. A blocking read of one,
+// made once poll said ready, waited for good at the end of the data: cat of
+// a FIFO, CPython's test_logging (test_should_not_rollover_named_pipe). So
+// it is read without blocking, and while there is nothing, waited for in
+// poll a tenth of a second at a time and read again: the end comes as it
+// is, 0, within that. The host's fd is made non-blocking for each such read
+// (its flags are its open file's, which another reader of it shares, hence
+// the lock). Signals end the wait as realfs_wait_ready's. A pipe's poll says
+// its end (pipe(2), an adhoc fd): it is read as before.
+static lock_t fifo_read_lock = LOCK_INITIALIZER;
+
+static ssize_t realfs_fifo_read(struct fd *fd, void *buf, size_t bufsize) {
+    for (;;) {
+        lock(&fifo_read_lock);
+        int host_flags = fcntl(fd->real_fd, F_GETFL);
+        fcntl(fd->real_fd, F_SETFL, host_flags | O_NONBLOCK);
+        ssize_t res = read(fd->real_fd, buf, bufsize);
+        int read_errno = errno;
+        fcntl(fd->real_fd, F_SETFL, host_flags);
+        unlock(&fifo_read_lock);
+        if (res >= 0)
+            return res;
+        if (read_errno != EAGAIN && read_errno != EINTR) {
+            errno = read_errno;
+            return errno_map();
+        }
+        if (task_signal_pending(current))
+            return _EINTR;
+        struct pollfd p = {.fd = fd->real_fd, .events = POLLIN};
+        poll(&p, 1, 100);
+    }
+}
+
 ssize_t realfs_read(struct fd *fd, void *buf, size_t bufsize) {
+    if (S_ISFIFO(fd->type) && !is_adhoc_fd(fd) && !(fd->flags & O_NONBLOCK_) && current != NULL)
+        return realfs_fifo_read(fd, buf, bufsize);
     for (;;) {
         int err = realfs_wait_ready(fd, POLLIN);
         if (err < 0)
