@@ -1,3 +1,5 @@
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include "kernel/memory.h"
@@ -377,6 +379,40 @@ static void smaps_print(struct proc_data *buf, page_t pages, const struct smaps_
             flags & P_GROWSDOWN ? " gd" : "");
 }
 
+// Whether a page is in the region of a mapped page before it, as maps tells
+// regions: the same permissions, and the same data or both anonymous
+static bool proc_maps_same_region(struct pt_entry *start_pt, struct pt_entry *pt) {
+    if ((pt->flags & P_RWX) != (start_pt->flags & P_RWX))
+        return false;
+    return pt->data == start_pt->data || (pt->flags & P_ANONYMOUS && start_pt->flags & P_ANONYMOUS);
+}
+
+// The end of the region that starts at start, a mapped page; its pages
+// counted for smaps in counts. Under mem->lock.
+static page_t proc_maps_region_end(struct mem *mem, page_t start, struct smaps_counts *counts) {
+    struct pt_entry *start_pt = mem_pt(mem, start);
+    page_t page = start;
+    while (page < MEM_PAGES) {
+        struct pt_entry *pt = mem_pt(mem, page);
+        if (pt == NULL || !proc_maps_same_region(start_pt, pt))
+            break;
+        smaps_count_page(counts, pt->flags);
+        // mem_next_page skips page tables that hold nothing, so where it
+        // goes further than the next page, there was a gap: the region
+        // ends here. Without this an anonymous mapping ran on across the
+        // gap into the next one with its permissions: a JVM's hs_err map
+        // had one rw-p line of 15TB, up to where its CDS archive starts.
+        page_t next = page;
+        mem_next_page(mem, &next);
+        if (next != page + 1) {
+            page++;
+            break;
+        }
+        page = next;
+    }
+    return page;
+}
+
 // /proc/pid/maps, and with smaps the /proc/pid/smaps fields after each line.
 static void proc_maps_show_regions(struct task *task, struct proc_data *buf, bool smaps) {
     struct mem *mem = task->mem;
@@ -398,29 +434,7 @@ static void proc_maps_show_regions(struct task *task, struct proc_data *buf, boo
 
         // find the end of said region
         struct smaps_counts counts = {0};
-        while (page < MEM_PAGES) {
-            struct pt_entry *pt = mem_pt(mem, page);
-            if (pt == NULL)
-                break;
-            if ((pt->flags & P_RWX) != (start_pt->flags & P_RWX))
-                break;
-            // region continues if data is the same or both are anonymous
-            if (!(pt->data == data || (pt->flags & P_ANONYMOUS && start_pt->flags & P_ANONYMOUS)))
-                break;
-            smaps_count_page(&counts, pt->flags);
-            // mem_next_page skips page tables that hold nothing, so where it
-            // goes further than the next page, there was a gap: the region
-            // ends here. Without this an anonymous mapping ran on across the
-            // gap into the next one with its permissions: a JVM's hs_err map
-            // had one rw-p line of 15TB, up to where its CDS archive starts.
-            page_t next = page;
-            mem_next_page(mem, &next);
-            if (next != page + 1) {
-                page++;
-                break;
-            }
-            page = next;
-        }
+        page = proc_maps_region_end(mem, start, &counts);
         page_t end = page;
 
         // output info
@@ -677,6 +691,131 @@ static bool proc_pid_task_readdir(struct proc_entry *entry, unsigned long *index
     return true;
 }
 
+// /proc/<pid>/map_files: a symlink for each region of maps that maps a file,
+// named by its range ("%lx-%lx", as Linux names them), to the file. Gradle's
+// file-events library lists it to tell musl from glibc: a link to a file
+// named "-musl-" (ld-musl-aarch64.so.1) is musl. There was none, and on
+// Alpine it loaded its glibc build, which failed (Gradle 9 ran only with
+// org.gradle.native=false).
+static struct proc_dir_entry proc_pid_map_file;
+
+// The names of the regions that map a file, in order, NULL after them
+static char **proc_map_files_names(struct task *task) {
+    size_t count = 0, capacity = 16;
+    char **names = malloc(capacity * sizeof(*names));
+    struct mem *mem = task->mem;
+    if (mem != NULL) {
+        read_wrlock(&mem->lock);
+        page_t page = 0;
+        while (page < MEM_PAGES) {
+            while (page < MEM_PAGES && mem_pt(mem, page) == NULL)
+                mem_next_page(mem, &page);
+            if (page >= MEM_PAGES)
+                break;
+            page_t start = page;
+            struct smaps_counts counts = {0};
+            page = proc_maps_region_end(mem, start, &counts);
+            if (mem_pt(mem, start)->data->fd == NULL)
+                continue;
+            if (count + 1 >= capacity) {
+                capacity *= 2;
+                names = realloc(names, capacity * sizeof(*names));
+            }
+            char name[40];
+            snprintf(name, sizeof(name), "%lx-%lx", (unsigned long) start << PAGE_BITS,
+                     (unsigned long) page << PAGE_BITS);
+            names[count++] = strdup(name);
+        }
+        read_wrunlock(&mem->lock);
+    }
+    names[count] = NULL;
+    return names;
+}
+
+static bool proc_pid_map_files_readdir(struct proc_entry *entry, unsigned long *index, struct proc_entry *next_entry) {
+    if (*index == 0 || entry->child_names == NULL) {
+        if (entry->child_names != NULL)
+            free_string_array(entry->child_names);
+        entry->child_names = NULL;
+        struct task *task = proc_get_task(entry);
+        if (task == NULL)
+            return false;
+        lock(&task->general_lock);   // [T-ish-exit-mm-general-lock]
+        entry->child_names = proc_map_files_names(task);
+        unlock(&task->general_lock);
+        proc_put_task(task);
+    }
+    if (entry->child_names[*index] == NULL)
+        return false;
+    *next_entry = (struct proc_entry) {&proc_pid_map_file, .pid = entry->pid,
+        .name = strdup(entry->child_names[*index])};
+    (*index)++;
+    return true;
+}
+
+// A name, found without listing them all (every entry is looked up, and a
+// listing walks the whole page table): the range of a region that maps a
+// file, from its first page to its end, as readdir names it
+static bool proc_pid_map_files_lookup(struct proc_entry *entry, const char *name, unsigned long *index,
+                                      struct proc_entry *next_entry) {
+    char *dash, *rest;
+    unsigned long start = strtoul(name, &dash, 16);
+    unsigned long end = strtoul(dash + (*dash == '-'), &rest, 16);
+    char spelled[40];
+    snprintf(spelled, sizeof(spelled), "%lx-%lx", start, end);
+    if (strcmp(spelled, name) != 0 || start % PAGE_SIZE != 0 || end % PAGE_SIZE != 0 ||
+            start >= end || end >> PAGE_BITS > MEM_PAGES)
+        return false;
+    struct task *task = proc_get_task(entry);
+    if (task == NULL)
+        return false;
+    bool found = false;
+    lock(&task->general_lock);   // [T-ish-exit-mm-general-lock]
+    struct mem *mem = task->mem;
+    if (mem != NULL) {
+        read_wrlock(&mem->lock);
+        page_t first = start >> PAGE_BITS;
+        struct pt_entry *pt = mem_pt(mem, first);
+        struct pt_entry *before = first > 0 ? mem_pt(mem, first - 1) : NULL;
+        struct smaps_counts counts = {0};
+        found = pt != NULL && pt->data->fd != NULL && (before == NULL || !proc_maps_same_region(before, pt)) &&
+                proc_maps_region_end(mem, first, &counts) == end >> PAGE_BITS;
+        read_wrunlock(&mem->lock);
+    }
+    unlock(&task->general_lock);
+    proc_put_task(task);
+    if (!found)
+        return false;
+    *next_entry = (struct proc_entry) {&proc_pid_map_file, .pid = entry->pid, .name = strdup(name)};
+    *index = 0;
+    return true;
+}
+
+static void proc_pid_map_file_getname(struct proc_entry *entry, char *buf) {
+    strcpy(buf, entry->name);
+}
+
+// The file mapped at the region's first page; ENOENT once it maps none
+static int proc_pid_map_file_readlink(struct proc_entry *entry, char *buf) {
+    page_t first = strtoul(entry->name, NULL, 16) >> PAGE_BITS;
+    struct task *task = proc_get_task(entry);
+    if (task == NULL)
+        return _ESRCH;
+    int err = _ENOENT;
+    lock(&task->general_lock);   // [T-ish-exit-mm-general-lock]
+    struct mem *mem = task->mem;
+    if (mem != NULL) {
+        read_wrlock(&mem->lock);
+        struct pt_entry *pt = mem_pt(mem, first);
+        if (pt != NULL && pt->data->fd != NULL)
+            err = generic_getpath(pt->data->fd, buf);
+        read_wrunlock(&mem->lock);
+    }
+    unlock(&task->general_lock);
+    proc_put_task(task);
+    return err;
+}
+
 static int proc_pid_cwd_readlink(struct proc_entry *entry, char *buf) {
     struct task *task = proc_get_task(entry);
     if (task == NULL)
@@ -696,6 +835,7 @@ struct proc_children proc_pid_children = PROC_CHILDREN({
     {"cwd", S_IFLNK, .readlink = proc_pid_cwd_readlink},
     {"exe", S_IFLNK, .readlink = proc_pid_exe_readlink},
     {"fd", S_IFDIR, .readdir = proc_pid_fd_readdir},
+    {"map_files", S_IFDIR, .readdir = proc_pid_map_files_readdir, .lookup = proc_pid_map_files_lookup},
     {"maps", .show = proc_pid_maps_show},
     {"smaps", .show = proc_pid_smaps_show},
     {"mem", .pread = proc_pid_mem_pread, .pwrite = proc_pid_mem_pwrite, .show = proc_pid_mem_show},
@@ -713,3 +853,6 @@ static struct proc_dir_entry proc_pid_fd = {NULL, S_IFLNK,
 
 static struct proc_dir_entry proc_pid_task = {NULL, S_IFLNK,
     .getname = proc_pid_task_getname, .readlink = proc_pid_task_readlink};
+
+static struct proc_dir_entry proc_pid_map_file = {NULL, S_IFLNK,
+    .getname = proc_pid_map_file_getname, .readlink = proc_pid_map_file_readlink};
