@@ -7,14 +7,18 @@
 #import "TabBarView.h"
 #import "Theme.h"
 
-static const CGFloat kMinStripHeight = 38;
+// As tall as a finger needs, at least: a tab takes the touches in all of it
+static const CGFloat kMinStripHeight = 44;
 // The + and ⋯ buttons' width
 static const CGFloat kSlotWidth = 44;
-// Room around the capsules: at the strip's ends, between them, above and below
+// Room around the capsules: at the strip's ends, between them, above and
+// below. A tab's cell takes the room between its capsule and the next and
+// above and below it (TabItemView's capsuleFrame), so that a finger that
+// misses the capsule still has the tab.
 static const CGFloat kStripInset = 8;
 static const CGFloat kTabSpacing = 4;
 static const CGFloat kCapsuleInset = 5;
-// A tab is as wide as what it shows, within these
+// A tab's capsule is as wide as what it shows, within these
 static const CGFloat kMinTabWidth = 76;
 static const CGFloat kMaxTabWidth = 220;
 // Inside a capsule: its ends, and the room between what it shows
@@ -28,7 +32,7 @@ static const CGFloat kSelectedFill = 0.14;
 static const CGFloat kHoverFill = 0.07;
 
 static UIFont *TabFont(void) {
-    return [UIFontMetrics.defaultMetrics scaledFontForFont:[UIFont systemFontOfSize:13 weight:UIFontWeightMedium]];
+    return [UIFontMetrics.defaultMetrics scaledFontForFont:[UIFont systemFontOfSize:14 weight:UIFontWeightMedium]];
 }
 
 // The icon of what runs in a tab: a symbol for the kind of program, the
@@ -63,6 +67,10 @@ static NSString *SymbolForProgram(NSString *_Nullable program) {
 #pragma mark - TabItemView
 
 @interface TabItemView : UIControl
+// What a tab shows of itself: a capsule inside its cell, which the hover's
+// fill and the selected tab's are drawn as
+@property (readonly) UIView *capsule;
+@property (readonly) CGRect capsuleFrame;
 @property (readonly) UIImageView *icon;
 @property (readonly) UILabel *label;
 // What it did unseen: output, a job that ended, or a bell (a program's
@@ -87,9 +95,13 @@ static NSString *SymbolForProgram(NSString *_Nullable program) {
 
 - (instancetype)initWithFrame:(CGRect)frame {
     if (self = [super initWithFrame:frame]) {
+        _capsule = [UIView new];
+        _capsule.userInteractionEnabled = NO;
+        [self addSubview:_capsule];
+
         _icon = [UIImageView new];
         _icon.preferredSymbolConfiguration =
-            [UIImageSymbolConfiguration configurationWithPointSize:11 weight:UIImageSymbolWeightSemibold];
+            [UIImageSymbolConfiguration configurationWithPointSize:12 weight:UIImageSymbolWeightSemibold];
         _icon.contentMode = UIViewContentModeCenter;
         _icon.isAccessibilityElement = NO;
 
@@ -132,13 +144,13 @@ static NSString *SymbolForProgram(NSString *_Nullable program) {
         content.translatesAutoresizingMaskIntoConstraints = NO;
         [self addSubview:content];
 
-        _trailingConstraint = [content.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-kCapsulePadding];
+        _trailingConstraint = [content.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-kCapsulePadding - kTabSpacing / 2];
         [NSLayoutConstraint activateConstraints:@[
-            [content.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:kCapsulePadding],
+            [content.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:kCapsulePadding + kTabSpacing / 2],
             _trailingConstraint,
             [content.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
-            [self.widthAnchor constraintGreaterThanOrEqualToConstant:kMinTabWidth],
-            [self.widthAnchor constraintLessThanOrEqualToConstant:kMaxTabWidth],
+            [self.widthAnchor constraintGreaterThanOrEqualToConstant:kMinTabWidth + kTabSpacing],
+            [self.widthAnchor constraintLessThanOrEqualToConstant:kMaxTabWidth + kTabSpacing],
             [_dot.widthAnchor constraintEqualToConstant:6],
             [_dot.heightAnchor constraintEqualToConstant:6],
             [_actionButton.widthAnchor constraintEqualToConstant:kActionSize],
@@ -161,9 +173,14 @@ static NSString *SymbolForProgram(NSString *_Nullable program) {
     return self;
 }
 
+- (CGRect)capsuleFrame {
+    return CGRectInset(self.bounds, kTabSpacing / 2, kCapsuleInset);
+}
+
 - (void)layoutSubviews {
     [super layoutSubviews];
-    self.layer.cornerRadius = self.bounds.size.height / 2;
+    self.capsule.frame = self.capsuleFrame;
+    self.capsule.layer.cornerRadius = self.capsuleFrame.size.height / 2;
 }
 
 @end
@@ -283,7 +300,8 @@ static NSString *SymbolForProgram(NSString *_Nullable program) {
         _stack.axis = UILayoutConstraintAxisHorizontal;
         _stack.distribution = UIStackViewDistributionFill;
         _stack.alignment = UIStackViewAlignmentFill;
-        _stack.spacing = kTabSpacing;
+        // the cells side by side, the room between capsules theirs
+        _stack.spacing = 0;
         _stack.translatesAutoresizingMaskIntoConstraints = NO;
         [_scrollView addSubview:_stack];
 
@@ -324,11 +342,11 @@ static NSString *SymbolForProgram(NSString *_Nullable program) {
             [_commandsBadge.centerXAnchor constraintEqualToAnchor:_commandsButton.centerXAnchor constant:8],
             [_commandsBadge.centerYAnchor constraintEqualToAnchor:_commandsButton.centerYAnchor constant:-6],
 
-            [_stack.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:kStripInset],
-            [_stack.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-kStripInset],
-            [_stack.topAnchor constraintEqualToAnchor:content.topAnchor constant:kCapsuleInset],
-            [_stack.bottomAnchor constraintEqualToAnchor:content.bottomAnchor constant:-kCapsuleInset],
-            [_stack.heightAnchor constraintEqualToAnchor:frameGuide.heightAnchor constant:-2 * kCapsuleInset],
+            [_stack.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:kStripInset - kTabSpacing / 2],
+            [_stack.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-(kStripInset - kTabSpacing / 2)],
+            [_stack.topAnchor constraintEqualToAnchor:content.topAnchor],
+            [_stack.bottomAnchor constraintEqualToAnchor:content.bottomAnchor],
+            [_stack.heightAnchor constraintEqualToAnchor:frameGuide.heightAnchor],
         ]];
 
         // A tab dragged along the strip lands where it is dropped
@@ -478,7 +496,7 @@ static NSString *SymbolForProgram(NSString *_Nullable program) {
     [self.stack.arrangedSubviews enumerateObjectsUsingBlock:^(__kindof UIView *view, NSUInteger i, BOOL *stop) {
         TabItemView *item = view;
         BOOL active = !item.tabSelected && (item.hovered || item.highlighted);
-        item.backgroundColor = active ? hoverFill : UIColor.clearColor;
+        item.capsule.backgroundColor = active ? hoverFill : UIColor.clearColor;
         UIColor *text = item.exited ? exitedText : item.tabSelected ? self.foreground : dimText;
         item.label.textColor = text;
         item.icon.tintColor = text;
@@ -514,14 +532,15 @@ static NSString *SymbolForProgram(NSString *_Nullable program) {
         item.actionButton.accessibilityLabel = @"Restart";
     }
     // the button has room of its own around its glyph
-    item.trailingConstraint.constant = action ? -(kCapsulePadding - kActionRoom) : -kCapsulePadding;
+    CGFloat padding = action ? kCapsulePadding - kActionRoom : kCapsulePadding;
+    item.trailingConstraint.constant = -(padding + kTabSpacing / 2);
 }
 
 #pragma mark Layout
 
 - (void)updateMetrics {
     UIFont *font = TabFont();
-    self.heightConstraint.constant = MAX(kMinStripHeight, ceil(font.lineHeight) + 2 * kCapsuleInset + 12);
+    self.heightConstraint.constant = MAX(kMinStripHeight, ceil(font.lineHeight) + 2 * kCapsuleInset + 16);
     for (TabItemView *item in self.stack.arrangedSubviews) {
         item.label.font = font;
         item.hintLabel.font = font;
@@ -548,8 +567,8 @@ static NSString *SymbolForProgram(NSString *_Nullable program) {
         self.indicator.hidden = YES;
         return;
     }
-    UIView *item = self.stack.arrangedSubviews[self.selectedIndex];
-    CGRect frame = [self.scrollView convertRect:item.bounds fromView:item];
+    TabItemView *item = self.stack.arrangedSubviews[self.selectedIndex];
+    CGRect frame = [self.scrollView convertRect:item.capsuleFrame fromView:item];
     BOOL slide = self.indicatorSlides && !self.indicator.hidden && !UIAccessibilityIsReduceMotionEnabled();
     self.indicatorSlides = NO;
     self.indicator.hidden = NO;
@@ -586,8 +605,8 @@ static NSString *SymbolForProgram(NSString *_Nullable program) {
         if (self.selectedIndex >= self.stack.arrangedSubviews.count)
             return;
         [self layoutIfNeeded];
-        UIView *item = self.stack.arrangedSubviews[self.selectedIndex];
-        CGRect frame = [self.scrollView convertRect:item.bounds fromView:item];
+        TabItemView *item = self.stack.arrangedSubviews[self.selectedIndex];
+        CGRect frame = [self.scrollView convertRect:item.capsuleFrame fromView:item];
         [self.scrollView scrollRectToVisible:CGRectInset(frame, -kStripInset, 0) animated:YES];
     });
 }
@@ -668,7 +687,8 @@ static NSString *SymbolForProgram(NSString *_Nullable program) {
 
 // A tab lifted, for its menu or a drag: its capsule, on the selected tab's fill
 - (UIPreviewParameters *)capsuleParametersOfItem:(TabItemView *)item parameters:(UIPreviewParameters *)parameters {
-    parameters.visiblePath = [UIBezierPath bezierPathWithRoundedRect:item.bounds cornerRadius:item.bounds.size.height / 2];
+    CGRect capsule = item.capsuleFrame;
+    parameters.visiblePath = [UIBezierPath bezierPathWithRoundedRect:capsule cornerRadius:capsule.size.height / 2];
     parameters.backgroundColor = self.selectedFill;
     return parameters;
 }
