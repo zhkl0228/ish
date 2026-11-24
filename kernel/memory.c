@@ -838,6 +838,10 @@ void pt_set_file(struct mem *mem, page_t start, pages_t pages, struct fd *fd, si
         if (data == last)
             continue;
         last = data;
+        // A read-only mapping processes share (fs/real.c) has its file
+        // already, set before any other could map it
+        if (data->fd != NULL)
+            continue;
         data->fd = fd_retain(fd);
         data->file_offset = file_offset + (size_t) (page - start) * PAGE_SIZE;
     }

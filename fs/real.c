@@ -435,6 +435,137 @@ static void *map_past_end_chunk(size_t from, size_t size, void *ctx) {
     return map_past_end(chunks->fd, size, at, file_bytes, chunks->prot, chunks->flags);
 }
 
+#if defined(__APPLE__)
+#define STAT_MTIME(st) ((st).st_mtimespec)
+#else
+#define STAT_MTIME(st) ((st).st_mtim)
+#endif
+
+// A read-only mapping of a file, shared by every process that maps the same
+// bytes of the same file the same way. Each JVM maps the JDK's 140MB
+// lib/modules and libjvm's 19MB of code, each claude.exe (Claude Code, and
+// every grep it runs) 128MB of its own, and each took address space of its
+// own for them: the app has a few GB of it in all, and a Gradle build, its
+// daemon with a test JVM and kotlinter's workers, ran it out.
+//
+// Only what no process can write: a private mapping's pages are copy on
+// write, as after fork, so a process that makes one writable writes a copy
+// of its own; a shared one only from a file opened read-only, which Linux
+// does not let be made writable. The file is known by its device, inode, size
+// and modification time, so one written since is mapped anew. The table holds
+// no reference: the mapping goes when its last page does (data->release), and
+// a lookup takes one only while it has others (shared_map_get).
+struct shared_map {
+    dev_t dev;
+    ino_t ino;
+    off_t file_size;
+    struct timespec mtime;
+    off_t offset;
+    size_t size;
+    int flags; // the host's MAP_SHARED or MAP_PRIVATE
+    struct data *data;
+    struct shared_map *next;
+};
+static lock_t shared_maps_lock = LOCK_INITIALIZER;
+static struct shared_map *shared_maps;
+static _Atomic uint64_t shared_maps_reused, shared_maps_reused_bytes;
+
+static bool shared_map_is(const struct shared_map *map, const struct stat *st, off_t offset, size_t size, int flags) {
+    return map->dev == st->st_dev && map->ino == st->st_ino && map->file_size == st->st_size &&
+        map->mtime.tv_sec == STAT_MTIME(*st).tv_sec && map->mtime.tv_nsec == STAT_MTIME(*st).tv_nsec &&
+        map->offset == offset && map->size == size && map->flags == flags;
+}
+
+// The mapping of these bytes some process has, with a reference taken, or NULL
+static struct data *shared_map_get(const struct stat *st, off_t offset, size_t size, int flags) {
+    struct data *data = NULL;
+    lock(&shared_maps_lock);
+    for (struct shared_map *map = shared_maps; map != NULL; map = map->next) {
+        if (!shared_map_is(map, st, offset, size, flags))
+            continue;
+        // None left means it is going (data_unref is in shared_map_release, or
+        // on its way there): not to be taken back
+        unsigned refs = atomic_load(&map->data->refcount);
+        while (refs != 0 && !atomic_compare_exchange_weak(&map->data->refcount, &refs, refs + 1))
+            ;
+        if (refs != 0)
+            data = map->data;
+        break;
+    }
+    unlock(&shared_maps_lock);
+    return data;
+}
+
+// data->release: its last page is gone
+static void shared_map_release(struct data *data) {
+    lock(&shared_maps_lock);
+    for (struct shared_map **map = &shared_maps; *map != NULL; map = &(*map)->next) {
+        if ((*map)->data == data) {
+            struct shared_map *gone = *map;
+            *map = gone->next;
+            free(gone);
+            break;
+        }
+    }
+    unlock(&shared_maps_lock);
+    munmap(data->data, data->size);
+    if (data->fd != NULL)
+        fd_close(data->fd);
+    free(data);
+}
+
+void realfs_shared_maps_stats(uint64_t *maps, uint64_t *bytes, uint64_t *reused, uint64_t *reused_bytes) {
+    *maps = *bytes = 0;
+    lock(&shared_maps_lock);
+    for (struct shared_map *map = shared_maps; map != NULL; map = map->next) {
+        (*maps)++;
+        *bytes += map->size;
+    }
+    unlock(&shared_maps_lock);
+    *reused = atomic_load(&shared_maps_reused);
+    *reused_bytes = atomic_load(&shared_maps_reused_bytes);
+}
+
+// The host's mapping of the file, memory, made a shared one and mapped. Its
+// file is set here, as pt_set_file would set it, before another process can
+// find it: two processes' pt_set_file, each under its own lock, would both
+// take a reference to a file of their own, and one be lost.
+static int shared_map_add(struct mem *mem, page_t start, pages_t pages, void *memory, size_t correction,
+                          unsigned flags, struct fd *fd, off_t file_offset, const struct stat *st, off_t offset,
+                          size_t size, int map_flags) {
+    struct data *data = calloc(1, sizeof(*data));
+    struct shared_map *map = calloc(1, sizeof(*map));
+    if (data == NULL || map == NULL) {
+        free(data);
+        free(map);
+        munmap(memory, size);
+        return _ENOMEM;
+    }
+    *data = (struct data) {
+        .data = memory,
+        .size = size,
+        .fd = fd_retain(fd),
+        .file_offset = file_offset,
+        .release = shared_map_release,
+    };
+    *map = (struct shared_map) {
+        .dev = st->st_dev,
+        .ino = st->st_ino,
+        .file_size = st->st_size,
+        .mtime = STAT_MTIME(*st),
+        .offset = offset,
+        .size = size,
+        .flags = map_flags,
+        .data = data,
+    };
+    pt_map_data(mem, start, pages, data, correction, flags);
+    lock(&shared_maps_lock);
+    map->next = shared_maps;
+    shared_maps = map;
+    unlock(&shared_maps_lock);
+    return 0;
+}
+
 int realfs_mmap(struct fd *fd, struct mem *mem, page_t start, pages_t pages, off_t offset, int prot, int flags) {
     int mmap_flags = 0;
     if (flags & MMAP_PRIVATE) mmap_flags |= MAP_PRIVATE;
@@ -487,6 +618,22 @@ int realfs_mmap(struct fd *fd, struct mem *mem, page_t start, pages_t pages, off
         return pt_map(mem, start, pages, memory, correction, prot);
     }
 
+    // What no process can write is shared (struct shared_map): a private
+    // mapping's pages copy on write, so one made writable is copied first
+    bool shareable = have_stat && !(prot & P_WRITE) &&
+        ((mmap_flags & MAP_PRIVATE) || (fd->flags & O_ACCMODE_) == O_RDONLY_);
+    unsigned shared_flags = prot | ((mmap_flags & MAP_PRIVATE) ? P_COW : 0);
+    if (shareable) {
+        struct data *data = shared_map_get(&st, real_offset, map_size, mmap_flags);
+        if (data != NULL) {
+            pt_map_data(mem, start, pages, data, correction, shared_flags);
+            data_unref(data); // shared_map_get's: the pages hold theirs
+            atomic_fetch_add(&shared_maps_reused, 1);
+            atomic_fetch_add(&shared_maps_reused_bytes, map_size);
+            return 0;
+        }
+    }
+
     char *memory = mmap(NULL, map_size,
             mmap_prot, mmap_flags, fd->real_fd, real_offset);
     if (memory == MAP_FAILED) {
@@ -494,6 +641,9 @@ int realfs_mmap(struct fd *fd, struct mem *mem, page_t start, pages_t pages, off
         return pt_map_chunked(mem, start, pages, correction, prot, map_file_chunk, &chunks);
     }
 
+    if (shareable)
+        return shared_map_add(mem, start, pages, memory, correction, shared_flags, fd, offset, &st, real_offset,
+                              map_size, mmap_flags);
     return pt_map(mem, start, pages, memory, correction, prot);
 }
 

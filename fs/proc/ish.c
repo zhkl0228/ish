@@ -3,6 +3,7 @@
 #include "kernel/errno.h"
 #include "fs/poll.h"
 #include "platform/platform.h"
+#include "fs/real.h"
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -191,6 +192,12 @@ static int proc_ish_show_host(struct proc_entry *UNUSED(entry), struct proc_data
                     (unsigned long long) r.mapped[i].start,
                     (unsigned long long) (r.mapped[i].start + r.mapped[i].size), r.mapped[i].size / 1048576.0,
                     r.mapped[i].prot, r.mapped[i].tag, r.mapped[i].share_mode, r.mapped[i].submap ? " submap" : "");
+    // What sharing read-only file mappings saves (fs/real.c)
+    uint64_t shared, shared_bytes, reused, reused_bytes;
+    realfs_shared_maps_stats(&shared, &shared_bytes, &reused, &reused_bytes);
+    proc_printf(buf, "shared file mappings: %llu, %.1f MB; mapped again from them %llu times, %.1f MB\n",
+                (unsigned long long) shared, shared_bytes / 1048576.0, (unsigned long long) reused,
+                reused_bytes / 1048576.0);
     return 0;
 }
 

@@ -41,6 +41,9 @@ off_t realfs_lseek(struct fd *fd, off_t offset, int whence);
 
 int realfs_poll(struct fd *fd);
 int realfs_mmap(struct fd *fd, struct mem *mem, page_t start, pages_t pages, off_t offset, int prot, int flags);
+// The read-only file mappings processes share: how many and their bytes, and
+// how many times and how many bytes one was mapped again from the table
+void realfs_shared_maps_stats(uint64_t *maps, uint64_t *bytes, uint64_t *reused, uint64_t *reused_bytes);
 int realfs_fsync(struct fd *fd);
 int realfs_getflags(struct fd *fd);
 int realfs_setflags(struct fd *fd, dword_t arg);
