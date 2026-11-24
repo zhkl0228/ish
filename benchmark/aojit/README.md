@@ -50,6 +50,14 @@ no faster (its time is its processes' start and the file system), so git has non
 not in Claude Code's workload: recorded with it, claude.exe's image was 41 MB larger and the session
 no faster (10.8 s either way).
 
+Claude Code runs with JavaScriptCore's JIT off (`BUN_JSC_useJIT=0`, which the app's
+`/usr/libexec/claude-wrapper` sets unless it is set already, and its workloads too), as node runs in
+V8's interpreter: what the JIT writes at run time no image can serve and runs through the gadgets,
+while its interpreter is claude.exe's own code. Measured in the app (2026-11-24, iPhone, its
+images, two runs each): print mode 6.6 -> 6.1 s of CPU, a `[session]` 5.0 -> 4.5 s, in the same wall
+time or less; [anon] blocks 78-88K a run -> 200-1500; claude.exe's image serves 99% of its blocks
+with the JIT and 98% without.
+
 ### Published sets: what a clone of the repository builds with
 
 The app links a published set of them, with nothing to do but build: `app-images.lock.json` names

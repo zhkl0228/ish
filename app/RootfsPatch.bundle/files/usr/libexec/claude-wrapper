@@ -77,4 +77,12 @@ export NPM_CONFIG_PREFIX=/opt/claude-code
 # installs; an update would run on without most of it. A new version comes
 # with an app whose images were recorded on it (benchmark/aojit/README.md).
 export DISABLE_AUTOUPDATER=1
+# JavaScriptCore's JIT off, unless BUN_JSC_useJIT is set already: no AOT image
+# can serve the code it writes at run time, which runs through iSH's gadgets,
+# and its compiler threads take CPU of their own, while its interpreter (LLInt)
+# is claude.exe's own code, which the image serves (98% of its blocks, as with
+# the JIT). Measured in the app (2026-11-24, its images): print mode 6.6 s of
+# CPU -> 6.1 s, a session with tools 5.0 -> 4.5 s, in the same wall time or
+# less. As kernel/exec.c runs node: in V8's interpreter.
+export BUN_JSC_useJIT="${BUN_JSC_useJIT:-0}"
 exec "$claude" "$@"
