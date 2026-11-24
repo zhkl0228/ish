@@ -2,7 +2,8 @@
 // app's malloc (0d586712):
 //
 //   anonymous host mmaps since the app started: N, for X MB; of them lazy
-//       commits C (H host pages, G guest pages), Y MB; copies on write K, V MB
+//       commits C (H host pages, G guest pages), Y MB; copies on write K, a host
+//       page each: V MB of address space
 //   MADV_DONTNEED zeroed in place since the app started: P pages, Z MB
 //   translated blocks now: B, W MB
 //
@@ -26,6 +27,13 @@
 // no PROT_NONE mapping and no page copied on write.
 // Natively there is no /proc/ish/host and nothing is checked.
 //
+// The counts are the app's, every process's: exact only with no other process
+// in it, as when this is its first, pid 1 (tests/regress/run.sh, iSH's CLI).
+// With others (a device with Claude Code running, whose JSC heap commits and
+// gives back pages and makes blocks all the time) what can be is checked as
+// at least, and what cannot (nothing committed, nothing zeroed, the blocks
+// gone again) is said SKIP.
+//
 // Build: aarch64-linux-musl-gcc -static -O0 -o regress_host_stats regress_host_stats.c
 
 #include <stdint.h>
@@ -40,7 +48,8 @@
 #define TOUCHES 4096
 #define FUNCS 20000
 
-static int passed, failed;
+static int passed, failed, skipped;
+static int alone; // the only process: the counts are this one's
 
 static void check(const char *name, int ok, const char *detail) {
     if (ok) {
@@ -50,6 +59,17 @@ static void check(const char *name, int ok, const char *detail) {
         failed++;
         printf("FAIL %s: %s\n", name, detail);
     }
+    fflush(stdout);
+}
+
+// A check that holds only when the counts are this process's alone
+static void check_alone(const char *name, int ok, const char *detail) {
+    if (alone) {
+        check(name, ok, detail);
+        return;
+    }
+    skipped++;
+    printf("SKIP %s: other processes run, and the counts are the app's\n", name);
     fflush(stdout);
 }
 
@@ -71,7 +91,8 @@ static struct stats read_stats(void) {
     int lines = 0;
     for (char *line = strtok(text, "\n"); line != NULL; line = strtok(NULL, "\n")) {
         lines += sscanf(line, "anonymous host mmaps since the app started: %llu, for %lf MB; of them lazy commits "
-                        "%llu (%llu host pages, %llu guest pages), %lf MB; copies on write %llu, %lf MB",
+                        "%llu (%llu host pages, %llu guest pages), %lf MB; copies on write %llu, a host page each: "
+                        "%lf MB of address space",
                         &s.anon_mmaps, &s.anon_mb, &s.lazy, &s.host_pages, &s.guest_pages, &s.committed_mb, &s.cow,
                         &s.cow_mb) == 8;
         lines += sscanf(line, "MADV_DONTNEED zeroed in place since the app started: %llu pages, %lf MB", &s.zeroed,
@@ -94,7 +115,7 @@ static void lazy_commits_and_dontneed(void) {
     }
     struct stats s1 = read_stats();
     snprintf(detail, sizeof(detail), "%llu", s1.lazy - s0.lazy);
-    check("a lazy reservation commits nothing when made", s1.lazy == s0.lazy, detail);
+    check_alone("a lazy reservation commits nothing when made", s1.lazy == s0.lazy, detail);
 
     for (int i = 0; i < TOUCHES; i++)
         p[(size_t) i * 16384] = 1;
@@ -102,9 +123,10 @@ static void lazy_commits_and_dontneed(void) {
     unsigned long long lazy = s2.lazy - s1.lazy;
     unsigned long long host = s2.host_pages - s1.host_pages, guest = s2.guest_pages - s1.guest_pages;
     snprintf(detail, sizeof(detail), "%llu, expected %d", lazy, TOUCHES);
-    check("a lazy commit for each page touched", lazy == TOUCHES, detail);
+    check("a lazy commit for each page touched", alone ? lazy == TOUCHES : lazy >= TOUCHES, detail);
     snprintf(detail, sizeof(detail), "%llu host and %llu guest pages, %llu commits", host, guest, lazy);
-    check("each a host page or a guest page, all alike", host + guest == lazy && (host == 0 || guest == 0), detail);
+    check("each a host page or a guest page, all alike",
+          alone ? host + guest == lazy && (host == 0 || guest == 0) : host >= TOUCHES || guest >= TOUCHES, detail);
     snprintf(detail, sizeof(detail), "%llu mmaps, %llu commits", s2.anon_mmaps - s1.anon_mmaps, lazy);
     check("each an anonymous host mmap", s2.anon_mmaps - s1.anon_mmaps >= lazy, detail);
     double committed = s2.committed_mb - s1.committed_mb;
@@ -120,7 +142,7 @@ static void lazy_commits_and_dontneed(void) {
     snprintf(detail, sizeof(detail), "%llu pages (%.1f MB, said %.1f MB), %.1f MB committed", zeroed, zeroed_mb,
              s3.zeroed_mb - s2.zeroed_mb, committed);
     check("MADV_DONTNEED zeroes in place what was committed",
-          zeroed_mb > committed - 0.15 && zeroed_mb < committed + 0.15 &&
+          zeroed_mb > committed - 0.15 && (!alone || zeroed_mb < committed + 0.15) &&
           s3.zeroed_mb - s2.zeroed_mb > zeroed_mb - 0.15 && s3.zeroed_mb - s2.zeroed_mb < zeroed_mb + 0.15, detail);
     int nonzero = 0;
     for (int i = 0; i < TOUCHES; i++)
@@ -134,8 +156,10 @@ static void lazy_commits_and_dontneed(void) {
     struct stats s4 = read_stats();
     madvise(shared, MB, MADV_DONTNEED);
     struct stats s5 = read_stats();
-    snprintf(detail, sizeof(detail), "%llu pages zeroed, a byte %d", s5.zeroed - s4.zeroed, shared[4096]);
-    check("MADV_DONTNEED of a shared mapping zeroes nothing", s5.zeroed == s4.zeroed && shared[4096] == 1, detail);
+    snprintf(detail, sizeof(detail), "a byte %d", shared[4096]);
+    check("MADV_DONTNEED of a shared mapping keeps its contents", shared[4096] == 1, detail);
+    snprintf(detail, sizeof(detail), "%llu pages zeroed", s5.zeroed - s4.zeroed);
+    check_alone("MADV_DONTNEED of a shared mapping zeroes nothing", s5.zeroed == s4.zeroed, detail);
     munmap(shared, MB);
 }
 
@@ -177,7 +201,8 @@ static void prot_none_and_copies_on_write(void) {
     snprintf(detail, sizeof(detail), "%llu copies (%.1f MB), %llu anonymous host mmaps", cow, s3.cow_mb - s2.cow_mb,
              s3.anon_mmaps - s2.anon_mmaps);
     check("each page a child writes a copy on write, an anonymous host mmap",
-          cow >= 256 && cow < 256 + 200 && s3.cow_mb - s2.cow_mb > 0.95 && s3.anon_mmaps - s2.anon_mmaps >= cow,
+          cow >= 256 && (!alone || cow < 256 + 200) && s3.cow_mb - s2.cow_mb > 0.95 &&
+          s3.anon_mmaps - s2.anon_mmaps >= cow,
           detail);
     munmap(pages, 256 * 4096);
 }
@@ -212,7 +237,7 @@ static void translated_blocks(void) {
     struct stats s1 = read_stats();
     unsigned long long blocks = s1.blocks - s0.blocks;
     snprintf(detail, sizeof(detail), "%llu more", blocks);
-    check("a block for each function", blocks >= FUNCS && blocks < FUNCS + 1000, detail);
+    check("a block for each function", blocks >= FUNCS && (!alone || blocks < FUNCS + 1000), detail);
     // the MB are said to one decimal
     double per_block = (s1.blocks_mb - s0.blocks_mb + 0.1) * MB / blocks;
     snprintf(detail, sizeof(detail), "%.1f MB for %llu blocks, %.0f bytes a block", s1.blocks_mb - s0.blocks_mb,
@@ -223,7 +248,8 @@ static void translated_blocks(void) {
     struct stats s2 = read_stats();
     snprintf(detail, sizeof(detail), "%llu blocks, %.1f MB; %llu, %.1f MB before the functions", s2.blocks,
              s2.blocks_mb, s0.blocks, s0.blocks_mb);
-    check("unmapped, their blocks go", s2.blocks < s0.blocks + 200 && s2.blocks_mb < s0.blocks_mb + 0.15, detail);
+    check_alone("unmapped, their blocks go", s2.blocks < s0.blocks + 200 && s2.blocks_mb < s0.blocks_mb + 0.15,
+                detail);
 
     fflush(stdout);
     pid_t pid = fork();
@@ -236,9 +262,9 @@ static void translated_blocks(void) {
     struct stats s3 = read_stats();
     snprintf(detail, sizeof(detail), "child status %#x; %llu blocks, %.1f MB after it, %llu, %.1f MB before",
              status, s3.blocks, s3.blocks_mb, s2.blocks, s2.blocks_mb);
-    check("a child's blocks, counted while it runs, go when it exits",
-          WIFEXITED(status) && WEXITSTATUS(status) == 0 && s3.blocks < s2.blocks + 200 &&
-          s3.blocks_mb < s2.blocks_mb + 0.15, detail);
+    check("a child's blocks are counted while it runs", WIFEXITED(status) && WEXITSTATUS(status) == 0, detail);
+    check_alone("a child's blocks go when it exits", s3.blocks < s2.blocks + 200 && s3.blocks_mb < s2.blocks_mb + 0.15,
+                detail);
 
     fflush(stdout);
     pid = fork();
@@ -251,8 +277,9 @@ static void translated_blocks(void) {
     struct stats s4 = read_stats();
     snprintf(detail, sizeof(detail), "child status %#x; %llu blocks, %.1f MB after it, %llu, %.1f MB before",
              status, s4.blocks, s4.blocks_mb, s3.blocks, s3.blocks_mb);
-    check("a child's blocks go when it execs", WIFEXITED(status) && WEXITSTATUS(status) == 0 &&
-          s4.blocks < s3.blocks + 200 && s4.blocks_mb < s3.blocks_mb + 0.15, detail);
+    check("a child that ran them execs", WIFEXITED(status) && WEXITSTATUS(status) == 0, detail);
+    check_alone("a child's blocks go when it execs", s4.blocks < s3.blocks + 200 && s4.blocks_mb < s3.blocks_mb + 0.15,
+                detail);
 }
 
 int main(void) {
@@ -260,9 +287,14 @@ int main(void) {
         printf("no /proc/ish/host (not iSH): nothing to check\n0 passed, 0 failed\n");
         return 0;
     }
+    alone = getpid() == 1;
+    if (!alone)
+        printf("pid %d, not the only process: exact counts not checked\n", getpid());
     lazy_commits_and_dontneed();
     prot_none_and_copies_on_write();
     translated_blocks();
+    if (skipped != 0)
+        printf("%d skipped: other processes run\n", skipped);
     printf("%d passed, %d failed\n", passed, failed);
     return failed != 0;
 }

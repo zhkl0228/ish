@@ -652,8 +652,15 @@ int pt_map(struct mem *mem, page_t start, pages_t pages, void *memory, size_t of
     assert((uintptr_t) memory % real_page_size == 0 || memory == vdso_data);
 
     struct data *data = data_new(memory, pages * PAGE_SIZE + offset, start);
-    if (data == NULL)
+    if (data == NULL) {
+        // The memory is given to the mapping, by every caller: with nothing
+        // to hold it, it goes, or it stays a host mapping no page reaches
+        // (anonymous memory, a page copied on write, a file's mapping). The
+        // vdso is in iSH's own data, not a host mapping.
+        if (memory != vdso_data)
+            munmap(memory, pages * PAGE_SIZE + offset);
         return _ENOMEM;
+    }
     pt_map_data(mem, start, pages, data, offset, flags);
     return 0;
 }
@@ -731,8 +738,10 @@ int pt_unmap_always(struct mem *mem, page_t start, pages_t pages) {
 // for /proc/ish/host, and the guest pages it holds. Each is a host mapping,
 // and the app's host mappings and address space are what run out: a PROT_NONE
 // one, which costs no memory, is counted too, a mapping made in 16MB chunks
-// once for each, and a page copied on write, which has a host mapping of its
-// own. Of them the lazy commits are pt_map_cluster's.
+// once for each (pt_map_chunked), a page copied on write, which has a host
+// mapping of its own, and what backs a file's mapping past its end (realfs's
+// map_past_end, the pages the file is not mapped over). Of them the lazy
+// commits are pt_map_cluster's.
 _Atomic uint64_t st_anon_mmaps;
 _Atomic uint64_t st_anon_pages_mapped;
 _Atomic uint64_t st_cow_copies;        // of them, pages copied on write
@@ -836,6 +845,10 @@ int pt_map_chunked(struct mem *mem, page_t start, pages_t pages, size_t offset, 
         page += count;
     }
     free(chunks);
+    // Anonymous memory's chunks are as many anonymous host mmaps; a file's
+    // are its caller's to count (realfs_mmap, what it backs with anonymous)
+    if (flags & P_ANONYMOUS)
+        anon_mmap_count(n, pages);
     return 0;
 }
 
@@ -879,7 +892,6 @@ int pt_map_nothing(struct mem *mem, page_t start, pages_t pages, unsigned flags)
         err = pt_map_chunked(mem, start, pages, 0, flags | P_ANONYMOUS, map_anonymous_chunk, &host_prot);
         if (err < 0)
             return err;
-        anon_mmap_count((map_size + MAP_CHUNK_BYTES - 1) / MAP_CHUNK_BYTES, pages);
     }
 #if ANON_MMAP_LIMIT_PAGES > 0
     // [T-ish-anon-count-negative] Charge HERE, not at the call sites.
@@ -1582,12 +1594,22 @@ have_entry:
 #if ANON_MMAP_LIMIT_PAGES > 0
                 // pt_map will unmap the old page (decrementing anon_page_count),
                 // so pre-increment for the new CoW copy to keep balance.
-                if (entry->flags & P_ANONYMOUS)
+                bool anonymous = entry->flags & P_ANONYMOUS;
+                if (anonymous)
                     atomic_fetch_add(&anon_page_count, 1);
 #endif
                 if (pt_map(mem, page, 1, copy, 0, entry->flags &~ P_COW) >= 0) {
                     anon_mmap_count(1, 1);
                     atomic_fetch_add_explicit(&st_cow_copies, 1, memory_order_relaxed);
+                } else {
+                    // Not mapped (pt_map let the copy go), and the old page
+                    // not unmapped: what was counted for it is not. The page
+                    // stays copy on write, so the store faults (mem_ptr_nofault
+                    // gives no pointer to write a P_COW page through).
+#if ANON_MMAP_LIMIT_PAGES > 0
+                    if (anonymous)
+                        atomic_fetch_sub(&anon_page_count, 1);
+#endif
                 }
                 mem_changed(mem);
             } else {
