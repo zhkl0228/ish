@@ -1,4 +1,4 @@
-#!/bin/bash -e
+#!/bin/sh -e
 compile_commands=$1
 input=$2
 output=$3
