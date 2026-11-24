@@ -20,6 +20,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/resource.h>
 #include <unistd.h>
@@ -37,6 +38,16 @@ static void check(const char *name, int ok, const char *detail) {
     fflush(stdout);
 }
 
+// A file's fd. Not /dev/null's: a realfs root has no device files, and the
+// CI's, an Alpine minirootfs fresh each run, no /dev/null at all, where open
+// said -1 and every check of that fd EBADF
+static int a_file(void) {
+    char path[] = "/tmp/regress_dup_bad_fd.XXXXXX";
+    int fd = mkstemp(path);
+    unlink(path);
+    return fd;
+}
+
 static void expect(const char *name, int r, int want) {
     int e = errno;
     char detail[100];
@@ -48,7 +59,7 @@ int main(void) {
     char detail[120];
     struct rlimit nofile;
     getrlimit(RLIMIT_NOFILE, &nofile);
-    int fd = open("/dev/null", O_RDONLY);
+    int fd = a_file();
 
     expect("dup2 to -1", dup2(fd, -1), EBADF);
     expect("dup2 to INT_MIN", dup2(fd, INT_MIN), EBADF);
@@ -60,7 +71,8 @@ int main(void) {
     snprintf(detail, sizeof(detail), "%d, the fd %d", r, fd);
     check("dup2 to itself is the fd", r == fd, detail);
 
-    int target = open("/dev/null", O_RDONLY | O_CLOEXEC);
+    int target = a_file();
+    fcntl(target, F_SETFD, FD_CLOEXEC);
     r = dup2(fd, target);
     int flags = fcntl(target, F_GETFD);
     snprintf(detail, sizeof(detail), "%d, then FD_CLOEXEC %d", r, flags & FD_CLOEXEC);

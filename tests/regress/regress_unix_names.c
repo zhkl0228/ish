@@ -23,6 +23,7 @@
 #include <fcntl.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -39,6 +40,16 @@ static void check(const char *name, int ok, const char *detail) {
         printf("FAIL %s: %s\n", name, detail);
     }
     fflush(stdout);
+}
+
+// A file's fd. Not /dev/null's: a realfs root has no device files, and the
+// CI's, an Alpine minirootfs fresh each run, no /dev/null at all, where open
+// said -1 and every check of that fd EBADF
+static int a_file(void) {
+    char path[] = "/tmp/regress_unix_names.XXXXXX";
+    int fd = mkstemp(path);
+    unlink(path);
+    return fd;
 }
 
 static int is_autobound(const struct sockaddr_un *a, socklen_t len) {
@@ -123,7 +134,7 @@ int main(void) {
     close(client);
     close(listener);
 
-    int file = open("/dev/null", O_RDONLY);
+    int file = a_file();
     int type;
     socklen_t tlen = sizeof(type);
     r = getsockopt(file, SOL_SOCKET, SO_TYPE, &type, &tlen);
