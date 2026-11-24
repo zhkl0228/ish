@@ -64,6 +64,7 @@ static bool delete_timers_if_last(struct task *task) {
         if (group->cpu_itimer_running) {
             group->cpu_itimer_stop = true;
             group->cpu_itimer_running = false;
+            notify(&group->cpu_itimer_armed);
             cpu_itimer_thread = group->cpu_itimer_thread;
             join_cpu_itimer = true;
         }
@@ -701,6 +702,7 @@ static bool reap_if_zombie(struct task *task, struct siginfo_ *info_out, struct 
         sigqueue_free(sigqueue);
     }
     cond_destroy(&task->group->child_exit);
+    cond_destroy(&task->group->cpu_itimer_armed);
     task_leave_session(task);
     list_remove(&task->group->pgroup);
     free(task->group);

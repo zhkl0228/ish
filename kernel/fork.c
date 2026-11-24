@@ -209,6 +209,7 @@ static struct tgroup *tgroup_copy(struct tgroup *old_group) {
     }
     cond_init(&group->child_exit);
     cond_init(&group->stopped_cond);
+    cond_init(&group->cpu_itimer_armed);
     lock_init(&group->lock);
     return group;
 }

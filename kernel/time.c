@@ -232,7 +232,9 @@ static int itimer_set(struct tgroup *group, int which, struct timer_spec spec, s
 // were EINVAL: profilers set them (Go's pprof, where timer_create of a CPU
 // clock is not, gperftools, Python's statistical ones), and CPython's
 // test_signal ItimerTest. A thread samples the time (rusage_of_group) every
-// 10ms while one is armed, as Linux checks them at its tick, and sends
+// 10ms while one is armed, as Linux checks them at its tick (and while none
+// is, waits to be notified, not woken and not taking pids_lock: a process
+// that profiled a while would have it so for good), and sends
 // SIGVTALRM or SIGPROF to the process, SI_KERNEL as Linux's; a periodic one
 // is due again an interval after it was due, as Linux's check_cpu_itimer, so
 // one behind fires at the next samples until it is not. Locks as everything
@@ -273,20 +275,25 @@ static void *cpu_itimer_thread(void *arg) {
     struct tgroup *group = arg;
     static const int signals[2] = {SIGVTALRM_, SIGPROF_};
     for (;;) {
+        lock(&group->lock);
+        while (!group->cpu_itimer_stop &&
+                group->cpu_itimer_expires[0] == 0 && group->cpu_itimer_expires[1] == 0)
+            wait_for_ignore_signals(&group->cpu_itimer_armed, &group->lock, NULL);
+        bool stop = group->cpu_itimer_stop;
+        unlock(&group->lock);
+        if (stop)
+            return NULL;
         struct timespec period = {.tv_sec = 0, .tv_nsec = CPU_ITIMER_SAMPLE_NS};
         nanosleep(&period, NULL);
+        // Stopped, or disarmed, while it slept: one disarmed does not fire
+        // (its expires is 0), and the next turn waits
         lock(&pids_lock);
         lock(&group->lock);
-        bool stop = group->cpu_itimer_stop;
-        bool armed = group->cpu_itimer_expires[0] != 0 || group->cpu_itimer_expires[1] != 0;
+        stop = group->cpu_itimer_stop;
         unlock(&group->lock);
         if (stop) {
             unlock(&pids_lock);
             return NULL;
-        }
-        if (!armed) {
-            unlock(&pids_lock);
-            continue;
         }
         struct rusage_ rusage = rusage_of_group(group);
         bool fire[2] = {false, false};
@@ -320,7 +327,9 @@ static int cpu_itimer_set(struct tgroup *group, int which, struct timer_spec spe
     group->cpu_itimer_expires[i] = value == 0 ? 0 : now + value;
     group->cpu_itimer_interval[i] = usec_of_timespec(spec.interval);
     int err = 0;
-    if (value != 0 && !group->cpu_itimer_running) {
+    if (value != 0 && group->cpu_itimer_running) {
+        notify(&group->cpu_itimer_armed);
+    } else if (value != 0) {
         group->cpu_itimer_stop = false;
         if (pthread_create(&group->cpu_itimer_thread, NULL, cpu_itimer_thread, group) == 0) {
             group->cpu_itimer_running = true;
