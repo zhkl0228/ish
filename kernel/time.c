@@ -62,6 +62,13 @@ dword_t sys_stime(addr_t UNUSED(time)) {
     return _EPERM;
 }
 
+static struct timespec cpu_time(struct rusage_ rusage, bool user_only) {
+    uint64_t usec = (uint64_t) rusage.utime.sec * 1000000 + rusage.utime.usec;
+    if (!user_only)
+        usec += (uint64_t) rusage.stime.sec * 1000000 + rusage.stime.usec;
+    return (struct timespec) {.tv_sec = usec / 1000000, .tv_nsec = usec % 1000000 * 1000};
+}
+
 // A CPU-time clock, user and system time together as Linux's: the process's
 // (all its threads, those that exited too; it was the calling thread's user
 // time) or the calling thread's (CLOCK_THREAD_CPUTIME_ID was EINVAL: Python's
@@ -75,38 +82,64 @@ static struct timespec cpu_clock(uint_t clock) {
     } else {
         rusage = rusage_get_current();
     }
-    uint64_t usec = ((uint64_t) rusage.utime.sec + rusage.stime.sec) * 1000000 + rusage.utime.usec + rusage.stime.usec;
-    return (struct timespec) {.tv_sec = usec / 1000000, .tv_nsec = usec % 1000000 * 1000};
+    return cpu_time(rusage, false);
 }
 
-// A thread's CPU-time clock, as Linux encodes one: ~tid << 3, and 4 for a
-// thread's (CPUCLOCK_PERTHREAD), 2 for its scheduler time, user and system
-// together (CPUCLOCK_SCHED). pthread_getcpuclockid gives it: HotSpot times
-// its threads so (and takes clock_getres's word that it can), and iSH's own
-// Linux CLI its other threads (rusage_of_task). It was EINVAL. A thread of
-// the caller's process, as on Linux; another encoding, a process's clock or
-// a thread's user or profiling time, is said once and EINVAL, to add it from.
-#define CPUCLOCK_PERTHREAD_ 4
+// A CPU-time clock as Linux encodes one: ~pid << 3, 4 if it is a thread's
+// (CPUCLOCK_PERTHREAD), and in the low 2 bits what it counts: user and
+// system time (CPUCLOCK_PROF, 0), user time (CPUCLOCK_VIRT, 1), scheduler
+// time (CPUCLOCK_SCHED, 2), here user and system time as there is nothing
+// else (and on a Linux host another thread's user time is all of its time:
+// rusage_of_task). pid 0 is the caller, or its process. All were EINVAL:
+// pthread_getcpuclockid gives a thread's, HotSpot times its threads so (and
+// takes clock_getres's word that it can) and iSH's own Linux CLI its other
+// threads (rusage_of_task); clock_getcpuclockid a process's, after
+// clock_getres takes it, and said ESRCH of every process, its caller too.
+//
+// Which clocks there are is Linux's pid_for_clock's: a thread's of a thread
+// of the caller's process, that has not exited; a process's of any process,
+// named by its pid, a zombie's too (until it is reaped, the leader's task and
+// its group stay), or for clock_gettime by the caller's own tid. A thread's
+// pid is no process: a leaked thread's (do_exit_group's safety valve) group
+// may be freed, so its tgid says so before its group is looked at.
+#define CPUCLOCK_PERTHREAD_MASK_ 4
+#define CPUCLOCK_WHICH_MASK_ 3
+#define CPUCLOCK_VIRT_ 1
 #define CPUCLOCK_SCHED_ 2
-static int thread_cpu_clock(int_t clock, struct timespec *ts) {
-    if ((clock & 7) != (CPUCLOCK_PERTHREAD_ | CPUCLOCK_SCHED_)) {
-        static _Atomic bool said;
-        if (!atomic_exchange(&said, true))
-            printk("%s[%d]: CPU-time clock %#x (%s, kind %d) unknown, EINVAL\n", current->comm, current->pid,
-                   (unsigned) clock, clock & CPUCLOCK_PERTHREAD_ ? "a thread's" : "a process's", clock & 3);
+#define CPUCLOCK_MAX_ 3
+static int cpu_clock_of(int_t clock, bool gettime, struct timespec *ts) {
+    int which = clock & CPUCLOCK_WHICH_MASK_;
+    if (which >= CPUCLOCK_MAX_)
         return _EINVAL;
-    }
-    pid_t_ tid = ~(clock >> 3);
+    pid_t_ pid = ~(clock >> 3);
+    struct rusage_ rusage;
     lock(&pids_lock);
-    struct task *thread = tid == 0 ? current : pid_get_task(tid);
-    if (thread == NULL || thread->group != current->group || thread->exiting) {
-        unlock(&pids_lock);
-        return _EINVAL;
+    if (clock & CPUCLOCK_PERTHREAD_MASK_) {
+        struct task *thread = pid == 0 ? current : pid_get_task(pid);
+        if (thread == NULL || thread->exiting || thread->group != current->group) {
+            unlock(&pids_lock);
+            return _EINVAL;
+        }
+        rusage = rusage_of_thread(thread);
+    } else {
+        struct tgroup *group = NULL;
+        if (pid == 0) {
+            group = current->group;
+        } else {
+            struct task *task = pid_get_task_zombie(pid);
+            if (task != NULL && task->tgid == task->pid)
+                group = task->group;
+            else if (gettime && task == current)
+                group = current->group;
+        }
+        if (group == NULL) {
+            unlock(&pids_lock);
+            return _EINVAL;
+        }
+        rusage = rusage_of_group(group);
     }
-    struct rusage_ rusage = rusage_of_thread(thread);
     unlock(&pids_lock);
-    uint64_t usec = ((uint64_t) rusage.utime.sec + rusage.stime.sec) * 1000000 + rusage.utime.usec + rusage.stime.usec;
-    *ts = (struct timespec) {.tv_sec = usec / 1000000, .tv_nsec = usec % 1000000 * 1000};
+    *ts = cpu_time(rusage, which == CPUCLOCK_VIRT_);
     return 0;
 }
 
@@ -117,7 +150,7 @@ dword_t sys_clock_gettime(dword_t clock, addr_t tp) {
     if (clock == CLOCK_PROCESS_CPUTIME_ID_ || clock == CLOCK_THREAD_CPUTIME_ID_) {
         ts = cpu_clock(clock);
     } else if ((int_t) clock < 0) {
-        int err = thread_cpu_clock((int_t) clock, &ts);
+        int err = cpu_clock_of((int_t) clock, true, &ts);
         if (err < 0)
             return err;
     } else {
@@ -142,11 +175,14 @@ dword_t sys_clock_getres(dword_t clock, addr_t res_addr) {
     if (clock == CLOCK_PROCESS_CPUTIME_ID_ || clock == CLOCK_THREAD_CPUTIME_ID_) {
         res = (struct timespec) {.tv_sec = 0, .tv_nsec = 1}; // as Linux says
     } else if ((int_t) clock < 0) {
-        // a thread's CPU-time clock, if it is one, as clock_gettime takes it
-        int err = thread_cpu_clock((int_t) clock, &res);
+        // a CPU-time clock, if it is one: 1ns for scheduler time, as Linux
+        // says; user and system time is counted in what Linux counts it in,
+        // its tick, and here in what rusage counts it in, microseconds
+        int err = cpu_clock_of((int_t) clock, false, &res);
         if (err < 0)
             return err;
-        res = (struct timespec) {.tv_sec = 0, .tv_nsec = 1};
+        bool sched = ((int_t) clock & CPUCLOCK_WHICH_MASK_) == CPUCLOCK_SCHED_;
+        res = (struct timespec) {.tv_sec = 0, .tv_nsec = sched ? 1 : 1000};
     } else {
         clockid_t clock_id;
         if (clockid_to_real(clock, &clock_id)) return _EINVAL;

@@ -254,7 +254,7 @@ struct rusage_ rusage_of_group(struct tgroup *group) {
     list_for_each_entry(&group->threads, thread, group_links) {
         if (thread->exiting)
             continue;
-        struct rusage_ thread_rusage = thread == current ? rusage_get_current() : rusage_of_task(thread);
+        struct rusage_ thread_rusage = rusage_of_thread(thread);
         rusage_add(&rusage, &thread_rusage);
     }
     return rusage;
