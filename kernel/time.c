@@ -79,12 +79,47 @@ static struct timespec cpu_clock(uint_t clock) {
     return (struct timespec) {.tv_sec = usec / 1000000, .tv_nsec = usec % 1000000 * 1000};
 }
 
+// A thread's CPU-time clock, as Linux encodes one: ~tid << 3, and 4 for a
+// thread's (CPUCLOCK_PERTHREAD), 2 for its scheduler time, user and system
+// together (CPUCLOCK_SCHED). pthread_getcpuclockid gives it: HotSpot times
+// its threads so (and takes clock_getres's word that it can), and iSH's own
+// Linux CLI its other threads (rusage_of_task). It was EINVAL. A thread of
+// the caller's process, as on Linux; another encoding, a process's clock or
+// a thread's user or profiling time, is said once and EINVAL, to add it from.
+#define CPUCLOCK_PERTHREAD_ 4
+#define CPUCLOCK_SCHED_ 2
+static int thread_cpu_clock(int_t clock, struct timespec *ts) {
+    if ((clock & 7) != (CPUCLOCK_PERTHREAD_ | CPUCLOCK_SCHED_)) {
+        static _Atomic bool said;
+        if (!atomic_exchange(&said, true))
+            printk("%s[%d]: CPU-time clock %#x (%s, kind %d) unknown, EINVAL\n", current->comm, current->pid,
+                   (unsigned) clock, clock & CPUCLOCK_PERTHREAD_ ? "a thread's" : "a process's", clock & 3);
+        return _EINVAL;
+    }
+    pid_t_ tid = ~(clock >> 3);
+    lock(&pids_lock);
+    struct task *thread = tid == 0 ? current : pid_get_task(tid);
+    if (thread == NULL || thread->group != current->group || thread->exiting) {
+        unlock(&pids_lock);
+        return _EINVAL;
+    }
+    struct rusage_ rusage = rusage_of_thread(thread);
+    unlock(&pids_lock);
+    uint64_t usec = ((uint64_t) rusage.utime.sec + rusage.stime.sec) * 1000000 + rusage.utime.usec + rusage.stime.usec;
+    *ts = (struct timespec) {.tv_sec = usec / 1000000, .tv_nsec = usec % 1000000 * 1000};
+    return 0;
+}
+
 dword_t sys_clock_gettime(dword_t clock, addr_t tp) {
     STRACE("clock_gettime(%d, 0x%x)", clock, tp);
 
     struct timespec ts;
     if (clock == CLOCK_PROCESS_CPUTIME_ID_ || clock == CLOCK_THREAD_CPUTIME_ID_) {
         ts = cpu_clock(clock);
+    } else if ((int_t) clock < 0) {
+        int err = thread_cpu_clock((int_t) clock, &ts);
+        if (err < 0)
+            return err;
     } else {
         clockid_t clock_id;
         if (clockid_to_real(clock, &clock_id)) return _EINVAL;
@@ -106,6 +141,12 @@ dword_t sys_clock_getres(dword_t clock, addr_t res_addr) {
     struct timespec res;
     if (clock == CLOCK_PROCESS_CPUTIME_ID_ || clock == CLOCK_THREAD_CPUTIME_ID_) {
         res = (struct timespec) {.tv_sec = 0, .tv_nsec = 1}; // as Linux says
+    } else if ((int_t) clock < 0) {
+        // a thread's CPU-time clock, if it is one, as clock_gettime takes it
+        int err = thread_cpu_clock((int_t) clock, &res);
+        if (err < 0)
+            return err;
+        res = (struct timespec) {.tv_sec = 0, .tv_nsec = 1};
     } else {
         clockid_t clock_id;
         if (clockid_to_real(clock, &clock_id)) return _EINVAL;

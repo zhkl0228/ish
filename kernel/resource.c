@@ -240,6 +240,10 @@ static struct rusage_ rusage_of_task(struct task *task) {
     return rusage;
 }
 
+struct rusage_ rusage_of_thread(struct task *task) {
+    return task == current ? rusage_get_current() : rusage_of_task(task);
+}
+
 static void timeval_add(struct timeval_ *dst, struct timeval_ *src);
 
 struct rusage_ rusage_of_group(struct tgroup *group) {

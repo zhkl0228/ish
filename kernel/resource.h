@@ -71,6 +71,9 @@ void rusage_add(struct rusage_ *dst, struct rusage_ *src);
 // Caller holds pids_lock.
 struct tgroup;
 struct rusage_ rusage_of_group(struct tgroup *group);
+// One thread's CPU time, current's or another running one's of its process
+// (pids_lock held, so that it cannot finish exiting meanwhile)
+struct rusage_ rusage_of_thread(struct task *task);
 dword_t sys_getrusage(dword_t who, addr_t rusage_addr);
 
 int_t sys_sched_getaffinity(pid_t_ pid, dword_t cpusetsize, addr_t cpuset_addr);

@@ -881,6 +881,17 @@ EOF
         status=1
     fi
     echo
+    echo "########## a thread's CPU-time clock (pthread_getcpuclockid) ##########"
+    if "$CC_GUEST" -static -O0 -Wall -pthread -o "$GUEST_ROOT/tmp/regress_thread_cpu_clock" tests/regress/regress_thread_cpu_clock.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_thread_cpu_clock 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_thread_cpu_clock"
+    else
+        echo "failed to build regress_thread_cpu_clock" >&2
+        status=1
+    fi
+    echo
     echo "########## read-only file mappings shared between processes ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_shared_map" tests/regress/regress_shared_map.c; then
         out=$(timeout 120 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_shared_map 2>&1)
