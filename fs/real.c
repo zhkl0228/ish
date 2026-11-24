@@ -1048,6 +1048,14 @@ int realfs_mount(struct mount *mount) {
     char *source_realpath = realpath(mount->source, NULL);
     if (source_realpath == NULL)
         return errno_map();
+    // musl's realpath keeps a leading "//", whose meaning POSIX leaves to the
+    // system; Linux and Darwin take it for "/", and the path of an fd they
+    // give (getpath), which realfs_getpath strips this from, never has it. A
+    // root of "//dir" (a musl host's ish -f //dir) matched no fd's path, and
+    // every fd's path came out "/": futimens set the root's times, fexecve
+    // ran the root
+    if (source_realpath[0] == '/' && source_realpath[1] == '/')
+        memmove(source_realpath, source_realpath + 1, strlen(source_realpath));
     free((void *) mount->source);
     mount->source = source_realpath;
 
