@@ -32,6 +32,9 @@ struct task {
     uid_t_ groups[MAX_GROUPS];
     char comm[16] __strncpy_safe; // locked by general_lock
     bool did_exec; // for that one annoying setsid edge case
+    // The CPUs it may run on, a bit each, as sched_setaffinity set them; 0
+    // for all. Locked by pids_lock. A child has its parent's (task_create_).
+    uint64_t cpu_affinity;
     bool undumpable; // prctl(PR_SET_DUMPABLE, 0); inherited by fork, cleared by exec
 
     struct fdtable *files;

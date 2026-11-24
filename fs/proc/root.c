@@ -112,6 +112,12 @@ static int proc_show_meminfo(struct proc_entry *UNUSED(entry), struct proc_data 
     if (usage.free > MEMINFO_MAX_RAM)
         usage.free = MEMINFO_MAX_RAM;
 #endif
+    // no more active or inactive than there is (the host's, said of a total
+    // capped above)
+    if (usage.active > usage.total)
+        usage.active = usage.total;
+    if (usage.inactive > usage.total - usage.active)
+        usage.inactive = usage.total - usage.active;
     show_kb(buf, "MemTotal:       ", usage.total);
     show_kb(buf, "MemFree:        ", usage.free);
     show_kb(buf, "MemAvailable:   ", usage.free + usage.inactive);
@@ -120,6 +126,10 @@ static int proc_show_meminfo(struct proc_entry *UNUSED(entry), struct proc_data 
     show_kb(buf, "Shmem:          ", 0);
     show_kb(buf, "Buffers:        ", 0);
     show_kb(buf, "Cached:         ", 0);
+    // Every Linux has them, and programs read them: iSH's Linux CLI died
+    // without Active ("could not find proc line Active:", get_mem_usage)
+    show_kb(buf, "Active:         ", usage.active);
+    show_kb(buf, "Inactive:       ", usage.inactive);
     show_kb(buf, "SwapTotal:      ", 0);
     show_kb(buf, "SwapFree:       ", 0);
     show_kb(buf, "Dirty:          ", 0);

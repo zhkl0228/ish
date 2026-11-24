@@ -77,6 +77,7 @@ syscall_t syscall_table[] = {
     [102] = (syscall_t) sys_socketcall,
     [103] = (syscall_t) sys_syslog,
     [104] = (syscall_t) sys_setitimer,
+    [105] = (syscall_t) sys_getitimer,
     [114] = (syscall_t) sys_wait4,
     [116] = (syscall_t) sys_sysinfo,
     [117] = (syscall_t) sys_ipc,

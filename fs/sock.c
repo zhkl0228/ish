@@ -1,3 +1,6 @@
+// musl's netinet/tcp.h has struct tcp_info only with _GNU_SOURCE (glibc's by
+// default): a Linux host's TCP_INFO (sock_inet_list)
+#define _GNU_SOURCE
 #include "kernel/packet.h"
 #include "kernel/netcap.h"
 #include "kernel/inotify.h"
@@ -1640,6 +1643,25 @@ int_t sys_getsockopt(fd_t sock_fd, dword_t level, dword_t option, addr_t value_a
             *value_p = sock->socket.type;
         else if (option == SO_PROTOCOL_)
             *value_p = sock->socket.protocol;
+    } else if (level == SOL_SOCKET_ && option == SO_ACCEPTCONN_) {
+        // Whether it listens, as Linux says of any socket. It was ENOPROTOOPT:
+        // iSH's Linux CLI, run in iSH, asks it of the host for /proc/net/tcp,
+        // and a server handed its socket (inetd, socket activation) asks it.
+        // A unix socket's is iSH's own word for it (unix_listeners, as
+        // /proc/net/unix says): Darwin's SO_ACCEPTCONN said no of every one.
+        if (value_len != sizeof(dword_t))
+            return _EINVAL;
+        int listening = 0;
+        if (sock->socket.domain == AF_LOCAL_) {
+            lock(&peer_lock);
+            listening = !list_null(&sock->socket.unix_listening);
+            unlock(&peer_lock);
+        } else {
+            socklen_t len = sizeof(listening);
+            if (getsockopt(sock->real_fd, SOL_SOCKET, SO_ACCEPTCONN, &listening, &len) < 0)
+                return errno_map();
+        }
+        *(dword_t *) value = listening != 0;
     } else if (level == SOL_SOCKET_ && option == SO_PEERCRED_) {
         struct ucred_ *cred = (struct ucred_ *) value;
         if (value_len != sizeof(*cred))
@@ -2619,12 +2641,15 @@ int sock_unix_list(struct sock_unix_entry **entries) {
         if (err == 0) {
             struct sock_unix_entry *e = &list[i];
             e->type = sock->socket.type;
-            int listening = 0;
-            socklen_t len = sizeof(listening);
-            e->listening = getsockopt(sock->real_fd, SOL_SOCKET, SO_ACCEPTCONN, &listening, &len) == 0 &&
-                listening;
+            // iSH's own word for it, unix_listeners (sys_listen): the host's
+            // SO_ACCEPTCONN said none of them listened on Darwin, and on a
+            // Linux host that is itself an iSH of before it knew the option,
+            // it failed
+            lock(&peer_lock);
+            e->listening = !list_null(&sock->socket.unix_listening);
+            unlock(&peer_lock);
             struct sockaddr_storage addr;
-            len = sizeof(addr);
+            socklen_t len = sizeof(addr);
             e->connected = !e->listening &&
                 getpeername(sock->real_fd, (struct sockaddr *) &addr, &len) == 0;
             e->inode = sock->stat.inode;

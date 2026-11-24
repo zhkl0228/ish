@@ -50,7 +50,8 @@ struct attr {
 struct fd *generic_open(const char *path, int flags, int mode);
 struct fd *generic_openat(struct fd *at, const char *path, int flags, int mode);
 int generic_getpath(struct fd *fd, char *buf);
-int generic_linkat(struct fd *src_at, const char *src_raw, struct fd *dst_at, const char *dst_raw);
+#define AT_SYMLINK_FOLLOW_ 0x400
+int generic_linkat(struct fd *src_at, const char *src_raw, struct fd *dst_at, const char *dst_raw, bool follow_src);
 int generic_unlinkat(struct fd *at, const char *path);
 int generic_rmdirat(struct fd *at, const char *path);
 int generic_renameat(struct fd *src_at, const char *src, struct fd *dst_at, const char *dst);
@@ -65,6 +66,7 @@ int generic_accessat(struct fd *dirfd, const char *path, int mode);
 int generic_statat(struct fd *at, const char *path, struct statbuf *stat, bool follow_links);
 int generic_setattrat(struct fd *at, const char *path, struct attr attr, bool follow_links);
 int generic_utime(struct fd *at, const char *path, struct timespec atime, struct timespec mtime, bool follow_links);
+int generic_futime(struct fd *fd, struct timespec atime, struct timespec mtime);
 ssize_t generic_readlinkat(struct fd *at, const char *path, char *buf, size_t bufsize);
 // The file path is, through links, a /proc/<pid>/fd/N link to (/dev/fd/N,
 // /dev/stdin), when it has no path the link's text could be followed to: a

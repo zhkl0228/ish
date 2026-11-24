@@ -881,6 +881,94 @@ EOF
         status=1
     fi
     echo
+    echo "########## calls CPython's test_posix found wrong (fexecve, chown, linkat, affinity, ...) ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_posix_calls" tests/regress/regress_posix_calls.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_posix_calls 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_posix_calls"
+    else
+        echo "failed to build regress_posix_calls" >&2
+        status=1
+    fi
+    echo
+    echo "########## *at calls from a directory fd that is no directory: ENOTDIR (iSH aborted) ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_dirfd_not_dir" tests/regress/regress_dirfd_not_dir.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_dirfd_not_dir 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_dirfd_not_dir"
+    else
+        echo "failed to build regress_dirfd_not_dir" >&2
+        status=1
+    fi
+    echo
+    echo "########## truncate(2) of a path (iSH aborted) ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_truncate_path" tests/regress/regress_truncate_path.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_truncate_path 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_truncate_path"
+    else
+        echo "failed to build regress_truncate_path" >&2
+        status=1
+    fi
+    echo
+    echo "########## open with O_DIRECTORY of no directory: ENOTDIR at once (a FIFO's open waited) ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_open_directory" tests/regress/regress_open_directory.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_open_directory 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_open_directory"
+    else
+        echo "failed to build regress_open_directory" >&2
+        status=1
+    fi
+    echo
+    echo "########## interval timers: getitimer, fired one-shots, bad ids, TIMER_ABSTIME 0, timerfd set again ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_timer_values" tests/regress/regress_timer_values.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_timer_values 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_timer_values"
+    else
+        echo "failed to build regress_timer_values" >&2
+        status=1
+    fi
+    echo
+    echo "########## getsockopt(SO_ACCEPTCONN) ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_so_acceptconn" tests/regress/regress_so_acceptconn.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_so_acceptconn 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_so_acceptconn"
+    else
+        echo "failed to build regress_so_acceptconn" >&2
+        status=1
+    fi
+    echo
+    echo "########## a fault's ESR in its SIGSEGV frame (arm64) ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_sigsegv_esr" tests/regress/regress_sigsegv_esr.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_sigsegv_esr 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_sigsegv_esr"
+    else
+        echo "failed to build regress_sigsegv_esr" >&2
+        status=1
+    fi
+    echo
+    echo "########## a thread's and a process's CPU-time clock (pthread_getcpuclockid, clock_getcpuclockid) ##########"
+    if "$CC_GUEST" -static -O0 -Wall -pthread -o "$GUEST_ROOT/tmp/regress_cpu_clock" tests/regress/regress_cpu_clock.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_cpu_clock 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_cpu_clock"
+    else
+        echo "failed to build regress_cpu_clock" >&2
+        status=1
+    fi
+    echo
     echo "########## read-only file mappings shared between processes ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_shared_map" tests/regress/regress_shared_map.c; then
         out=$(timeout 120 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_shared_map 2>&1)

@@ -23,6 +23,9 @@ int_t sys_pidfd_open(pid_t_ pid, uint_t flags) {
     // read anyway, so accept it and ignore.
     if (flags & ~(O_NONBLOCK_))
         return _EINVAL;
+    // as Linux: no process has one (it was ESRCH, CPython's test_pidfd_open)
+    if (pid <= 0)
+        return _EINVAL;
 
     lock(&pids_lock);
     struct task *task = pid_get_task(pid);

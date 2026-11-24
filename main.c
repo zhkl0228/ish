@@ -2,7 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
-#include <execinfo.h>
+#if defined(__GLIBC__) || defined(__APPLE__)
+#include <execinfo.h> // musl (an Alpine host) has no backtrace
+#endif
 #include "util/signpost.h"
 #include <termios.h>
 #include <unistd.h>
@@ -84,16 +86,20 @@ static void crash_handler(int sig, siginfo_t *info, void *ctx) {
         "pc:  0x%llx\nlr:  0x%llx\nsp:  0x%llx\n"
         "x0:  0x%llx\nx1:  0x%llx\nx2:  0x%llx\n"
         "x7:  0x%llx\nx28: 0x%llx\n",
-        UC_PC(uc), UC_LR(uc),
-        UC_SP(uc),
-        UC_X(uc, 0), UC_X(uc, 1),
-        UC_X(uc, 2),
-        UC_X(uc, 7), UC_X(uc, 28));
+        // unsigned long long in glibc's and Darwin's registers, unsigned
+        // long in musl's
+        (unsigned long long) UC_PC(uc), (unsigned long long) UC_LR(uc),
+        (unsigned long long) UC_SP(uc),
+        (unsigned long long) UC_X(uc, 0), (unsigned long long) UC_X(uc, 1),
+        (unsigned long long) UC_X(uc, 2),
+        (unsigned long long) UC_X(uc, 7), (unsigned long long) UC_X(uc, 28));
     write(STDERR_FILENO, buf, len);
 #endif
+#if defined(__GLIBC__) || defined(__APPLE__)
     void *bt[20];
     int n = backtrace(bt, 20);
     backtrace_symbols_fd(bt, n, STDERR_FILENO);
+#endif
     // as a shell reports a death by the signal: abort's is 134
     _exit(128 + sig);
 }

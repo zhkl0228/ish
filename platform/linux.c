@@ -113,7 +113,11 @@ struct host_memory get_host_memory(void) {
         }
     }
     close(fd);
+#if defined(__GLIBC__)
     m.malloc_in_use = mallinfo2().uordblks;
+#else
+    // musl (an Alpine host) has no mallinfo: /proc/ish/host says 0
+#endif
     return m;
 }
 

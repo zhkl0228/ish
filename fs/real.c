@@ -57,11 +57,17 @@ static int open_flags_real_from_fake(int flags) {
     if (flags & O_APPEND_) real_flags |= O_APPEND;
     if (flags & O_NONBLOCK_) real_flags |= O_NONBLOCK;
     if (flags & O_NOFOLLOW_) real_flags |= O_NOFOLLOW;
-    /* O_DIRECTORY is deliberately not forwarded: generic_openat() already
-     * enforces ENOTDIR against the guest's view of the type, and Darwin's
-     * open() has no O_DIRECTORY. O_PATH/O_DIRECT have no Darwin equivalent
-     * either (F_NOCACHE is the closest to O_DIRECT and is advisory), so they
-     * stay guest-side only. */
+#ifdef O_DIRECTORY
+    // generic_openat says ENOTDIR of what the guest takes for no directory,
+    // after this open; the host's says it before it opens the file, as
+    // Linux's does. A FIFO's open waits for its other end: os.walk (scandir)
+    // of one waited for good, where Linux says ENOTDIR at once (CPython's
+    // test_walk_named_pipe). A guest's directory is the host's, in fakefs
+    // too, and what is none is none on the host either.
+    if (flags & O_DIRECTORY_) real_flags |= O_DIRECTORY;
+#endif
+    /* O_PATH/O_DIRECT have no Darwin equivalent (F_NOCACHE is the closest to
+     * O_DIRECT and is advisory), so they stay guest-side only. */
     return real_flags;
 }
 
@@ -324,6 +330,12 @@ off_t realfs_lseek(struct fd *fd, off_t offset, int whence) {
 }
 
 int realfs_poll(struct fd *fd) {
+    // A regular file or a directory is always ready, as Linux has it
+    // (DEFAULT_POLLMASK, whatever it was opened for). Darwin's poll of a
+    // directory says nothing, and a poll of one waited out its timeout.
+    // POLLIN and POLLOUT are the same bits on both.
+    if (S_ISREG(fd->type) || S_ISDIR(fd->type))
+        return POLLIN | POLLOUT;
     struct pollfd p = {.fd = fd->real_fd, .events = POLLPRI};
     // prevent POLLNVAL
     int flags = fcntl(fd->real_fd, F_GETFL, 0);
@@ -868,13 +880,17 @@ int realfs_setattr(struct mount *mount, const char *path, struct attr attr) {
     int root = mount->root_fd;
     int err;
     switch (attr.type) {
+        // The path is the file's: generic_setattrat followed its symlinks, or
+        // not, as asked. The host following it again, lchown of a symlink
+        // chowned what it points to (a dangling one's ENOENT: CPython's
+        // test_lchown). A gid was set as the owner.
         case attr_uid:
-            err = fchownat(root, path, attr.uid, -1, 0);
+            err = fchownat(root, path, attr.uid, -1, AT_SYMLINK_NOFOLLOW);
             if (err < 0 && errno == EPERM)
                 return 0; // silently ignore, we're not root on host
             break;
         case attr_gid:
-            err = fchownat(root, path, attr.gid, -1, 0);
+            err = fchownat(root, path, -1, attr.gid, AT_SYMLINK_NOFOLLOW);
             if (err < 0 && errno == EPERM)
                 return 0;
             break;
@@ -901,7 +917,8 @@ int realfs_fsetattr(struct fd *fd, struct attr attr) {
                 return 0;
             break;
         case attr_gid:
-            err = fchown(real_fd, attr.gid, -1);
+            // the group, not the owner (it set the owner to the gid)
+            err = fchown(real_fd, -1, attr.gid);
             if (err < 0 && errno == EPERM)
                 return 0;
             break;

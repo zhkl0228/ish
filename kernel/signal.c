@@ -515,6 +515,39 @@ static void setup_sigframe(struct siginfo_ *info, struct sigframe_ *frame) {
     memcpy(frame->retcode, &retcode, sizeof(retcode));
 }
 
+#if defined(GUEST_ARM64)
+// A fault's SIGSEGV has the fault's ESR in its frame, after the FPSIMD
+// context, as Linux's has (esr_context): a handler reads whether a store
+// faulted, as iSH's JIT does in its host fault handler, which said "no
+// esr_context in the signal frame" when iSH ran it. There is no ESR the
+// hardware gave, so it is the one an ARMv8 data abort from EL0 has: EC 0x24,
+// IL, WnR for a store, ISV 0 (no syndrome, as for LDP/STP), and a level 3
+// translation fault (SEGV_MAPERR, 0x07) or permission fault (SEGV_ACCERR,
+// 0x0F); EC 0x20 and no WnR where the instruction fetch faulted (the fault
+// address is the pc). A SIGSEGV that is no fault (kill) has none.
+#define ESR_EC_DABT_LOW 0x24
+#define ESR_EC_IABT_LOW 0x20
+#define ESR_IL (1u << 25)
+#define ESR_WNR (1u << 6)
+#define ESR_FSC_TRANSLATION_L3 0x07
+#define ESR_FSC_PERMISSION_L3 0x0f
+static void setup_esr_context(struct sigcontext_ *sc, struct siginfo_ *info, struct cpu_state *cpu) {
+    if (info->sig != SIGSEGV_ || (info->code != SEGV_MAPERR_ && info->code != SEGV_ACCERR_))
+        return;
+    bool fetch = sc->fault_address == sc->pc;
+    uint64_t esr = (uint64_t) (fetch ? ESR_EC_IABT_LOW : ESR_EC_DABT_LOW) << 26 | ESR_IL |
+        (info->code == SEGV_MAPERR_ ? ESR_FSC_TRANSLATION_L3 : ESR_FSC_PERMISSION_L3);
+    if (!fetch && cpu->segfault_was_write)
+        esr |= ESR_WNR;
+    // in place of the terminator after the FPSIMD context, which goes after it
+    struct esr_context_ *record = (struct esr_context_ *) (sc->__reserved + sizeof(struct fpsimd_context_));
+    *record = (struct esr_context_) {.magic = ESR_MAGIC, .size = sizeof(struct esr_context_), .esr = esr};
+    uint32_t *term = (uint32_t *) (record + 1);
+    term[0] = 0;
+    term[1] = 0;
+}
+#endif
+
 static void setup_rt_sigframe(struct siginfo_ *info, struct rt_sigframe_ *frame) {
     frame->restorer = sigreturn_trampoline("__kernel_rt_sigreturn");
     frame->sig = info->sig;
@@ -523,6 +556,9 @@ static void setup_rt_sigframe(struct siginfo_ *info, struct rt_sigframe_ *frame)
     frame->uc.link = 0;
     altstack_to_user(&frame->uc.stack);
     setup_sigcontext(&frame->uc.mcontext, &current->cpu);
+#if defined(GUEST_ARM64)
+    setup_esr_context(&frame->uc.mcontext, info, &current->cpu);
+#endif
     frame->uc.sigmask = current->blocked;
 
     static const struct {

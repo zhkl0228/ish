@@ -188,6 +188,11 @@ static struct tgroup *tgroup_copy(struct tgroup *old_group) {
         group->posix_timers[i] = (struct posix_timer) {};
     }
     group->doing_group_exit = false;
+    // A new process has used no CPU time yet, as on Linux: rusage was the old
+    // group's, its exited threads' time, and every process forked from it
+    // started with all its ancestors' (Claude Code's 312s: /proc/<pid>/stat,
+    // getrusage, and the time bash said of an instant's command)
+    group->rusage = (struct rusage_) {};
     group->children_rusage = (struct rusage_) {};
     {
         struct timespec _ts;

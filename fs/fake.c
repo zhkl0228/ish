@@ -428,6 +428,10 @@ static struct fd *fakefs_open(struct mount *mount, const char *path, int flags, 
         if (flags & O_APPEND_) real_flags |= O_APPEND;
         if (flags & O_NONBLOCK_) real_flags |= O_NONBLOCK;
         if (flags & O_NOFOLLOW_) real_flags |= O_NOFOLLOW;
+#ifdef O_DIRECTORY
+        // as realfs_open: before the open, which a FIFO's waits in
+        if (flags & O_DIRECTORY_) real_flags |= O_DIRECTORY;
+#endif
         int fd_no = open(host_abs, real_flags, 0666);
         if (fd_no < 0) {
             return ERR_PTR(errno_map());
