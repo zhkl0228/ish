@@ -7,10 +7,15 @@
     "packages below at the versions apk and npm give that day: an image serves the module it was",
     "recorded from (its ELF build-id), so record again after the app's root or those packages",
     "change (Claude Code updates itself often). node is recorded in the mode the app runs it in",
-    "with its image, the interpreter (guest/kimi/kimi_train.sh)."
+    "with its image, the interpreter (guest/kimi/kimi_train.sh). claude.exe is recorded with",
+    "JavaScriptCore's JIT off, as the app's claude-wrapper runs it. busybox (the root's commands:",
+    "ls, grep, sed, find and the rest of what a session runs), ssh (git over ssh) and libcrypto (ssh's",
+    "and TLS's) came in 2026-11-24; ssh's and libcrypto's workloads talk to an sshd in an ish of its",
+    "own, on a root of its own (sshd: its packages, and the images that need it)."
   ],
   "packages": {
-    "apk": ["python3", "nodejs", "npm", "openjdk25-jdk", "maven"],
+    "apk": ["python3", "nodejs", "npm", "openjdk25-jdk", "maven", "openssh-client", "openssh-keygen", "openssl",
+            "py3-requests"],
     "npm": ["@moonshot-ai/kimi-code"],
     "npm_prefix": {"/opt/claude-code": ["@anthropic-ai/claude-code"]}
   },
@@ -20,6 +25,14 @@
     "jvm": {"module": "libjvm.so", "workload": "java/java_train.sh"},
     "claude": {"module": "claude.exe", "workload": "claude/claude_train.sh"},
     "bash": {"module": "/bin/bash", "workload": "app/bash_train.sh"},
-    "python": {"module": "libpython3", "workload": "app/python_train.sh"}
+    "python": {"module": "libpython3", "workload": "app/python_train.sh"},
+    "busybox": {"module": "/bin/busybox", "workload": "busybox/busybox_train.sh"},
+    "ssh": {"module": "/usr/bin/ssh", "workload": "ssh/ssh_train.sh"},
+    "crypto": {"module": "libcrypto.so", "workload": "app/crypto_train.sh"}
+  },
+  "sshd": {
+    "apk": ["openssh-server", "openssh-sftp-server", "openssh-keygen"],
+    "port": 2222,
+    "images": ["ssh", "crypto"]
   }
 }

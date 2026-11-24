@@ -8,8 +8,9 @@
 #   - npm has another version of Claude Code or Kimi Code: ish-install installs
 #     the versions the images were recorded on, so recording the new ones and
 #     publishing them (with the versions) is what updates the app's
-#   - Alpine has another build of nodejs, openjdk25-jdk, maven or python3,
-#     which ish-install installs from the repositories as they are that day
+#   - Alpine has another build of nodejs, openjdk25-jdk, maven, python3 or
+#     openssh-client-default (ssh), which ish-install and apk install from the
+#     repositories as they are that day
 #
 # The root is the one the lock's set ships (its musl is the app's), fetched
 # from the server. A new root comes in by hand: put it at
@@ -57,9 +58,9 @@ abi=$(ISH_JIT_PIC=1 guest /bin/cat /proc/ish/jit | grep -o 'abi [0-9a-f]*' | cut
 claude=$(npm view @anthropic-ai/claude-code version)
 kimi=$(npm view @moonshot-ai/kimi-code version)
 guest /sbin/apk update > /dev/null
-apk=$(guest /sbin/apk search -x nodejs openjdk25-jdk maven python3 | python3 -c "
+apk=$(guest /sbin/apk search -x nodejs openjdk25-jdk maven python3 openssh-client-default | python3 -c "
 import re, sys
-want = {'nodejs', 'openjdk25-jdk', 'maven', 'python3'}
+want = {'nodejs', 'openjdk25-jdk', 'maven', 'python3', 'openssh-client-default'}
 found = {}
 for line in sys.stdin:
     m = re.match(r'(.+?)-(\d[^-]*-r\d+)$', line.strip())
@@ -68,13 +69,16 @@ for line in sys.stdin:
 assert set(found) == want, found
 print(' '.join('%s=%s' % i for i in sorted(found.items())))")
 now="abi=$abi @anthropic-ai/claude-code=$claude @moonshot-ai/kimi-code=$kimi $apk"
+# a package a lock of before it had no image of is "none": recorded again,
+# with its image
 recorded=$(python3 -c "
 import json
 d = json.load(open('$lock'))
 r = d['recorded']
 print(' '.join(['abi=' + d['abi'], '@anthropic-ai/claude-code=' + r['npm']['@anthropic-ai/claude-code'],
                 '@moonshot-ai/kimi-code=' + r['npm']['@moonshot-ai/kimi-code']] +
-               ['%s=%s' % (p, r['apk'][p]) for p in sorted(['nodejs', 'openjdk25-jdk', 'maven', 'python3'])]))")
+               ['%s=%s' % (p, r['apk'].get(p, 'none'))
+                for p in sorted(['nodejs', 'openjdk25-jdk', 'maven', 'python3', 'openssh-client-default'])]))")
 echo "now:      $now"
 echo "recorded: $recorded"
 if [ "$now" = "$recorded" ] && [ -z "$force" ]; then

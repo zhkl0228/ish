@@ -49,9 +49,10 @@ STAGE = os.path.join(REPO, 'build', 'aot-publish')
 
 BASE_URL = 'https://hk.gzmtx.cn/ish-aot'
 HOST = 'ish-aot@hk.gzmtx.cn'
-# The apk packages whose builds the images serve (musl under all of them; bash with the root,
-# python3 from ish-install)
-APK = ['musl', 'nodejs', 'openjdk25-jdk', 'maven', 'bash', 'python3']
+# The apk packages whose builds the images serve (musl under all of them; bash, busybox and
+# libcrypto3 with the root, python3 from ish-install, openssh-client-default's ssh from apk)
+APK = ['musl', 'nodejs', 'openjdk25-jdk', 'maven', 'bash', 'python3', 'busybox', 'openssh-client-default',
+       'libcrypto3']
 
 
 def sha256(path):

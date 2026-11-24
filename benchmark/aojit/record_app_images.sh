@@ -1,12 +1,13 @@
 #!/bin/sh
 # AOT images of what the app's users run most: Java and Maven (libjvm.so),
-# Kimi Code (node), Claude Code (claude.exe) and musl under them
-# (images-app.json), for the app, on a Mac (Apple silicon) or a Linux arm64
+# Kimi Code (node), Claude Code (claude.exe) and musl under them, what their
+# sessions run (bash, python3, busybox, ssh and libcrypto) (images-app.json),
+# for the app, on a Mac (Apple silicon) or a Linux arm64
 # host: Linux and Darwin builds of ish share what an image depends on (the
 # same abi), so a Linux recording makes the app's images too, and the Linux
 # CLI's for measure_app_images.sh.
 #
-# usage: benchmark/aojit/record_app_images.sh [image...]   (default: all four)
+# usage: benchmark/aojit/record_app_images.sh [image...]   (default: all of them)
 #
 #   1. build-arm64-jit: ish with the run-time JIT (-Djit=true), which records
 #   2. build-aot-root: the root the app ships (deps/rootfs/arm64-root.tar.gz),
@@ -85,6 +86,42 @@ else
 fi
 # the workloads, as the repository has them now
 tar -C benchmark/aojit/guest -cf - . | guest /bin/sh -c 'rm -rf /tmp/aojit && mkdir -p /tmp/aojit && tar -xf - -C /tmp/aojit'
+
+# The sshd the ssh and libcrypto workloads talk to (guest/ssh/server.sh), when
+# one of them is recorded: in an ish of its own, so that the recording ish runs
+# the client only, on a root of its own (sshd refuses a realfs /var/empty, and
+# two ish on one fakefs would share its meta.db), kept as the recording root is.
+# It takes the client keys the recording root makes (guest/ssh/keys.sh), and
+# ends with this script.
+names=${*:-$(python3 -c "import json; print(' '.join(json.load(open('$list'))['images']))")}
+sshd_images=$(python3 -c "import json; print(' '.join(json.load(open('$list'))['sshd']['images']))")
+need_sshd=
+for name in $names; do
+    case " $sshd_images " in *" $name "*) need_sshd=1 ;; esac
+done
+if [ -n "$need_sshd" ]; then
+    sroot=${AOT_SSHD_ROOT:-$root-sshd}
+    port=$(python3 -c "import json; print(json.load(open('$list'))['sshd']['port'])")
+    server() { "$jit/ish" -f "$sroot" "$@"; }
+    if [ ! -f "$sroot.ready" ]; then
+        say "2b. the sshd's root ($sroot) from $tarball"
+        rm -rf "$sroot"
+        "$jit/tools/fakefsify" "$tarball" "$sroot"
+        server /bin/sh -c 'cat > /etc/resolv.conf' < /etc/resolv.conf
+        server /sbin/apk add --no-cache $(python3 -c "import json; print(' '.join(json.load(open('$list'))['sshd']['apk']))")
+        touch "$sroot.ready"
+    fi
+    tar -C benchmark/aojit/guest -cf - ssh | server /bin/sh -c 'rm -rf /tmp/aojit && mkdir -p /tmp/aojit && tar -xf - -C /tmp/aojit'
+    keys=$(guest /bin/sh /tmp/aojit/ssh/keys.sh)
+    printf '%s\n' "$keys" | server /bin/sh /tmp/aojit/ssh/server.sh "$port" > "$sroot.log" 2>&1 &
+    sshd=$!
+    trap 'kill $sshd 2> /dev/null' EXIT
+    until python3 -c "import socket; socket.create_connection(('127.0.0.1', $port))" 2> /dev/null; do
+        kill -0 $sshd 2> /dev/null || { echo "❌ the sshd ended: $sroot.log"; exit 1; }
+        sleep 1
+    done
+    say "the sshd: ish $sshd on port $port, for $sshd_images"
+fi
 
 abi=$(ISH_JIT_PIC=1 guest /bin/cat /proc/ish/jit | grep -o 'abi [0-9a-f]*' | cut -d' ' -f2)
 out=$repo/benchmark/aojit/images/$abi/app

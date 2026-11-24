@@ -38,7 +38,7 @@ Inputs (JSON, logs, images, certificates, the 10 MB scp file) are generated in t
 
 What the app's users run most has a list of its own: Java and Maven (`libjvm.so`), Kimi Code
 (`/usr/bin/node`), Claude Code (`claude.exe`, a Bun executable) and musl under all of them, and
-what their sessions run most, bash and python3 (`libpython3`). Their workloads are `guest/java`,
+what their sessions run most, bash, python3 (`libpython3`), busybox, ssh and libcrypto. Their workloads are `guest/java`,
 `guest/kimi`, `guest/claude` and `guest/app` (musl, bash, python3); the agent CLIs answer through a
 model API of their own in the guest (`guest/llm/mock_llm.py`, OpenAI's chat completions and
 Anthropic's messages), so no account or network is needed for them. A `[session]` prompt has it
@@ -57,6 +57,12 @@ while its interpreter is claude.exe's own code. Measured in the app (2026-11-24,
 images, two runs each): print mode 6.6 -> 6.1 s of CPU, a `[session]` 5.0 -> 4.5 s, in the same wall
 time or less; [anon] blocks 78-88K a run -> 200-1500; claude.exe's image serves 99% of its blocks
 with the JIT and 98% without.
+
+busybox (what a session's commands are on Alpine: ls, grep, sed, find and the rest), ssh (git over
+ssh) and libcrypto (ssh's, and TLS's) came in the same day (`guest/busybox/busybox_train.sh`,
+`guest/ssh/ssh_train.sh`, `guest/app/crypto_train.sh`). ssh's and libcrypto's workloads talk to an
+sshd that `record_app_images.sh` starts in an ish of its own, on a root of its own (images-app.json's
+`sshd`: its packages and port, and the images that need it), with the recording root's client keys.
 
 ### Published sets: what a clone of the repository builds with
 
