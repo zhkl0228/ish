@@ -881,6 +881,17 @@ EOF
         status=1
     fi
     echo
+    echo "########## getsockopt(SO_ACCEPTCONN) ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_so_acceptconn" tests/regress/regress_so_acceptconn.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_so_acceptconn 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_so_acceptconn"
+    else
+        echo "failed to build regress_so_acceptconn" >&2
+        status=1
+    fi
+    echo
     echo "########## a fault's ESR in its SIGSEGV frame (arm64) ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_sigsegv_esr" tests/regress/regress_sigsegv_esr.c; then
         out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_sigsegv_esr 2>&1)

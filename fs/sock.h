@@ -228,6 +228,7 @@ static inline int sock_flags_from_real(int real) {
 #define SO_PEERCRED_ 17
 #define SO_BINDTODEVICE_ 25
 #define SO_TIMESTAMP_ 29
+#define SO_ACCEPTCONN_ 30
 #define SO_PROTOCOL_ 38
 #define SO_DOMAIN_ 39
 #define SO_RCVTIMEO_OLD_ 20
