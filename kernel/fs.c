@@ -755,6 +755,10 @@ static int set_nonblock(struct fd *fd, addr_t nb_addr) {
     return fd_setflags(fd, flags);
 }
 
+#define FICLONE_ 0x40049409
+#define FICLONERANGE_ 0x4020940d
+#define FIDEDUPERANGE_ 0xc0189436
+
 dword_t sys_ioctl(fd_t f, dword_t cmd, addr_t arg) {
     STRACE("ioctl(%d, 0x%x, 0x%llx)", f, cmd, (unsigned long long)arg);
     struct fd *fd = f_get(f);
@@ -770,6 +774,16 @@ dword_t sys_ioctl(fd_t f, dword_t cmd, addr_t arg) {
         case FIONCLEX_:
             bit_clear(f, current->files->cloexec);
             return 0;
+        // A clone or dedupe of a file's range: Linux's VFS takes them
+        // (ioctl_file_clone), and a filesystem without reflinks says
+        // EOPNOTSUPP, as ext4 does; iSH's have none. They were ENOTTY, which
+        // CPython 3.14's Path.copy, trying FICLONE first, takes for an error
+        // and fails with (test_pathlib's copy tests): from EOPNOTSUPP it
+        // copies the bytes, as cp --reflink=auto does.
+        case FICLONE_:
+        case FICLONERANGE_:
+        case FIDEDUPERANGE_:
+            return _EOPNOTSUPP;
     }
     return fd_ioctl(fd, cmd, arg);
 }

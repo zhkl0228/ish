@@ -260,6 +260,14 @@ static int __path_normalize(const char *at_path, const char *path, char *out, in
                     err = access_check(&stat, AC_X);
                     if (err < 0)
                         return err;
+                } else if (*p != '\0') {
+                    // A component that is not, with more after it, is its
+                    // error, as Linux's walk says (ENOENT): taken for one, a
+                    // ".." after it took it away, and "xyzzy/.." was "."
+                    // (CPython's test_pathlib, test_glob_dotdot). The last,
+                    // a trailing slash after it, may be one to make
+                    // ("sub/" for mkdir).
+                    return err;
                 }
             } else {
                 mount_release(mount);

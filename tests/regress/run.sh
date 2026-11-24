@@ -982,6 +982,17 @@ EOF
         status=1
     fi
     echo
+    echo "########## a path's components as Linux's walk looks them up; FICLONE EOPNOTSUPP ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_path_walk" tests/regress/regress_path_walk.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_path_walk 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_path_walk"
+    else
+        echo "failed to build regress_path_walk" >&2
+        status=1
+    fi
+    echo
     echo "########## an IP or IPv6 socket's control messages, received and sent ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_ip_cmsgs" tests/regress/regress_ip_cmsgs.c; then
         out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_ip_cmsgs 2>&1)
