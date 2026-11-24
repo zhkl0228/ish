@@ -1030,6 +1030,17 @@ EOF
         status=1
     fi
     echo
+    echo "########## a send with MSG_DONTWAIT: EAGAIN when it does not fit, not blocked ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_send_dontwait" tests/regress/regress_send_dontwait.c; then
+        out=$(timeout 120 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_send_dontwait 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_send_dontwait"
+    else
+        echo "failed to build regress_send_dontwait" >&2
+        status=1
+    fi
+    echo
     echo "########## the end of a FIFO's data: a blocking read says 0 when its writer closes ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_fifo_eof" tests/regress/regress_fifo_eof.c; then
         out=$(timeout 120 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_fifo_eof 2>&1)

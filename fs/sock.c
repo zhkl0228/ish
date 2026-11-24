@@ -1209,6 +1209,31 @@ close_fake_0:
     return err;
 }
 
+// Darwin's send takes no MSG_DONTWAIT: sosend asks only whether the socket
+// is non-blocking, and a send with the flag to a socket that is not blocked
+// when what it sent did not fit, till the other end went away (CPython's
+// test_socket, testSendmsgDontWait: EPIPE, not EAGAIN). For the guest's flag
+// the host socket is made non-blocking for that one send, if it is not (a
+// Linux host, which takes the flag, the same). Another thread's send without
+// the flag on the socket in that moment, or its F_SETFL, would find it
+// non-blocking. The host's flags before, or -1 for none changed.
+static int send_dontwait_begin(struct fd *sock, int guest_flags) {
+    if (!(guest_flags & MSG_DONTWAIT_) || (sock->flags & O_NONBLOCK_))
+        return -1;
+    int host_flags = fcntl(sock->real_fd, F_GETFL);
+    fcntl(sock->real_fd, F_SETFL, host_flags | O_NONBLOCK);
+    return host_flags;
+}
+
+// The send's errno kept
+static void send_dontwait_end(struct fd *sock, int host_flags) {
+    if (host_flags < 0)
+        return;
+    int saved_errno = errno;
+    fcntl(sock->real_fd, F_SETFL, host_flags);
+    errno = saved_errno;
+}
+
 int_t sys_sendto(fd_t sock_fd, addr_t buffer_addr, dword_t len, dword_t flags, addr_t sockaddr_addr, dword_t sockaddr_len) {
     if (fd_is_packet(f_get(sock_fd)))
         return packet_unsupported(f_get(sock_fd), "sendto");
@@ -1238,8 +1263,10 @@ int_t sys_sendto(fd_t sock_fd, addr_t buffer_addr, dword_t len, dword_t flags, a
             goto error;
     }
 
+    int host_flags = send_dontwait_begin(sock, flags);
     ssize_t res = sendto(sock->real_fd, buffer, len, real_flags,
             sockaddr_addr ? (void *) &sockaddr : NULL, sockaddr_len);
+    send_dontwait_end(sock, host_flags);
     if (netcap_on()) {
         int saved_errno = errno;
         if (res >= 0)
@@ -2073,7 +2100,9 @@ int_t sys_sendmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
     if (real_flags < 0)
         goto out_free_scm;
 
+    int host_flags = send_dontwait_begin(sock, flags);
     err = sendmsg(sock->real_fd, &msg, real_flags);
+    send_dontwait_end(sock, host_flags);
     if (netcap_on()) {
         int saved_errno = errno;
         if (err >= 0)
