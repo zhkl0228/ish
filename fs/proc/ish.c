@@ -2,6 +2,7 @@
 #include "fs/proc/ish.h"
 #include "kernel/errno.h"
 #include "fs/poll.h"
+#include "platform/platform.h"
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -162,6 +163,19 @@ static int proc_ish_show_version(struct proc_entry *UNUSED(entry), struct proc_d
     return 0;
 }
 
+// The host's memory, as host_out_of_memory reports it when an allocation
+// fails (platform/platform.h): to watch it while the app runs, how near its
+// limit and how many host mappings
+static int proc_ish_show_host(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    struct host_memory m = get_host_memory();
+    proc_printf(buf, "available: %.1f MB (what the OS still lets the app take: 0 is its limit met, or a host "
+                "with none)\n", m.available / 1048576.0);
+    proc_printf(buf, "footprint: %.1f MB\n", m.footprint / 1048576.0);
+    proc_printf(buf, "mappings: %llu\n", (unsigned long long) m.mappings);
+    proc_printf(buf, "malloc in use: %.1f MB\n", m.malloc_in_use / 1048576.0);
+    return 0;
+}
+
 #ifdef ISH_JIT
 #include "asbestos/guest-arm64/jit.h"
 // Whether the JIT / AOT images are in use (asbestos/guest-arm64/jit.h).
@@ -197,6 +211,7 @@ struct proc_children proc_ish_children = PROC_CHILDREN({
     {".defaults", S_IFDIR, .readdir = proc_ish_underlying_defaults_readdir},
     {"defaults", S_IFDIR, .readdir = proc_ish_defaults_readdir},
     {"documents", .show = proc_ish_show_documents},
+    {"host", .show = proc_ish_show_host},
 #ifdef ISH_JIT
     {"jit", .show = proc_ish_show_jit, .pwrite = proc_ish_write_jit},
 #endif
