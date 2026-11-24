@@ -881,6 +881,17 @@ EOF
         status=1
     fi
     echo
+    echo "########## ITIMER_VIRTUAL and ITIMER_PROF ##########"
+    if "$CC_GUEST" -static -O0 -Wall -pthread -o "$GUEST_ROOT/tmp/regress_cpu_itimers" tests/regress/regress_cpu_itimers.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_cpu_itimers 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_cpu_itimers"
+    else
+        echo "failed to build regress_cpu_itimers" >&2
+        status=1
+    fi
+    echo
     echo "########## a pipe or FIFO end used the other way: EBADF at once (it waited) ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_pipe_wrong_end" tests/regress/regress_pipe_wrong_end.c; then
         out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_pipe_wrong_end 2>&1)

@@ -253,6 +253,16 @@ struct tgroup {
 
     struct tty *tty;
     struct timer *itimer;
+    // ITIMER_VIRTUAL's [0] and ITIMER_PROF's [1]: the process's CPU time, in
+    // us, at which each fires (0: disarmed), and its interval. Locked by the
+    // group's lock. A thread samples that time from the first one set until
+    // the process exits (cpu_itimer_thread; delete_timers_if_last stops and
+    // joins it); not a child's (tgroup_copy), kept across exec.
+    uint64_t cpu_itimer_expires[2];
+    uint64_t cpu_itimer_interval[2];
+    bool cpu_itimer_running;
+    bool cpu_itimer_stop;
+    pthread_t cpu_itimer_thread;
 #define TIMERS_MAX 16
     struct posix_timer posix_timers[TIMERS_MAX];
 
