@@ -245,9 +245,13 @@ tests/smoke/run.sh -i build-arm64-release/ish -f ./alpine-arm64-fakefs
 CI (`.github/workflows/ci.yml`) archives the app for a phone (unsigned) on macOS and makes
 its ipa (`app/package-ipa.py`), and on an arm64 Linux runner runs `tests/regress/ci.sh`: the
 CLI built as a release with no warning, then the regression tests on an Alpine aarch64
-minirootfs. Each push to master publishes the ipa and its dSYMs as a release, the newest
-five kept: the newest is at `releases/latest/download/iSH-ARM64-unsigned.ipa`. It is
-unsigned: sign it with your own developer account to install it.
+minirootfs. A push to master publishes the ipa and its dSYMs as a release,
+`ipa-<version>-<build>`, when that version is not published yet (`MARKETING_VERSION` and
+`CURRENT_PROJECT_VERSION` in `app/AppARM64.xcconfig`, which `app/FileProviderARM64.xcconfig`
+must match), or again, replacing it, when a commit of the push has `[ipa]` in its message
+(or the workflow is run by hand with `force`); the newest five are kept, and the newest is at
+`releases/latest/download/iSH-ARM64-unsigned.ipa`. It is unsigned: sign it with your own
+developer account to install it.
 
 `uname -v` (and `/proc/version`) says which build runs: `#1 SMP iSH 2.1.0 (806) <commit>
 <commit date>` (`iSH cli` in the command line tool, `-dirty` after a commit built with

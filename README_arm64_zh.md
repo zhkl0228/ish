@@ -231,8 +231,11 @@ tests/smoke/run.sh -i build-arm64-release/ish -f ./alpine-arm64-fakefs
 
 CI（`.github/workflows/ci.yml`）在 macOS 上 archive 给手机用的 App（不签名）并打成 ipa
 （`app/package-ipa.py`），在 arm64 Linux runner 上运行 `tests/regress/ci.sh`：以 release 编译
-CLI（不许有警告），再在 Alpine aarch64 minirootfs 上跑回归测试。每次推送 master 都会把 ipa
-和 dSYM 发布成一个 Release，只保留最新 5 个；最新的固定在
+CLI（不许有警告），再在 Alpine aarch64 minirootfs 上跑回归测试。推送 master 时，如果当前版本
+（`app/AppARM64.xcconfig` 的 `MARKETING_VERSION`、`CURRENT_PROJECT_VERSION`，
+`app/FileProviderARM64.xcconfig` 要与之一致）还没发布过，就把 ipa 和 dSYM 发布成 Release
+`ipa-<版本>-<build>`；这次推送里有提交信息带 `[ipa]`（或手动运行 workflow 并勾选 `force`）时，
+用当前代码重新发布这个版本。只保留最新 5 个，最新的固定在
 `releases/latest/download/iSH-ARM64-unsigned.ipa`。ipa 不签名，用自己的开发者账号签名后安装。
 
 `uname -v`（以及 `/proc/version`）说明运行的是哪个构建：`#1 SMP iSH 2.1.0 (806) <commit>

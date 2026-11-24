@@ -4,6 +4,12 @@ on:
   push:
   pull_request:
       branches: [master]
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Publish the ipa even if its version is published (it is replaced)
+        type: boolean
+        default: false
 
 jobs:
   linux:
@@ -27,9 +33,13 @@ jobs:
         run: tests/regress/ci.sh "$RUNNER_TEMP/ci"
 
   mac:
-    # The app as it is built for a phone (archived, unsigned) and its ipa; on
-    # master, the ipa published as a release, the newest five kept: sign it
-    # with one's own developer account to install it
+    # The app as it is built for a phone (archived, unsigned) and its ipa. On
+    # master the ipa is published as a release, ipa-<version>-<build>, when
+    # its version is not (app/AppARM64.xcconfig's MARKETING_VERSION and
+    # CURRENT_PROJECT_VERSION, which FileProviderARM64.xcconfig's match), or
+    # again, replacing it, when a commit of the push says [ipa] in its message
+    # (or a run by hand says force); the newest five kept. To install it, sign
+    # it with one's own developer account
     runs-on: macos-26
     permissions:
       contents: write
@@ -48,20 +58,28 @@ jobs:
         id: package
         run: python3 app/package-ipa.py "$RUNNER_TEMP/iSH-ARM64.xcarchive" "$RUNNER_TEMP/ipa"
       - name: Release
-        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        if: github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           VERSION: ${{ steps.package.outputs.version }}
           BUILD: ${{ steps.package.outputs.build }}
+          FORCE: ${{ inputs.force == true || contains(join(github.event.commits.*.message, ' '), '[ipa]') }}
         run: |
           set -o pipefail
+          tag="ipa-$VERSION-$BUILD"
+          if gh release view "$tag" > /dev/null 2>&1; then
+              if [ "$FORCE" != true ]; then
+                  echo "$tag is published: a new version (app/AppARM64.xcconfig) or [ipa] in a commit's message publishes one"
+                  exit 0
+              fi
+              gh release delete "$tag" --cleanup-tag --yes
+          fi
           sha=${GITHUB_SHA::8}
-          tag="ipa-$(date -u +%Y%m%d-%H%M%S)-$sha"
-          printf '%s\n\nUnsigned: sign it with your own developer account to install it.\n' \
-              "$(git log -1 --format=%s "$GITHUB_SHA")" > "$RUNNER_TEMP/notes.md"
+          printf '%s (%s)\n\nUnsigned: sign it with your own developer account to install it.\n' \
+              "$(git log -1 --format=%s "$GITHUB_SHA")" "$sha" > "$RUNNER_TEMP/notes.md"
           gh release create "$tag" --target "$GITHUB_SHA" --latest \
-              --title "iSH-ARM64 $VERSION ($BUILD) $sha" --notes-file "$RUNNER_TEMP/notes.md" \
+              --title "iSH-ARM64 $VERSION ($BUILD)" --notes-file "$RUNNER_TEMP/notes.md" \
               "$RUNNER_TEMP/ipa/iSH-ARM64-unsigned.ipa" "$RUNNER_TEMP/ipa/iSH-ARM64-dSYMs.zip"
           # the newest five ipa releases kept, the rest removed with their tags
           gh release list --limit 100 --json tagName,createdAt \
