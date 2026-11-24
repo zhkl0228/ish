@@ -66,6 +66,13 @@ struct termios_ {
 #define TCSETSW_ 0x5403
 #define TCSETSF_ 0x5404
 #define TCFLSH_ 0x540b
+#define TCSBRK_ 0x5409
+#define TCXONC_ 0x540a
+#define TCSBRKP_ 0x5425
+#define TCOOFF_ 0
+#define TCOON_ 1
+#define TCIOFF_ 2
+#define TCION_ 3
 #define TIOCSCTTY_ 0x540e
 #define TIOCGPGRP_ 0x540f
 #define TIOCSPGRP_ 0x5410
@@ -119,6 +126,9 @@ struct tty {
     uint8_t packet_flags;
     cond_t produced;
     cond_t consumed;
+    // tcflow(TCOOFF) until TCOON: a write waits on output_restarted
+    bool output_stopped;
+    cond_t output_restarted;
 
     struct winsize_ winsize;
     struct termios_ termios;
