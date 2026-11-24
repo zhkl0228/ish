@@ -1374,8 +1374,88 @@ static dword_t sendfile_copy(fd_t out_fd, fd_t in_fd, addr_t offset_addr, dword_
     }
     return total;
 }
-dword_t sys_splice(fd_t UNUSED(in_fd), addr_t UNUSED(in_off_addr), fd_t UNUSED(out_fd), addr_t UNUSED(out_off_addr), dword_t UNUSED(count), dword_t UNUSED(flags)) {
-    return _EINVAL;
+// splice, as Linux's, by a copy through a buffer (there are no pipe buffers
+// to move): up to count bytes, at most 64KB, from in to out, one of them a
+// pipe (else EINVAL). An offset given is a file's (a pipe's is ESPIPE): read
+// or written at, and moved on, the fd's own position kept. With
+// SPLICE_F_NONBLOCK a pipe end not ready is EAGAIN. What is read from a file
+// and not written is not taken: its position goes back by it. It was EINVAL
+// of anything (CPython's test_os, test_splice and its offsets; Go copies
+// between a socket and a pipe with it).
+#define SPLICE_F_NONBLOCK_ 0x2
+dword_t sys_splice(fd_t in_fd, addr_t in_off_addr, fd_t out_fd, addr_t out_off_addr, dword_t count, dword_t flags) {
+    STRACE("splice(%d, %#x, %d, %#x, %u, %#x)", in_fd, in_off_addr, out_fd, out_off_addr, count, flags);
+    struct fd *in = f_get(in_fd);
+    struct fd *out = f_get(out_fd);
+    if (in == NULL || out == NULL)
+        return _EBADF;
+    bool in_pipe = S_ISFIFO(in->type), out_pipe = S_ISFIFO(out->type);
+    if (!in_pipe && !out_pipe)
+        return _EINVAL;
+    if ((in_pipe && in_off_addr != 0) || (out_pipe && out_off_addr != 0))
+        return _ESPIPE;
+    off_t_ in_off = 0, out_off = 0;
+    if (in_off_addr != 0 && user_get(in_off_addr, in_off))
+        return _EFAULT;
+    if (out_off_addr != 0 && user_get(out_off_addr, out_off))
+        return _EFAULT;
+    if (in_off < 0 || out_off < 0)
+        return _EINVAL;
+    if (count == 0)
+        return 0;
+    if (flags & SPLICE_F_NONBLOCK_) {
+        if (in_pipe && in->ops->poll != NULL && !(in->ops->poll(in) & POLL_READ))
+            return _EAGAIN;
+        if (out_pipe && out->ops->poll != NULL && !(out->ops->poll(out) & POLL_WRITE))
+            return _EAGAIN;
+    }
+
+    size_t chunk = count < 65536 ? count : 65536;
+    char *buf = malloc(chunk);
+    if (buf == NULL)
+        return _ENOMEM;
+    ssize_t nread;
+    if (in_off_addr != 0)
+        nread = in->ops->pread != NULL ? in->ops->pread(in, buf, chunk, in_off) : _ESPIPE;
+    else
+        nread = in->ops->read != NULL ? in->ops->read(in, buf, chunk) : _EINVAL;
+    if (nread <= 0) {
+        free(buf);
+        return nread;
+    }
+    ssize_t written = 0;
+    while (written < nread) {
+        ssize_t n;
+        if (out_off_addr != 0)
+            n = out->ops->pwrite != NULL ? out->ops->pwrite(out, buf + written, nread - written, out_off + written) : _ESPIPE;
+        else
+            n = out->ops->write != NULL ? out->ops->write(out, buf + written, nread - written) : _EINVAL;
+        if (n <= 0) {
+            if (written == 0) {
+                free(buf);
+                // nothing taken from a file read at its own position
+                if (!in_pipe && in_off_addr == 0 && in->ops->lseek != NULL)
+                    in->ops->lseek(in, -nread, LSEEK_CUR);
+                return n < 0 ? n : _EIO;
+            }
+            break;
+        }
+        written += n;
+    }
+    free(buf);
+    if (!in_pipe && in_off_addr == 0 && written < nread && in->ops->lseek != NULL)
+        in->ops->lseek(in, written - nread, LSEEK_CUR);
+    if (in_off_addr != 0) {
+        in_off += written;
+        if (user_put(in_off_addr, in_off))
+            return _EFAULT;
+    }
+    if (out_off_addr != 0) {
+        out_off += written;
+        if (user_put(out_off_addr, out_off))
+            return _EFAULT;
+    }
+    return written;
 }
 static dword_t copy_file_range_copy(fd_t in_fd, addr_t in_off_addr, fd_t out_fd,
         addr_t out_off_addr, dword_t len, uint_t flags);

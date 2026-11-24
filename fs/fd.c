@@ -256,6 +256,9 @@ void fdtable_do_cloexec(struct fdtable *table) {
 #define F_SETLKW64_ 14
 
 #define F_DUPFD_CLOEXEC_ 1030
+#define F_ADD_SEALS_ 1033
+#define F_GET_SEALS_ 1034
+#define F_SEAL_SEAL_ 0x1
 
 dword_t sys_dup(fd_t f) {
     STRACE("dup(%d)", f);
@@ -354,6 +357,16 @@ dword_t sys_fcntl(fd_t f, dword_t cmd, addr_t arg) {
                 bit_set(new_f, table->cloexec);
             unlock(&table->lock);
             return new_f;
+
+        // A memfd's seals: F_SEAL_SEAL, as one made without
+        // MFD_ALLOW_SEALING (memfd_create takes no sealing), and adding one
+        // is EPERM. Another file has none to say: EINVAL, as Linux's.
+        case F_GET_SEALS_:
+            STRACE("fcntl(%d, F_GET_SEALS)", f);
+            return fd_is_memfd(fd) ? F_SEAL_SEAL_ : _EINVAL;
+        case F_ADD_SEALS_:
+            STRACE("fcntl(%d, F_ADD_SEALS, %#x)", f, arg);
+            return fd_is_memfd(fd) ? _EPERM : _EINVAL;
 
         case F_GETFD_:
             STRACE("fcntl(%d, F_GETFD)", f);

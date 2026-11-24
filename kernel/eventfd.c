@@ -4,16 +4,22 @@
 
 static struct fd_ops eventfd_ops;
 
+// EFD_SEMAPHORE: a read takes 1 of the count and says 1, as Linux's
+// eventfd_read, where without it a read takes the count and says it. It was
+// EINVAL (CPython's test_os, test_eventfd_semaphore).
+#define EFD_SEMAPHORE_ 1
+
 int_t sys_eventfd2(uint_t initval, int_t flags) {
     STRACE("eventfd(%d, %#x)", initval, flags);
-    if (flags & ~(O_CLOEXEC_|O_NONBLOCK_))
+    if (flags & ~(O_CLOEXEC_|O_NONBLOCK_|EFD_SEMAPHORE_))
         return _EINVAL;
 
     struct fd *fd = adhoc_fd_create(&eventfd_ops);
     if (fd == NULL)
         return _ENOMEM;
     fd->eventfd.val = initval;
-    return f_install(fd, flags);
+    fd->eventfd.semaphore = flags & EFD_SEMAPHORE_;
+    return f_install(fd, flags & ~EFD_SEMAPHORE_);
 }
 int_t sys_eventfd(uint_t initval) {
     return sys_eventfd2(initval, 0);
@@ -35,8 +41,9 @@ static ssize_t eventfd_read(struct fd *fd, void *buf, size_t bufsize) {
         }
     }
 
-    *(uint64_t *) buf = fd->eventfd.val;
-    fd->eventfd.val = 0;
+    uint64_t taken = fd->eventfd.semaphore ? 1 : fd->eventfd.val;
+    *(uint64_t *) buf = taken;
+    fd->eventfd.val -= taken;
     notify(&fd->cond);
     unlock(&fd->lock);
     poll_wakeup(fd, POLL_WRITE);

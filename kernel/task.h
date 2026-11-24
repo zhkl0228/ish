@@ -35,6 +35,9 @@ struct task {
     // The CPUs it may run on, a bit each, as sched_setaffinity set them; 0
     // for all. Locked by pids_lock. A child has its parent's (task_create_).
     uint64_t cpu_affinity;
+    // Its nice, -20 to 19, as setpriority set it. Locked by pids_lock. A
+    // child has its parent's; exec keeps it.
+    int nice;
     bool undumpable; // prctl(PR_SET_DUMPABLE, 0); inherited by fork, cleared by exec
 
     struct fdtable *files;

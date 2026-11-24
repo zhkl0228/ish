@@ -192,6 +192,7 @@ struct fd *adhoc_fd_create(const struct fd_ops *ops);
 unsigned long adhoc_new_inode(void);
 // this is for the "wtf is apple smoking" section
 bool is_adhoc_fd(struct fd *fd);
+bool fd_is_memfd(struct fd *fd);
 
 // filesystems
 extern const struct fs_ops procfs;

@@ -394,13 +394,87 @@ int_t sys_sched_setaffinity(pid_t_ pid, dword_t cpusetsize, addr_t cpuset_addr) 
     return 0;
 }
 
+// A task's nice, as setpriority set it (task->nice). iSH cannot give a
+// host thread one, so the task runs as iOS runs it; what is kept is what
+// the task was given, which is what is read of it: nice, renice, ps, and
+// CPython's os.getpriority. getpriority said 20 (nice 0) of anything, and
+// setpriority said success and forgot it (CPython's test_os,
+// test_set_get_priority).
+//
+// As Linux's: PRIO_PROCESS names a task by its pid, PRIO_PGRP a process
+// group, PRIO_USER a user, 0 the caller's; none of it is ESRCH, which another
+// is EINVAL. setpriority clamps the nice to -20..19, and lowering it needs
+// privilege (EACCES); getpriority says 20 less the lowest nice of them, which
+// libc takes 20 from.
+#define PRIO_PROCESS_ 0
+#define PRIO_PGRP_ 1
+#define PRIO_USER_ 2
+
+static bool prio_matches(struct task *task, int_t which, pid_t_ who) {
+    switch (which) {
+        case PRIO_PROCESS_:
+            return task->pid == who;
+        case PRIO_PGRP_:
+            return task->group->pgid == who;
+        case PRIO_USER_:
+            return task->uid == (uid_t_) who;
+    }
+    return false;
+}
+
+static pid_t_ prio_who(int_t which, pid_t_ who) {
+    if (who != 0)
+        return who;
+    switch (which) {
+        case PRIO_PROCESS_:
+            return current->pid;
+        case PRIO_PGRP_:
+            return current->group->pgid;
+        default:
+            return (pid_t_) current->uid;
+    }
+}
+
 int_t sys_getpriority(int_t which, pid_t_ who) {
     STRACE("getpriority(%d, %d)", which, who);
-    return 20;
+    if (which != PRIO_PROCESS_ && which != PRIO_PGRP_ && which != PRIO_USER_)
+        return _EINVAL;
+    lock(&pids_lock);
+    who = prio_who(which, who);
+    int lowest = 20;
+    for (pid_t_ pid = 1; pid <= MAX_PID; pid++) {
+        struct task *task = pid_get_task(pid);
+        if (task != NULL && !task->exiting && prio_matches(task, which, who) && task->nice < lowest)
+            lowest = task->nice;
+    }
+    unlock(&pids_lock);
+    if (lowest == 20)
+        return _ESRCH;
+    return 20 - lowest;
 }
+
 int_t sys_setpriority(int_t which, pid_t_ who, int_t prio) {
     STRACE("setpriority(%d, %d, %d)", which, who, prio);
-    return 0;
+    if (which != PRIO_PROCESS_ && which != PRIO_PGRP_ && which != PRIO_USER_)
+        return _EINVAL;
+    int nice = prio < -20 ? -20 : prio > 19 ? 19 : prio;
+    int err = _ESRCH;
+    lock(&pids_lock);
+    who = prio_who(which, who);
+    for (pid_t_ pid = 1; pid <= MAX_PID; pid++) {
+        struct task *task = pid_get_task(pid);
+        if (task == NULL || task->exiting || !prio_matches(task, which, who))
+            continue;
+        if (nice < task->nice && !superuser()) {
+            err = _EACCES;
+            continue;
+        }
+        task->nice = nice;
+        if (err == _ESRCH)
+            err = 0;
+    }
+    unlock(&pids_lock);
+    return err;
 }
 
 // realtime scheduling stubs

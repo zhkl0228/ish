@@ -35,6 +35,7 @@ dword_t sys_fork(void);
 dword_t sys_vfork(void);
 dword_t sys_execve(addr_t file, addr_t argv, addr_t envp);
 dword_t sys_execveat(fd_t dirfd, addr_t path, addr_t argv, addr_t envp, dword_t flags);
+int_t sys_memfd_create(addr_t name, uint_t flags);
 int do_execve(const char *file, size_t argc, const char *argv, const char *envp);
 dword_t sys_exit(dword_t status);
 noreturn void do_exit(int status);

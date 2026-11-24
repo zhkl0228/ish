@@ -51,6 +51,7 @@ struct fd {
         } epollfd;
         struct {
             uint64_t val;
+            bool semaphore; // EFD_SEMAPHORE: a read takes 1
         } eventfd;
         // signalfd (kernel/signalfd.c): the signals it reads (a sigset_t_),
         // the sighands of those polling it, and whether a wakeup of its
@@ -137,6 +138,11 @@ struct fd {
             // length of actual data stored in the buffer
             size_t buffer_len;
         } clipboard;
+
+        // memfd (memfd_create, fs/adhoc.c): its name, /proc/<pid>/fd's
+        struct {
+            char name[250];
+        } memfd;
 
         // can fit anything in here
         void *data;
