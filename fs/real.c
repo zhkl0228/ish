@@ -324,6 +324,12 @@ off_t realfs_lseek(struct fd *fd, off_t offset, int whence) {
 }
 
 int realfs_poll(struct fd *fd) {
+    // A regular file or a directory is always ready, as Linux has it
+    // (DEFAULT_POLLMASK, whatever it was opened for). Darwin's poll of a
+    // directory says nothing, and a poll of one waited out its timeout.
+    // POLLIN and POLLOUT are the same bits on both.
+    if (S_ISREG(fd->type) || S_ISDIR(fd->type))
+        return POLLIN | POLLOUT;
     struct pollfd p = {.fd = fd->real_fd, .events = POLLPRI};
     // prevent POLLNVAL
     int flags = fcntl(fd->real_fd, F_GETFL, 0);
