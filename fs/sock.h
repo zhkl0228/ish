@@ -242,6 +242,7 @@ static inline int sock_flags_from_real(int real) {
 #define IP_RECVERR_ 11
 #define IP_RECVTTL_ 12
 #define IP_RECVTOS_ 13
+#define IP_MULTICAST_ALL_ 49
 #define TCP_NODELAY_ 1
 #define TCP_CORK_ 3
 #define TCP_KEEPIDLE_ 4
@@ -251,8 +252,10 @@ static inline int sock_flags_from_real(int real) {
 #define TCP_INFO_ 11
 #define TCP_CONGESTION_ 13
 #define IPV6_UNICAST_HOPS_ 16
+#define IPV6_MULTICAST_HOPS_ 18
 #define IPV6_RECVERR_ 25
 #define IPV6_V6ONLY_ 26
+#define IPV6_RECVPKTINFO_ 49
 #define IPV6_TCLASS_ 67
 #define ICMP6_FILTER_ 1
 
@@ -314,6 +317,7 @@ static inline int sock_opt_to_real(int fake, int level) {
         } break;
         case IPPROTO_IPV6: switch (fake) {
             case IPV6_UNICAST_HOPS_: return IPV6_UNICAST_HOPS;
+            case IPV6_MULTICAST_HOPS_: return IPV6_MULTICAST_HOPS; // Java sets 1 on every UDP socket
             case IPV6_TCLASS_: return IPV6_TCLASS;
             case IPV6_V6ONLY_: return IPV6_V6ONLY;
         } break;

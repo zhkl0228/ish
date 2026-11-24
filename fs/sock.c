@@ -1515,6 +1515,19 @@ int_t sys_setsockopt(fd_t sock_fd, dword_t level, dword_t option, addr_t value_a
     if ((level == IPPROTO_IP && option == IP_RECVERR_) ||
             (level == IPPROTO_IPV6 && option == IPV6_RECVERR_))
         return 0;
+    // IP_MULTICAST_ALL 0: a socket gets the datagrams of only the groups it
+    // joined itself, not of every group some socket on the host joined. That
+    // is how Darwin delivers them, so 0 is accepted as it stands; 1 has no
+    // Darwin equivalent and stays unknown below. Java clears it on every UDP
+    // socket and gives up on the socket when that fails, so no DatagramSocket
+    // could be made: Gradle died at its start, its file-lock listener being
+    // one. On an IPv6 socket Java passes the same number at the IPv6 level,
+    // which is Linux's IPV6_RECVPKTINFO, and 0 is that option's default.
+    static const int32_t off = 0;
+    if (((level == IPPROTO_IP && option == IP_MULTICAST_ALL_) ||
+            (level == IPPROTO_IPV6 && option == IPV6_RECVPKTINFO_)) &&
+            value_len == sizeof(off) && memcmp(value, &off, sizeof(off)) == 0)
+        return 0;
     // [STAGE-0 PROBE] SO_BINDTODEVICE: bind this socket to a named interface.
     // iSH has no interface model at all (/proc/net/dev is hardcoded dummy
     // data), and Darwin's nearest equivalent is IP_BOUND_IF, which takes an

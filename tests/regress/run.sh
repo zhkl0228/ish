@@ -747,6 +747,17 @@ EOF
         status=1
     fi
     echo
+    echo "########## the options Java sets on every UDP socket ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_udp_java_opts" tests/regress/regress_udp_java_opts.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_udp_java_opts 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_udp_java_opts"
+    else
+        echo "failed to build regress_udp_java_opts" >&2
+        status=1
+    fi
+    echo
     echo "########## AF_PACKET sockets and the interface ioctls, as libpcap uses them ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_packet" tests/regress/regress_packet.c; then
         out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_packet 2>&1)
