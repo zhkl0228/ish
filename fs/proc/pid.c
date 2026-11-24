@@ -430,7 +430,10 @@ static void proc_maps_show_regions(struct task *task, struct proc_data *buf, boo
         } else if (data->name != NULL) {
             strcpy(path, data->name);
         } else if (data->fd != NULL) {
-            generic_getpath(start_pt->data->fd, path);
+            // a file with no path in the guest (realfs_getpath logs why)
+            // is listed with none, not the host's path left in path
+            if (generic_getpath(start_pt->data->fd, path) < 0)
+                path[0] = '\0';
         }
 #ifdef GUEST_ARM64
         proc_printf(buf, "%012llx-%012llx %c%c%c%c %08lx 00:00 %-10d %s\n",

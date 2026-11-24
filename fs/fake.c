@@ -1108,7 +1108,10 @@ retry:
 
     // this is annoying
     char entry_path[MAX_PATH + 1];
-    realfs_getpath(fd, entry_path);
+    // an entry's meta.db row is found by its path: none without the dir's
+    int err = realfs_getpath(fd, entry_path);
+    if (err < 0)
+        return err;
 
     /* [T-ios-log-verbose-tier] Per-ENTRY trace, gated on the app's Verbose
      * level. Unconditional it produced 1.68 M lines / 183 MB in one day from

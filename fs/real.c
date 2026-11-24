@@ -719,6 +719,12 @@ ssize_t realfs_readlink(struct mount *mount, const char *path, char *buf, size_t
     return size;
 }
 
+// Whether path is prefix, of length len, or a path under it: "/a/data2" is not
+// under "/a/data"
+static bool path_under(const char *path, const char *prefix, size_t len) {
+    return strncmp(path, prefix, len) == 0 && (path[len] == '\0' || path[len] == '/');
+}
+
 int realfs_getpath(struct fd *fd, char *buf) {
     int err = getpath(fd->real_fd, buf);
     if (err < 0)
@@ -745,18 +751,26 @@ int realfs_getpath(struct fd *fd, char *buf) {
          * F_GETPATH resolves symlinks, so bind-mounted paths may point outside
          * mount->source when the bind mount table has been cleared (e.g. after
          * app restart before mountMinis re-registers the mounts). */
-        if (strncmp(buf, fd->mount->source, source_len) == 0) {
+        if (path_under(buf, fd->mount->source, source_len)) {
             memmove(buf, buf + source_len, MAX_PATH - source_len);
         } else if (strncmp(fd->mount->source, "/var/", 5) == 0 &&
                    strncmp(buf, "/private", 8) == 0 &&
-                   strncmp(buf + 8, fd->mount->source, source_len) == 0) {
+                   path_under(buf + 8, fd->mount->source, source_len)) {
             /* F_GETPATH returns /private/var/... but mount->source is /var/...
              * Strip /private prefix + mount->source from buf. */
             memmove(buf, buf + 8 + source_len, MAX_PATH - 8 - source_len);
         } else {
-            /* Path is outside mount source (stale bind mount symlink resolved
-             * by F_GETPATH). Return root as a safe fallback. */
-            strcpy(buf, "/");
+            // Outside the mount, and no bind mount's (a bind mount's link
+            // whose table was cleared: the app restarted, mountMinis yet to
+            // register it again): the file has no path in the guest. ENOENT,
+            // as Linux's getcwd of a directory out of the root's reach. It
+            // was "/", and every call by the fd's path acted on the root
+            // instead, saying nothing: futimens set the root's times, a file
+            // made by openat from it as a dirfd was made in /. Logged, with
+            // what it takes to see why.
+            printk("realfs_getpath: fd %d's host path \"%s\" is not under its mount's source \"%s\" (at \"%s\"), nor a bind mount's\n",
+                    fd->real_fd, buf, fd->mount->source, fd->mount->point);
+            return _ENOENT;
         }
     }
     return 0;

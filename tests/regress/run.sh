@@ -1043,6 +1043,23 @@ EOF
     fi
     rm -rf "$opendirdir"
     echo
+    echo "########## a directory whose host path is out of its fakefs (a stale bind mount's link): ENOENT, not the root's ##########"
+    # its /mnt made at a first boot, then on the host a link out of the fakefs
+    outsidedir=$(mktemp -d "$(cd "$(dirname "$ROOTFS")" && pwd)/regress-getpath_outside.XXXXXX")
+    if fakefs_init "$outsidedir" tests/regress/regress_getpath_outside.c &&
+        timeout 30 "$ISH" -f "$outsidedir/fs" /init setup &&
+        mkdir "$outsidedir/outside" && rmdir "$outsidedir/fs/data/mnt" &&
+        ln -s "$outsidedir/outside" "$outsidedir/fs/data/mnt"
+    then
+        out=$(timeout 60 "$ISH" -f "$outsidedir/fs" /init check 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+    else
+        echo "failed to set up regress_getpath_outside (needs $FAKEFSIFY and python3)" >&2
+        status=1
+    fi
+    rm -rf "$outsidedir"
+    echo
     echo "########## interval timers: getitimer, fired one-shots, bad ids, TIMER_ABSTIME 0, timerfd set again ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_timer_values" tests/regress/regress_timer_values.c; then
         out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_timer_values 2>&1)
