@@ -171,6 +171,32 @@ int main(void) {
     check("TFD_TIMER_ABSTIME with 0 disarms a timerfd", r == 0 && got == -1 && e == EAGAIN && ts(cur.it_value) == 0,
           detail);
 
+    // a negative time, or nanoseconds past a second, is EINVAL, as Linux's
+    // itimerspec64_valid (iSH took one for a time long past: CPython's
+    // test_os, test_timerfd_negative)
+    struct itimerspec bad[] = {
+        {.it_value = {-1, 0}}, {.it_value = {1, 0}, .it_interval = {0, -1}},
+        {.it_value = {0, 1000000000}},
+    };
+    int all_einval = 1;
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        errno = 0;
+        if (timerfd_settime(fd, 0, &bad[i], NULL) != -1 || errno != EINVAL)
+            all_einval = 0;
+        errno = 0;
+        if (timerfd_settime(fd, TFD_TIMER_ABSTIME, &bad[i], NULL) != -1 || errno != EINVAL)
+            all_einval = 0;
+    }
+    timer_t bad_t;
+    timer_create(CLOCK_MONOTONIC, &none, &bad_t);
+    errno = 0;
+    r = timer_settime(bad_t, 0, &bad[0], NULL);
+    e = errno;
+    timer_delete(bad_t);
+    snprintf(detail, sizeof(detail), "timerfd: %s; timer_settime: %d (%s)", all_einval ? "EINVAL" : "not all EINVAL",
+             r, r < 0 ? strerror(e) : "ok");
+    check("a negative time or nanoseconds past a second is EINVAL", all_einval && r == -1 && e == EINVAL, detail);
+
     struct itimerspec fast = {.it_value = {0, 50000}, .it_interval = {0, 50000}};
     for (int i = 0; i < 2000; i++)
         timerfd_settime(fd, 0, &fast, NULL);
