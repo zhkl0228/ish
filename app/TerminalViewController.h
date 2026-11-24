@@ -27,6 +27,9 @@
 // it was in, under what it showed. NO if none were saved.
 - (BOOL)restoreSavedTabs;
 @property (readonly) NSUUID *sessionTerminalUUID;
+// Shows the tab of the session with this uuid if it is one of this window's
+// (a notification of it tapped). Whether it is.
+- (BOOL)showSessionWithUUID:(NSUUID *)uuid;
 @property UISceneSession *sceneSession API_AVAILABLE(ios(13.0));
 
 @end

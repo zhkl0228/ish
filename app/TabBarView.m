@@ -65,9 +65,11 @@ static NSString *SymbolForProgram(NSString *_Nullable program) {
 @interface TabItemView : UIControl
 @property (readonly) UIImageView *icon;
 @property (readonly) UILabel *label;
-// What it did unseen: output, or a job that ended
+// What it did unseen: output, a job that ended, or a bell (a program's
+// notification too)
 @property (readonly) UIView *dot;
 @property (readonly) UIImageView *check;
+@property (readonly) UIImageView *bell;
 // ⌘1…⌘9, with a hardware keyboard
 @property (readonly) UILabel *hintLabel;
 // Restart, once its shell exited
@@ -105,6 +107,11 @@ static NSString *SymbolForProgram(NSString *_Nullable program) {
             [UIImageSymbolConfiguration configurationWithPointSize:10 weight:UIImageSymbolWeightBold];
         _check.contentMode = UIViewContentModeCenter;
 
+        _bell = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"bell.fill"]];
+        _bell.preferredSymbolConfiguration =
+            [UIImageSymbolConfiguration configurationWithPointSize:10 weight:UIImageSymbolWeightBold];
+        _bell.contentMode = UIViewContentModeCenter;
+
         _hintLabel = [UILabel new];
         _hintLabel.font = TabFont();
         _hintLabel.adjustsFontForContentSizeCategory = YES;
@@ -113,12 +120,12 @@ static NSString *SymbolForProgram(NSString *_Nullable program) {
         _actionButton = [UIButton buttonWithType:UIButtonTypeSystem];
         _actionButton.pointerInteractionEnabled = YES;
 
-        for (UIView *view in @[_icon, _dot, _check, _hintLabel, _actionButton]) {
+        for (UIView *view in @[_icon, _dot, _check, _bell, _hintLabel, _actionButton]) {
             [view setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
             [view setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
         }
 
-        UIStackView *content = [[UIStackView alloc] initWithArrangedSubviews:@[_icon, _label, _dot, _check, _hintLabel, _actionButton]];
+        UIStackView *content = [[UIStackView alloc] initWithArrangedSubviews:@[_icon, _label, _dot, _check, _bell, _hintLabel, _actionButton]];
         content.axis = UILayoutConstraintAxisHorizontal;
         content.alignment = UIStackViewAlignmentCenter;
         content.spacing = kCapsuleSpacing;
@@ -266,6 +273,9 @@ static NSString *SymbolForProgram(NSString *_Nullable program) {
         _scrollView.showsVerticalScrollIndicator = NO;
         _scrollView.alwaysBounceVertical = NO;
         _scrollView.delaysContentTouches = NO;
+        // A tap on the status bar scrolls the terminal (TerminalView), which
+        // takes the other scroll views on screen not having it
+        _scrollView.scrollsToTop = NO;
         _scrollView.translatesAutoresizingMaskIntoConstraints = NO;
         [self addSubview:_scrollView];
 
@@ -386,10 +396,16 @@ static NSString *SymbolForProgram(NSString *_Nullable program) {
         NSString *title = session.displayTitle;
         item.label.text = title;
         item.icon.image = [UIImage systemImageNamed:item.exited ? @"xmark.circle" : SymbolForProgram(session.foregroundProgram)];
-        item.hintLabel.text = [NSString stringWithFormat:@"⌘%lu", (unsigned long) i + 1];
+        // ⌘1 to ⌘8 the first eight, ⌘9 the last (TerminalViewController)
+        if (i < 8)
+            item.hintLabel.text = [NSString stringWithFormat:@"⌘%lu", (unsigned long) i + 1];
+        else
+            item.hintLabel.text = i == sessions.count - 1 ? @"⌘9" : nil;
         item.accessibilityLabel = title;
         if (item.exited)
             item.accessibilityValue = @"exited";
+        else if (!item.tabSelected && item.activity == TerminalSessionActivityBell)
+            item.accessibilityValue = @"bell";
         else if (!item.tabSelected && item.activity == TerminalSessionActivityFinished)
             item.accessibilityValue = @"finished";
         else if (!item.tabSelected && item.activity == TerminalSessionActivityOutput)
@@ -468,22 +484,25 @@ static NSString *SymbolForProgram(NSString *_Nullable program) {
         item.icon.tintColor = text;
         item.dot.backgroundColor = UIColor.systemBlueColor;
         item.check.tintColor = UIColor.systemGreenColor;
+        item.bell.tintColor = UIColor.systemOrangeColor;
         item.hintLabel.textColor = hintText;
         item.actionButton.tintColor = [self.foreground colorWithAlphaComponent:item.tabSelected ? 0.7 : 0.55];
-        [self updateAccessoriesOfItem:item showingHint:showHints && i < 9];
+        [self updateAccessoriesOfItem:item showingHint:showHints && item.hintLabel.text != nil];
     }];
 }
 
 // What a tab shows at its end: the restart arrow once its shell exited; else,
-// not selected, what it did unseen, a job that ended before output; else its
-// ⌘ number with a keyboard
+// not selected, what it did unseen, a bell before a job that ended before
+// output (TerminalSession's activity); else its ⌘ number with a keyboard
 - (void)updateAccessoriesOfItem:(TabItemView *)item showingHint:(BOOL)showHint {
     BOOL action = item.exited;
     BOOL unseen = !action && !item.tabSelected;
+    BOOL bell = unseen && item.activity == TerminalSessionActivityBell;
     BOOL check = unseen && item.activity == TerminalSessionActivityFinished;
     BOOL dot = unseen && item.activity == TerminalSessionActivityOutput;
-    BOOL hint = !action && !check && !dot && showHint;
+    BOOL hint = !action && !bell && !check && !dot && showHint;
     item.actionButton.hidden = !action;
+    item.bell.hidden = !bell;
     item.check.hidden = !check;
     item.dot.hidden = !dot;
     item.hintLabel.hidden = !hint;

@@ -21,6 +21,7 @@ typedef NS_ENUM(NSInteger, TerminalSessionActivity) {
     TerminalSessionActivityNone,
     TerminalSessionActivityOutput,   // it wrote something
     TerminalSessionActivityFinished, // the job that owned its terminal ended
+    TerminalSessionActivityBell,     // a program rang the bell or sent a notification
 };
 
 typedef NS_ENUM(NSInteger, TerminalSessionState) {
@@ -48,9 +49,12 @@ typedef NS_ENUM(NSInteger, TerminalSessionState) {
 // terminal: TerminalSessionStore checks it every second and on each title a
 // program sets, and a change posts TerminalSessionDidChangeNotification.
 @property (readonly) NSString *displayTitle;
-// What it did since its tab was last looked at: a job that owned the terminal
-// for a second or more ended, else it wrote something. Checked with the title,
-// a change posted the same way. None once it is not running.
+// What it did since its tab was last looked at: a program asked to be told
+// of (the bell, a notification: claude waiting for an answer), else a job
+// that owned the terminal for a second or more ended, else it wrote
+// something. Checked with the title, a change posted the same way; the first
+// at once, and with the app away, a notification of the system's too. None
+// once it is not running.
 @property (readonly) TerminalSessionActivity activity;
 // Its tab is looked at: what it did so far is seen
 - (void)markSeen;
@@ -74,6 +78,9 @@ typedef NS_ENUM(NSInteger, TerminalSessionState) {
 // Posted on the main thread with the session as the object whenever its state
 // or title changes.
 extern NSNotificationName const TerminalSessionDidChangeNotification;
+// In the userInfo of a session's notification of the system's (a program
+// asked to be told of with the app away): the session's uuid, a string
+extern NSString *const TerminalSessionNotificationUUIDKey;
 
 @interface TerminalSessionStore : NSObject
 

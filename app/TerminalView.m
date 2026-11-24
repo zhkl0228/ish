@@ -38,14 +38,34 @@ struct rowcol {
 @property CGFloat wheelVelocity;
 @property CGPoint wheelPoint;
 
-@property (nullable) NSString *markedText;
+// A pinch's font size: the size it started from, and whether it has gone
+// far enough to change it (a two-finger swipe to another tab does not)
+@property int pinchStartSize;
+@property BOOL pinchZooms;
+// Down to the terminal's bottom, shown while it is scrolled up more than a
+// screen (updateBottomButton)
+@property UIButton *bottomButton;
+// The size changed here: the next style shows it (sizeLabel)
+@property BOOL showsSizeAtNextStyle;
+@property (nullable) UIVisualEffectView *sizeView;
+@property (nullable) UILabel *sizeLabel;
+
+// What an input method is putting together, drawn at the cursor (term.js's
+// setComposition)
+@property (nonatomic, nullable) NSString *markedText;
+// Where the cursor is in the web view (term.js's cursorRect): an input
+// method's candidates go by it
+@property CGRect cursorRect;
 @property (nullable) NSString *selectedText;
 @property UITextRange *markedRange;
 @property UITextRange *selectedRange;
 
-// The selection's menu (Copy), and where it points: the selection's rows
+// The selection's menu (Copy, and Open Link for a link), and where it points:
+// the selection's rows
 @property UIEditMenuInteraction *editMenu API_AVAILABLE(ios(16.0));
 @property CGRect selectionRect;
+@property (nullable) NSString *selectionLink;
+@property UIImpactFeedbackGenerator *pressFeedback;
 
 @property struct rowcol floatingCursor;
 @property CGSize floatingCursorSensitivity;
@@ -91,6 +111,12 @@ struct rowcol {
     select.minimumPressDuration = 0.4;
     select.delegate = self;
     [self addGestureRecognizer:select];
+    self.pressFeedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+
+    // Two fingers pinched or spread: the font smaller or bigger
+    UIPinchGestureRecognizer *pinch = [[UIPinchGestureRecognizer alloc] initWithTarget:self action:@selector(pinched:)];
+    pinch.delegate = self;
+    [self addGestureRecognizer:pinch];
 
     UserPreferences *prefs = UserPreferences.shared;
     [prefs observe:@[@"capsLockMapping", @"optionMapping", @"backtickMapEscape", @"overrideControlSpace"]
@@ -105,6 +131,31 @@ struct rowcol {
             [self _updateStyle];
         });
     }];
+    [NSNotificationCenter.defaultCenter addObserver:self
+                                           selector:@selector(darkerColorsChanged:)
+                                               name:UIAccessibilityDarkerSystemColorsStatusDidChangeNotification
+                                             object:nil];
+
+    // Scrolled up more than a screen: a button to go back down (bottomButton)
+    __weak typeof(self) weakSelf = self;
+    UIButtonConfiguration *config = [UIButtonConfiguration grayButtonConfiguration];
+    config.image = [UIImage systemImageNamed:@"arrow.down"];
+    config.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
+    UIButton *bottom = [UIButton buttonWithConfiguration:config primaryAction:[UIAction actionWithHandler:^(UIAction *_) {
+        [weakSelf.terminal.webView evaluateJavaScript:@"exports.scrollToBottom()" completionHandler:nil];
+    }]];
+    bottom.accessibilityLabel = @"Scroll to Bottom";
+    bottom.translatesAutoresizingMaskIntoConstraints = NO;
+    bottom.alpha = 0;
+    bottom.userInteractionEnabled = NO;
+    [self addSubview:bottom];
+    [NSLayoutConstraint activateConstraints:@[
+        [bottom.widthAnchor constraintEqualToConstant:40],
+        [bottom.heightAnchor constraintEqualToConstant:40],
+        [bottom.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-12],
+        [bottom.bottomAnchor constraintEqualToAnchor:self.bottomAnchor constant:-12],
+    ]];
+    self.bottomButton = bottom;
 
     self.markedRange = [UITextRange new];
     self.selectedRange = [UITextRange new];
@@ -123,7 +174,8 @@ struct rowcol {
     }
 }
 
-static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollRange", @"newScrollTop", @"newWheelScrolling", @"openLink"};
+static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollRange", @"newScrollTop", @"newWheelScrolling", @"openLink",
+                                     @"findResults", @"cursorRect"};
 
 - (void)setTerminal:(Terminal *)terminal {
     if (_terminal) {
@@ -148,6 +200,9 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollRange", 
     WKWebView *webView = _terminal.webView;
     _terminal.enableVoiceOverAnnounce = YES;
     webView.scrollView.scrollEnabled = NO;
+    // A tap on the status bar is the terminal's scroll view's (to the top of
+    // the scrollback), which takes this one's and the tab strip's not having it
+    webView.scrollView.scrollsToTop = NO;
     webView.scrollView.delaysContentTouches = NO;
     webView.scrollView.canCancelContentTouches = NO;
     webView.scrollView.panGestureRecognizer.enabled = NO;
@@ -184,6 +239,11 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollRange", 
     }
 
     [self stopWheelMomentum];
+    // what an input method had put together stays with this view, not the page
+    if (_markedText != nil) {
+        _markedText = nil;
+        [_terminal.webView evaluateJavaScript:@"exports.setComposition('')" completionHandler:nil];
+    }
     [_terminal.webView removeFromSuperview];
     self.scrollbarView.contentView = nil;
     for (int i = 0; i < sizeof(HANDLERS)/sizeof(HANDLERS[0]); i++) {
@@ -198,32 +258,42 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollRange", 
     NSAssert(NSThread.isMainThread, @"This method needs to be called on the main thread");
     if (!self.terminal.loaded)
         return;
+    BOOL showSize = self.showsSizeAtNextStyle;
+    self.showsSizeAtNextStyle = NO;
     UserPreferences *prefs = [UserPreferences shared];
-    if (_overrideFontSize == prefs.fontSize.doubleValue)
-        _overrideFontSize = 0;
     Palette *palette = prefs.palette;
     if (self.overrideAppearance != OverrideAppearanceNone) {
         palette = self.overrideAppearance == OverrideAppearanceLight ? prefs.theme.lightPalette : prefs.theme.darkPalette;
     }
     NSMutableDictionary<NSString *, id> *themeInfo = [@{
         @"fontFamily": prefs.fontFamily,
-        @"fontSize": @(self.effectiveFontSize),
+        @"fontSize": prefs.fontSize,
         @"foregroundColor": palette.foregroundColor,
         @"backgroundColor": palette.backgroundColor,
         @"blinkCursor": @(prefs.blinkCursor),
+        @"minimumContrastRatio": @(UIAccessibilityDarkerSystemColorsEnabled() ? 4.5 : 1),
         @"cursorShape": prefs.cursorShapeName,
     } mutableCopy];
     if (prefs.palette.colorPaletteOverrides) {
         themeInfo[@"colorPaletteOverrides"] = palette.colorPaletteOverrides;
     }
     NSString *json = [[NSString alloc] initWithData:[NSJSONSerialization dataWithJSONObject:themeInfo options:0 error:nil] encoding:NSUTF8StringEncoding];
-    [self.terminal.webView evaluateJavaScript:[NSString stringWithFormat:@"exports.updateStyle(%@)", json] completionHandler:^(id result, NSError *error){
+    int fontSize = prefs.fontSize.intValue;
+    // updateStyle returns the columns and rows the style makes
+    [self.terminal.webView evaluateJavaScript:[NSString stringWithFormat:@"exports.updateStyle(%@)", json] completionHandler:^(NSArray<NSNumber *> *size, NSError *error){
+        if (error != nil) {
+            NSLog(@"updateStyle: %@", error);
+            return;
+        }
         [self updateFloatingCursorSensitivity];
+        if (showSize)
+            [self showFontSize:fontSize columns:size[0].intValue rows:size[1].intValue];
     }];
 }
 
-- (void)setOverrideFontSize:(CGFloat)overrideFontSize {
-    _overrideFontSize = overrideFontSize;
+// Increase Contrast, turned on or off in Settings: the terminal's colors
+// lightened or darkened to read, or not (_updateStyle)
+- (void)darkerColorsChanged:(NSNotification *)notification {
     [self _updateStyle];
 }
 
@@ -232,10 +302,82 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollRange", 
     [self _updateStyle];
 }
 
-- (CGFloat)effectiveFontSize {
-    if (self.overrideFontSize != 0)
-        return self.overrideFontSize;
-    return UserPreferences.shared.fontSize.doubleValue;
+// The sizes the font can be: as small as can still be read, as big as
+// Settings' stepper goes
+static const int kMinFontSize = 6;
+static const int kMaxFontSize = 72;
+
+- (void)changeFontSize:(int)size {
+    size = MAX(kMinFontSize, MIN(kMaxFontSize, size));
+    UserPreferences *prefs = UserPreferences.shared;
+    if (size == prefs.fontSize.intValue)
+        return;
+    // shown once the terminal has it: _updateStyle, which the preference's
+    // observer calls on the main queue after this
+    self.showsSizeAtNextStyle = YES;
+    prefs.fontSize = @(size);
+}
+
+// A pinch zooms the font once it has gone a tenth either way (a two-finger
+// swipe to another tab does not), then as far as the fingers go
+- (void)pinched:(UIPinchGestureRecognizer *)pinch {
+    switch (pinch.state) {
+        case UIGestureRecognizerStateBegan:
+            self.pinchStartSize = UserPreferences.shared.fontSize.intValue;
+            self.pinchZooms = NO;
+            break;
+        case UIGestureRecognizerStateChanged:
+            if (!self.pinchZooms) {
+                if (fabs(log(pinch.scale)) < log(1.1))
+                    return;
+                // the fingers moving are the font's, not a scroll
+                self.pinchZooms = YES;
+                self.scrollbarView.panGestureRecognizer.enabled = NO;
+            }
+            [self changeFontSize:(int) round(self.pinchStartSize * pinch.scale)];
+            break;
+        default:
+            if (self.pinchZooms)
+                self.scrollbarView.panGestureRecognizer.enabled = YES;
+            self.pinchZooms = NO;
+            break;
+    }
+}
+
+// The font's size and the terminal's columns and rows, over the terminal for
+// a moment, as the font changes
+- (void)showFontSize:(int)fontSize columns:(int)columns rows:(int)rows {
+    if (self.sizeView == nil) {
+        UIVisualEffectView *view = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemMaterial]];
+        view.userInteractionEnabled = NO;
+        view.layer.cornerRadius = 12;
+        view.clipsToBounds = YES;
+        view.translatesAutoresizingMaskIntoConstraints = NO;
+        UILabel *label = [UILabel new];
+        label.font = [UIFont monospacedDigitSystemFontOfSize:17 weight:UIFontWeightSemibold];
+        label.translatesAutoresizingMaskIntoConstraints = NO;
+        [view.contentView addSubview:label];
+        [self addSubview:view];
+        [NSLayoutConstraint activateConstraints:@[
+            [label.leadingAnchor constraintEqualToAnchor:view.contentView.leadingAnchor constant:16],
+            [label.trailingAnchor constraintEqualToAnchor:view.contentView.trailingAnchor constant:-16],
+            [label.topAnchor constraintEqualToAnchor:view.contentView.topAnchor constant:10],
+            [label.bottomAnchor constraintEqualToAnchor:view.contentView.bottomAnchor constant:-10],
+            [view.centerXAnchor constraintEqualToAnchor:self.centerXAnchor],
+            [view.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
+        ]];
+        self.sizeView = view;
+        self.sizeLabel = label;
+    }
+    UIView *view = self.sizeView;
+    view.overrideUserInterfaceStyle = UserPreferences.shared.requestingDarkAppearance ? UIUserInterfaceStyleDark : UIUserInterfaceStyleLight;
+    self.sizeLabel.text = [NSString stringWithFormat:@"%d pt · %d × %d", fontSize, columns, rows];
+    [self bringSubviewToFront:view];
+    [view.layer removeAllAnimations];
+    view.alpha = 1;
+    [UIView animateWithDuration:0.3 delay:1 options:0 animations:^{
+        view.alpha = 0;
+    } completion:nil];
 }
 
 #pragma mark Focus and scrolling
@@ -306,6 +448,8 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollRange", 
     } else if ([message.name isEqualToString:@"newScrollRange"]) {
         self.scrollRange = [message.body doubleValue];
         [self applyScrollRange];
+        // output below what shows takes it further from the bottom
+        [self updateBottomButton];
     } else if ([message.name isEqualToString:@"newScrollTop"]) {
         CGFloat newOffset = [message.body doubleValue];
         if (self.scrollbarView.contentOffset.y == newOffset)
@@ -317,8 +461,16 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollRange", 
         self.wheelScrolling = [message.body boolValue];
         if (!self.wheelScrolling)
             [self stopWheelMomentum];
+        [self updateBottomButton];
     } else if ([message.name isEqualToString:@"openLink"]) {
         [UIApplication openURL:message.body];
+    } else if ([message.name isEqualToString:@"findResults"]) {
+        NSArray<NSNumber *> *results = message.body;
+        if (self.findResults != nil)
+            self.findResults(results[0].integerValue, results[1].integerValue);
+    } else if ([message.name isEqualToString:@"cursorRect"]) {
+        NSArray<NSNumber *> *rect = message.body;
+        self.cursorRect = CGRectMake(rect[0].doubleValue, rect[1].doubleValue, rect[2].doubleValue, rect[3].doubleValue);
     }
 }
 
@@ -333,6 +485,8 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollRange", 
         case UIGestureRecognizerStateBegan:
             // the drag is the selection's, not a scroll
             self.scrollbarView.panGestureRecognizer.enabled = NO;
+            // a tap felt as the word is taken, as in a text field
+            [self.pressFeedback impactOccurred];
             script = @"exports.selectWordAt(x, y)";
             break;
         case UIGestureRecognizerStateChanged:
@@ -364,6 +518,9 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollRange", 
                completionHandler:^(id selection, NSError *error) {
         if (![selection isKindOfClass:NSDictionary.class])
             return;
+        // the URL a link long pressed opens, else null
+        id link = selection[@"link"];
+        self.selectionLink = link == NSNull.null ? nil : link;
         NSArray<NSNumber *> *rect = selection[@"rect"];
         self.selectionRect = [self convertRect:CGRectMake(rect[0].doubleValue, rect[1].doubleValue,
                                                           rect[2].doubleValue, rect[3].doubleValue)
@@ -378,6 +535,9 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollRange", 
         } else {
             // UIMenuController's actions are the first responder's
             [self becomeFirstResponder];
+            UIMenuController.sharedMenuController.menuItems = @[
+                [[UIMenuItem alloc] initWithTitle:@"Open Link" action:@selector(openSelectedLink:)],
+            ];
             [UIMenuController.sharedMenuController showMenuFromView:self rect:self.selectionRect];
         }
     }];
@@ -386,11 +546,28 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollRange", 
 - (UIMenu *)editMenuInteraction:(UIEditMenuInteraction *)interaction menuForConfiguration:(UIEditMenuConfiguration *)configuration suggestedActions:(NSArray<UIMenuElement *> *)suggestedActions API_AVAILABLE(ios(16.0)) {
     // Its own actions, not the first responder's: the keyboard need not be up
     __weak typeof(self) weakSelf = self;
-    return [UIMenu menuWithChildren:@[
-        [UIAction actionWithTitle:@"Copy" image:[UIImage systemImageNamed:@"doc.on.doc"] identifier:nil handler:^(UIAction *action) {
-            [weakSelf copy:nil];
-        }],
-    ]];
+    NSMutableArray<UIMenuElement *> *actions = [NSMutableArray new];
+    if (self.selectionLink != nil) {
+        [actions addObject:[UIAction actionWithTitle:@"Open Link" image:[UIImage systemImageNamed:@"safari"] identifier:nil handler:^(UIAction *_) {
+            [weakSelf openSelectedLink:nil];
+        }]];
+    }
+    [actions addObject:[UIAction actionWithTitle:@"Copy" image:[UIImage systemImageNamed:@"doc.on.doc"] identifier:nil handler:^(UIAction *_) {
+        [weakSelf copy:nil];
+    }]];
+    return [UIMenu menuWithChildren:actions];
+}
+
+// Open Link, in the menu of a link long pressed
+- (void)openSelectedLink:(id)sender {
+    [UIApplication openURL:self.selectionLink];
+    [self.terminal.webView evaluateJavaScript:@"exports.clearSelection()" completionHandler:nil];
+}
+
+- (BOOL)canPerformAction:(SEL)action withSender:(id)sender {
+    if (action == @selector(openSelectedLink:))
+        return self.selectionLink != nil;
+    return [super canPerformAction:action withSender:sender];
 }
 
 - (CGRect)editMenuInteraction:(UIEditMenuInteraction *)interaction targetRectForConfiguration:(UIEditMenuConfiguration *)configuration API_AVAILABLE(ios(16.0)) {
@@ -411,6 +588,19 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollRange", 
     return YES;
 }
 
+// The button down to the bottom: there while what shows is more than a screen
+// above it, which a full-screen program's screen never is
+- (void)updateBottomButton {
+    UIScrollView *scroll = self.scrollbarView;
+    BOOL shown = !self.wheelScrolling && self.scrollRange - scroll.contentOffset.y > scroll.bounds.size.height;
+    if (shown == self.bottomButton.userInteractionEnabled)
+        return;
+    self.bottomButton.userInteractionEnabled = shown;
+    [UIView animateWithDuration:0.2 animations:^{
+        self.bottomButton.alpha = shown ? 1 : 0;
+    }];
+}
+
 - (void)applyScrollRange {
     CGFloat height = self.scrollRange + self.scrollbarView.bounds.size.height;
     if (self.scrollbarView.contentSize.height == height)
@@ -429,6 +619,7 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollRange", 
 }
 
 - (void)scrollViewDidScroll:(UIScrollView *)scrollView {
+    [self updateBottomButton];
     if (self.syncingScroll)
         return;
     [self.terminal.webView evaluateJavaScript:[NSString stringWithFormat:@"exports.newScrollTop(%f)", scrollView.contentOffset.y] completionHandler:nil];
@@ -555,15 +746,34 @@ static BOOL takeBarKey(UIButton *key) {
     [self.terminal sendInput:[sequence dataUsingEncoding:NSUTF8StringEncoding]];
 }
 
-- (void)insertControlChar:(char)ch {
-    if (strchr(controlKeys, ch) != NULL) {
-        if (ch == ' ') ch = '\0';
-        if (ch == '2') ch = '@';
-        if (ch == '6') ch = '^';
-        if (ch != '\0')
-            ch = toupper(ch) ^ 0x40;
-        [self.terminal sendInput:[NSData dataWithBytes:&ch length:1]];
+// What Ctrl and a key send, as xterm sends it: a letter's control character;
+// NUL for space, @ and 2; ESC, FS, GS and RS for [ \ ] and ^ (and 6); US for
+// _, - and /. A key with none (tab, esc, a digit, return) is sent as it is.
+static int controlCharacter(unichar key) {
+    if (key >= 'a' && key <= 'z')
+        return key - 'a' + 1;
+    if (key >= 'A' && key <= 'Z')
+        return key - 'A' + 1;
+    switch (key) {
+        case ' ': case '@': case '2': return 0x00;
+        case '[': return 0x1b;
+        case '\\': return 0x1c;
+        case ']': return 0x1d;
+        case '^': case '6': return 0x1e;
+        case '_': case '-': case '/': return 0x1f;
+        default: return -1;
     }
+}
+
+- (void)insertControlChar:(unichar)key {
+    int control = controlCharacter(key);
+    if (control < 0) {
+        NSString *text = key == '\n' ? @"\r" : [NSString stringWithCharacters:&key length:1];
+        [self.terminal sendInput:[text dataUsingEncoding:NSUTF8StringEncoding]];
+        return;
+    }
+    char byte = (char) control;
+    [self.terminal sendInput:[NSData dataWithBytes:&byte length:1]];
 }
 
 - (void)deleteBackward {
@@ -578,6 +788,26 @@ static BOOL takeBarKey(UIButton *key) {
 
 - (void)setMarkedText:(nullable NSString *)markedText selectedRange:(NSRange)selectedRange {
     self.markedText = markedText;
+}
+
+- (void)setMarkedText:(NSString *)markedText {
+    if (markedText == _markedText || [markedText isEqualToString:_markedText])
+        return;
+    _markedText = markedText;
+    [self.terminal.webView callAsyncJavaScript:@"exports.setComposition(text)"
+                                     arguments:@{@"text": markedText ?: @""}
+                                       inFrame:nil
+                                inContentWorld:WKContentWorld.pageWorld
+                             completionHandler:nil];
+}
+
+// The cursor's cell, where an input method shows its candidates by what it
+// puts together (an iPad's, with a keyboard)
+- (CGRect)cursorRectInView {
+    WKWebView *webView = self.terminal.webView;
+    if (webView.superview == nil)
+        return CGRectZero;
+    return [self convertRect:self.cursorRect fromView:webView];
 }
 
 - (void)unmarkText {
@@ -651,6 +881,18 @@ static BOOL takeBarKey(UIButton *key) {
     [self.terminal.webView evaluateJavaScript:@"exports.reset()" completionHandler:^(id result, NSError *error) {
         [self _updateStyle];
     }];
+}
+
+- (void)find:(NSString *)text backwards:(BOOL)backwards incremental:(BOOL)incremental {
+    [self.terminal.webView callAsyncJavaScript:@"exports.find(text, backwards, incremental)"
+                                     arguments:@{@"text": text, @"backwards": @(backwards), @"incremental": @(incremental)}
+                                       inFrame:nil
+                                inContentWorld:WKContentWorld.pageWorld
+                             completionHandler:nil];
+}
+
+- (void)clearFind {
+    [self.terminal.webView evaluateJavaScript:@"exports.clearFind()" completionHandler:nil];
 }
 
 - (void)fetchTextWithCompletion:(void (^)(NSString *))completion {
@@ -778,6 +1020,27 @@ static BOOL takeBarKey(UIButton *key) {
 
 - (void)handleKeyCommand:(UIKeyCommand *)command {
     NSString *key = command.input;
+    // Shift-Tab: back tab, as xterm sends it (claude's next mode, a
+    // completion menu's previous entry)
+    if ([key isEqualToString:@"\t"] && command.modifierFlags == UIKeyModifierShift) {
+        [self insertSequence:@"\x1b[Z"];
+        return;
+    }
+    // Shift with Page Up, Page Down, Home or End scrolls what the terminal
+    // holds, as in xterm, where there is anything above to scroll: a
+    // full-screen program's screen takes them as keys
+    if (command.modifierFlags == UIKeyModifierShift && !self.wheelScrolling) {
+        NSDictionary<NSString *, NSString *> *scrolls = @{
+            UIKeyInputPageUp: @"exports.scrollPages(-1)",
+            UIKeyInputPageDown: @"exports.scrollPages(1)",
+            UIKeyInputHome: @"exports.scrollToTop()",
+            UIKeyInputEnd: @"exports.scrollToBottom()",
+        };
+        if (scrolls[key] != nil) {
+            [self.terminal.webView evaluateJavaScript:scrolls[key] completionHandler:nil];
+            return;
+        }
+    }
     NSString *special = [self specialKeySequence:key modifiers:command.modifierFlags];
     if (special != nil) {
         [self insertText:special];
@@ -798,18 +1061,13 @@ static BOOL takeBarKey(UIButton *key) {
     } else if (command.modifierFlags & UIKeyModifierControl || command.modifierFlags & UIKeyModifierAlphaShift) {
         if (key.length == 0)
             return;
-        if ([key isEqualToString:@"2"])
-            key = @"@";
-        else if ([key isEqualToString:@"6"])
-            key = @"^";
-        else if ([key isEqualToString:@"-"])
-            key = @"_";
         [self insertControlChar:[key characterAtIndex:0]];
     }
 }
 
 static const char *alphabet = "abcdefghijklmnopqrstuvwxyz";
-static const char *controlKeys = "abcdefghijklmnopqrstuvwxyz@^26-=[]\\ ";
+// The keys that have a control character (controlCharacter)
+static const char *controlKeys = "abcdefghijklmnopqrstuvwxyz@^26-/[]\\ ";
 static const char *metaKeys = "abcdefghijklmnopqrstuvwxyz0123456789-=[]\\;',./";
 
 - (NSArray<UIKeyCommand *> *)keyCommands {
@@ -820,6 +1078,7 @@ static const char *metaKeys = "abcdefghijklmnopqrstuvwxyz0123456789-=[]\\;',./";
     for (NSString *specialKey in @[UIKeyInputEscape, @"\t"]) {
         [self addKey:specialKey withModifiers:0];
     }
+    [self addKey:@"\t" withModifiers:UIKeyModifierShift];
     // Navigation and function keys, with every Shift/Alt/Ctrl combination, so that
     // (UIKeyInputDelete is deliberately absent: it matches Backspace, which must keep going through deleteBackward.)
     // e.g. Ctrl+Arrow reaches the terminal as \e[1;5C instead of being eaten by iPadOS.
@@ -852,6 +1111,9 @@ static const char *metaKeys = "abcdefghijklmnopqrstuvwxyz0123456789-=[]\\;',./";
     }
     if (UserPreferences.shared.optionMapping == OptionMapEsc) {
         [self addKeys:metaKeys withModifiers:UIKeyModifierAlternate];
+        // ESC CR, as Terminal.app's Option as Meta sends it: Claude Code's
+        // newline that does not send
+        [self addKey:@"\r" withModifiers:UIKeyModifierAlternate];
     }
     if (UserPreferences.shared.backtickMapEscape) {
         [self addKey:@"`" withModifiers:0];
@@ -926,14 +1188,14 @@ static const char *metaKeys = "abcdefghijklmnopqrstuvwxyz0123456789-=[]\\;',./";
 - (NSWritingDirection)baseWritingDirectionForPosition:(nonnull UITextPosition *)position inDirection:(UITextStorageDirection)direction { LogStub(); return NSWritingDirectionLeftToRight; }
 - (void)setBaseWritingDirection:(NSWritingDirection)writingDirection forRange:(nonnull UITextRange *)range { LogStub(); }
 - (UITextPosition *)beginningOfDocument { LogStub(); return nil; }
-- (CGRect)caretRectForPosition:(nonnull UITextPosition *)position { LogStub(); return CGRectZero; }
+- (CGRect)caretRectForPosition:(nonnull UITextPosition *)position { return [self cursorRectInView]; }
 - (nullable UITextRange *)characterRangeAtPoint:(CGPoint)point { LogStub(); return nil; }
 - (nullable UITextRange *)characterRangeByExtendingPosition:(nonnull UITextPosition *)position inDirection:(UITextLayoutDirection)direction { LogStub(); return nil; }
 - (nullable UITextPosition *)closestPositionToPoint:(CGPoint)point { LogStub(); return nil; }
 - (nullable UITextPosition *)closestPositionToPoint:(CGPoint)point withinRange:(nonnull UITextRange *)range { LogStub(); return nil; }
 - (NSComparisonResult)comparePosition:(nonnull UITextPosition *)position toPosition:(nonnull UITextPosition *)other { LogStub(); return NSOrderedSame; }
 - (UITextPosition *)endOfDocument { LogStub(); return nil; }
-- (CGRect)firstRectForRange:(nonnull UITextRange *)range { LogStub(); return CGRectZero; }
+- (CGRect)firstRectForRange:(nonnull UITextRange *)range { return [self cursorRectInView]; }
 - (NSDictionary<NSAttributedStringKey,id> *)markedTextStyle { LogStub(); return nil; }
 - (void)setMarkedTextStyle:(NSDictionary<NSAttributedStringKey,id> *)markedTextStyle { LogStub(); }
 - (NSInteger)offsetFromPosition:(nonnull UITextPosition *)from toPosition:(nonnull UITextPosition *)toPosition { LogStub(); return 0; }

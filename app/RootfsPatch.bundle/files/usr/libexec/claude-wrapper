@@ -14,6 +14,25 @@ case $1 in
     -v|--version|-h|--help) exec "$claude" "$@" ;;
 esac
 
+# Claude Code tells of what wants you (a question for you, a turn ended) with
+# a terminal's notifications only in terminals it knows by name; elsewhere its
+# "auto" tells nothing. iSH's terminal takes iTerm2's (OSC 9) as the app's
+# notifications and its tabs' bells: set once in Claude's global config, if
+# not set there already, which the first run makes.
+config=${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json
+if [ -e "$config" ]; then
+    jq -e 'has("preferredNotifChannel")' "$config" >/dev/null
+    case $? in
+        0) ;;
+        1)
+            tmp=$(mktemp "$config.XXXXXX") &&
+                jq '.preferredNotifChannel = "iterm2"' "$config" >"$tmp" &&
+                mv "$tmp" "$config"
+            ;;
+        *) echo "claude: $config is not a JSON object jq reads; notifications left as they are" >&2 ;;
+    esac
+fi
+
 # The setting, a JSON string, there once it is set
 setting=/proc/ish/defaults/claude_proxy
 if [ ! -e "$setting" ]; then

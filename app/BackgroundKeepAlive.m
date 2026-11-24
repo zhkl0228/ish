@@ -4,6 +4,7 @@
 //
 
 #import <CoreLocation/CoreLocation.h>
+#import <UserNotifications/UserNotifications.h>
 #import "BackgroundKeepAlive.h"
 
 static NSString *const kKeepAliveEnabled = @"Keep Alive in Background";
@@ -66,6 +67,13 @@ static NSString *const kKeepAliveEnabled = @"Keep Alive in Background";
             // Needed for background updates under When In Use; shows the location pill.
             self.manager.showsBackgroundLocationIndicator = YES;
             [self.manager startUpdatingLocation];
+            // What runs on in the background tells of what wants you (a
+            // program's bell or notification: TerminalSession), once allowed
+            [UNUserNotificationCenter.currentNotificationCenter requestAuthorizationWithOptions:UNAuthorizationOptionAlert | UNAuthorizationOptionSound
+                                                                              completionHandler:^(BOOL _, NSError *error) {
+                if (error != nil)
+                    NSLog(@"keep alive: notifications not allowed: %@", error);
+            }];
             break;
         default:
             break;

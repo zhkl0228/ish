@@ -158,6 +158,30 @@ term.parser.registerOscHandler(52, (data) => {
     return true;
 });
 
+// What a program asks to be told of (Terminal's attention: a mark on the tab,
+// a notification while the app is away): the bell, and the notifications of
+// iTerm2 (OSC 9, the text) and of ghostty (OSC 777, notify, a title and the
+// text). Claude Code 2.1.331 writes each, as its preferredNotifChannel says:
+// terminal_bell, iterm2 ("title: text", or the text), ghostty. OSC 9 is
+// also ConEmu's progress (9;4;state;value), which claude writes as iterm2's
+// where it takes a terminal to show one: not a notification.
+term.onBell(() => native.notify(['', '']));
+term.parser.registerOscHandler(9, (data) => {
+    if (data.startsWith('4;'))
+        return true;
+    native.notify(['', data]);
+    return true;
+});
+term.parser.registerOscHandler(777, (data) => {
+    const parts = data.split(';');
+    if (parts[0] != 'notify' || parts.length < 3) {
+        native.log('term.js: OSC 777 other than notify;title;text, not shown: ' + JSON.stringify(data));
+        return true;
+    }
+    native.notify([parts[1], parts.slice(2).join(';')]);
+    return true;
+});
+
 // focus: the app's. A tap on the terminal gives it the keyboard; one while
 // there is a selection is the selection's.
 term.element.addEventListener('mousedown', () => {
@@ -227,6 +251,9 @@ exports.newScrollTop = (y) => {
     term.scrollToLine(line);
 };
 exports.scrollToBottom = () => term.scrollToBottom();
+// Shift with Page Up, Page Down and Home (TerminalView), as in xterm
+exports.scrollPages = (pages) => term.scrollPages(pages);
+exports.scrollToTop = () => term.scrollToTop();
 
 // The app's drags in a full-screen program's screen (TerminalView's
 // scrollPanned:), the finger's way down in points: the program's mouse wheel,
@@ -261,24 +288,41 @@ exports.wheel = (dy, x, y) => {
 // program's screen (vim's, claude's) or the modes, for the tab the app
 // restores when it starts again
 exports.serialize = () => serializer.serialize({scrollback: 1000, excludeAltBuffer: true, excludeModes: true});
-// Called by the app when a TerminalView (re)attaches, since scroll updates
-// sent while detached were dropped.
+// Called by the app when a TerminalView (re)attaches, since what it was told
+// of the scroll and the cursor while detached was dropped.
 exports.resyncScroll = () => {
     lastScrollRange = lastScrollTop = lastWheelScrolling = undefined;
     appScrollLine = null;
     syncScroll();
+    lastCursorRect = '';
+    syncCursor();
 };
 
-// A color of the app's (#rgb or #rrggbb), seen through: rgba()
-function withAlpha(color, alpha) {
+// A color of the app's (#rgb or #rrggbb): its red, green and blue
+function rgb(color) {
     let hex = color.slice(1);
     if (hex.length == 3)
         hex = hex.split('').map((digit) => digit + digit).join('');
     const value = parseInt(hex, 16);
-    return `rgba(${value >> 16}, ${(value >> 8) & 255}, ${value & 255}, ${alpha})`;
+    return [value >> 16, (value >> 8) & 255, value & 255];
 }
+// seen through: rgba()
+function withAlpha(color, alpha) {
+    return `rgba(${rgb(color).join(', ')}, ${alpha})`;
+}
+// fraction of the way to another: #rrggbb, the only form xterm.js's
+// decorations take
+function mix(color, other, fraction) {
+    const [a, b] = [rgb(color), rgb(other)];
+    return '#' + a.map((c, i) => Math.round(c + (b[i] - c) * fraction).toString(16).padStart(2, '0')).join('');
+}
+// the matches of a find, on the terminal's background
+const findColor = '#ffd60a';
 
-exports.updateStyle = ({foregroundColor, backgroundColor, fontFamily, fontSize, colorPaletteOverrides, blinkCursor, cursorShape}) => {
+// minimumContrastRatio: 4.5 with the system's Increase Contrast on (colors
+// lightened or darkened against their background to read), else 1
+exports.updateStyle = ({foregroundColor, backgroundColor, fontFamily, fontSize, colorPaletteOverrides, blinkCursor, cursorShape,
+                        minimumContrastRatio}) => {
     const theme = {
         foreground: foregroundColor,
         background: backgroundColor,
@@ -293,8 +337,19 @@ exports.updateStyle = ({foregroundColor, backgroundColor, fontFamily, fontSize, 
     term.options.fontSize = fontSize;
     term.options.cursorBlink = blinkCursor;
     term.options.cursorStyle = cursorStyles[cursorShape];
+    term.options.minimumContrastRatio = minimumContrastRatio;
     fit.fit();
     syncScroll();
+    syncCursor();
+    findDecorations = {
+        matchBackground: mix(backgroundColor, findColor, 0.3),
+        matchOverviewRuler: findColor,
+        activeMatchBackground: mix(backgroundColor, findColor, 0.6),
+        activeMatchBorder: findColor,
+        activeMatchColorOverviewRuler: findColor,
+    };
+    // the size it now has, which the app shows as the font changes
+    return [term.cols, term.rows];
 };
 
 exports.clearScrollback = () => term.clear();
@@ -325,19 +380,23 @@ exports.setAccessibilityEnabled = (enabled) => term.options.screenReaderMode = e
 exports.setUserGesture = () => {};
 
 // The text of a line, and where in it each of its cells is: a wide character
-// takes two cells and one place, a cell of nothing is a space
+// takes two cells and one place, both its cells at that place; a cell of
+// nothing is a space
 function lineText(line) {
     let text = '';
     const index = [];
     for (let x = 0; x < term.cols; x++) {
         const cell = line.getCell(x);
-        index.push(text.length);
         if (cell === undefined) {
+            index.push(text.length);
             text += ' ';
             continue;
         }
-        if (cell.getWidth() == 0)
+        if (cell.getWidth() == 0) {
+            index.push(index[x - 1]);
             continue;
+        }
+        index.push(text.length);
         text += cell.getChars() || ' ';
     }
     return {text, index};
@@ -404,33 +463,57 @@ function openUrl(url) {
     native.openLink(url);
 }
 const urlPattern = /(?:[a-zA-Z][a-zA-Z0-9+.-]*:\/\/|mailto:|www\.)[^\s<>"'`]+/g;
-exports.openLinkAt = (x, y) => {
-    const cell = cellAt(x, y);
-    if (cell === null)
-        return;
+// The URL the text shows at a cell of the buffer, across the rows the
+// terminal wrapped it in: what it opens, and its first and last cells
+// (cellIndex). null if the cell is not in one.
+function linkAt(cell) {
     const line = logicalLine(cell.y);
     const offset = line.cells[cell.y - line.first][cell.x];
     for (const match of line.text.matchAll(urlPattern)) {
         const url = match[0].replace(/[.,;:!?)\]}]+$/, '');
-        if (offset >= match.index && offset <= match.index + url.length) {
-            openUrl(url.startsWith('www.') ? 'http://' + url : url);
-            return;
-        }
+        const start = match.index, end = match.index + url.length;
+        if (offset < start || offset >= end)
+            continue;
+        let from = Infinity, to = -1;
+        line.cells.forEach((row, r) => row.forEach((place, x) => {
+            if (place >= start && place < end) {
+                const index = (line.first + r) * term.cols + x;
+                from = Math.min(from, index);
+                to = Math.max(to, index);
+            }
+        }));
+        return {url: url.startsWith('www.') ? 'http://' + url : url, from, to};
     }
+    return null;
+}
+exports.openLinkAt = (x, y) => {
+    const cell = cellAt(x, y);
+    if (cell === null)
+        return;
+    const link = linkAt(cell);
+    if (link !== null)
+        openUrl(link.url);
 };
 
-// selection, by the app's long press (TerminalView): the word under it, then
-// as far as the finger goes, either way of the word. Cells are counted along
-// the buffer, line after line; a word goes on into a line it wraps into.
+// selection, by the app's long press (TerminalView): the word under it, or
+// the whole URL if it is in one, then as far as the finger goes, either way
+// of it. Cells are counted along the buffer, line after line; a word goes on
+// into a line it wraps into.
 const wordBreaks = ' \t\'"`()[]{}<>|;';
-let anchor = null; // the word long pressed: its first and last cells
+// the word long pressed: its first and last cells, and for a URL, what it opens
+let anchor = null;
 let selected = null; // what this selected: its first and last cells
 function cellIndex(cell) {
     return cell.y * term.cols + cell.x;
 }
+// xterm.js tells of a selection as it makes it (onSelectionChange): one
+// this makes is this one's, any other (a pointer's drag, a find) not
+let selecting = false;
 function selectCells(from, to) {
     selected = {from, to};
+    selecting = true;
     term.select(from % term.cols, Math.floor(from / term.cols), to - from + 1);
+    selecting = false;
 }
 // The character a cell shows: '' for the second half of a wide one
 function charAt(index) {
@@ -456,6 +539,12 @@ exports.selectWordAt = (x, y) => {
     const cell = cellAt(x, y);
     if (cell === null)
         return;
+    const link = linkAt(cell);
+    if (link !== null) {
+        anchor = link;
+        selectCells(link.from, link.to);
+        return;
+    }
     const at = cellIndex(cell);
     const cells = term.buffer.active.length * term.cols;
     let from = at, to = at;
@@ -476,11 +565,11 @@ exports.extendSelectionTo = (x, y) => {
     selectCells(Math.min(at, anchor.from), Math.max(at, anchor.to));
 };
 term.onSelectionChange(() => {
-    if (!term.hasSelection())
+    if (!selecting)
         anchor = selected = null;
 });
-// What is selected, and where its rows are in the page: where the app shows
-// its menu (Copy)
+// What is selected, where its rows are in the page (where the app shows its
+// menu), and the URL it opens if it is a URL long pressed and no more
 exports.getSelection = () => {
     if (!term.hasSelection())
         return null;
@@ -498,14 +587,82 @@ exports.getSelection = () => {
     const viewport = term.buffer.active.viewportY;
     const top = cell.rect.top + (first - viewport) * cell.height;
     const bottom = cell.rect.top + (last - viewport + 1) * cell.height;
-    return {text: term.getSelection(), rect: [cell.rect.left, top, cell.rect.width, bottom - top]};
+    const link = selected !== null && anchor.url !== undefined && selected.from == anchor.from && selected.to == anchor.to
+        ? anchor.url : null;
+    return {text: term.getSelection(), rect: [cell.rect.left, top, cell.rect.width, bottom - top], link};
 };
 exports.clearSelection = () => term.clearSelection();
 
-// find in what the terminal holds
-exports.findNext = (text) => search.findNext(text);
-exports.findPrevious = (text) => search.findPrevious(text);
-exports.clearFind = () => search.clearDecorations();
+// find in what the terminal holds (the app's find bar): every match
+// highlighted, the next or the previous one selected and scrolled to; as the
+// text is typed (incremental), the one found stays while it still matches.
+// Which of how many it is goes to the app (findResults: -1 for none found),
+// again as output changes the matches.
+let findDecorations;
+exports.find = (text, backwards, incremental) => {
+    const options = {caseSensitive: false, incremental, decorations: findDecorations};
+    if (backwards)
+        search.findPrevious(text, options);
+    else
+        search.findNext(text, options);
+};
+search.onDidChangeResults(({resultIndex, resultCount}) => native.findResults([resultIndex, resultCount]));
+exports.clearFind = () => {
+    search.clearDecorations();
+    term.clearSelection();
+};
+
+// What an input method is putting together (the app's marked text: pinyin
+// before it is characters), drawn at the cursor and underlined until it is
+// typed or dropped. Where the cursor is goes to the app (cursorRect, in the
+// page's points), for the input method's candidates to be by it.
+const composition = document.createElement('div');
+composition.id = 'composition';
+document.body.appendChild(composition);
+function cursorCell() {
+    const cell = cellSize();
+    const buffer = term.buffer.active;
+    const row = buffer.baseY + buffer.cursorY - buffer.viewportY;
+    return [cell.rect.left + buffer.cursorX * cell.width, cell.rect.top + row * cell.height, cell.width, cell.height];
+}
+function placeComposition() {
+    if (composition.textContent == '')
+        return;
+    const [x, y, , height] = cursorCell();
+    const right = cellSize().rect.right;
+    composition.style.top = y + 'px';
+    composition.style.height = composition.style.lineHeight = height + 'px';
+    composition.style.left = Math.max(0, Math.min(x, right - composition.offsetWidth)) + 'px';
+}
+exports.setComposition = (text) => {
+    composition.textContent = text;
+    composition.style.display = text == '' ? 'none' : 'block';
+    if (text == '')
+        return;
+    composition.style.fontFamily = term.options.fontFamily;
+    composition.style.fontSize = term.options.fontSize + 'px';
+    composition.style.color = term.options.theme.foreground;
+    composition.style.background = term.options.theme.background;
+    term.scrollToBottom();
+    placeComposition();
+};
+let lastCursorRect = '', cursorFrame = null;
+function syncCursor() {
+    if (cursorFrame !== null)
+        return;
+    cursorFrame = requestAnimationFrame(() => {
+        cursorFrame = null;
+        placeComposition();
+        const rect = cursorCell();
+        if (rect.join() == lastCursorRect)
+            return;
+        lastCursorRect = rect.join();
+        native.cursorRect(rect);
+    });
+}
+term.onCursorMove(syncCursor);
+term.onScroll(syncCursor);
+term.onResize(syncCursor);
 
 fit.fit();
 native.load();

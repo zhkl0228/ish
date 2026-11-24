@@ -19,3 +19,13 @@ body {
 .xterm .xterm-scrollable-element > .shadow {
     display: none !important;
 }
+
+/* What an input method is putting together, over the cursor (term.js's setComposition) */
+#composition {
+    display: none;
+    position: fixed;
+    z-index: 10;
+    white-space: pre;
+    text-decoration: underline;
+    pointer-events: none;
+}

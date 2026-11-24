@@ -43,6 +43,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 extern NSString *const kThemeForegroundColor;
 extern NSString *const kThemeBackgroundColor;
+// The font size until one is chosen, and the one ⌘0 goes back to
+extern const int kDefaultFontSize;
 
 @interface UserPreferences : NSObject
 

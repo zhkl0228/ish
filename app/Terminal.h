@@ -66,6 +66,11 @@ struct tty;
 // tells from it that something was written while it was not looked at.
 // Main thread.
 @property (readonly) NSUInteger outputCount;
+// What a program asked to be told of (the bell, a notification: term.js),
+// counted, and the text of the last ("" for the bell). Each posts
+// TerminalAttentionNotification. Main thread.
+@property (readonly) NSUInteger attentionCount;
+@property (readonly) NSString *attentionText;
 
 @property (readonly) WKWebView *webView;
 @property (nonatomic) BOOL enableVoiceOverAnnounce;
@@ -75,5 +80,6 @@ struct tty;
 @end
 
 extern NSNotificationName const TerminalTitleDidChangeNotification;
+extern NSNotificationName const TerminalAttentionNotification;
 
 extern struct tty_driver ios_console_driver;

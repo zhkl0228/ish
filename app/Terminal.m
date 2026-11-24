@@ -114,9 +114,11 @@ static NSMapTable<NSUUID *, Terminal *> *terminalsByUUID;
     }
 }
 
-static NSString *const TERMINAL_HANDLERS[] = {@"load", @"log", @"sendInput", @"sendBinary", @"resize", @"propUpdate", @"setTitle", @"copyText"};
+static NSString *const TERMINAL_HANDLERS[] = {@"load", @"log", @"sendInput", @"sendBinary", @"resize", @"propUpdate", @"setTitle", @"copyText",
+                                              @"notify"};
 
 NSNotificationName const TerminalTitleDidChangeNotification = @"TerminalTitleDidChangeNotification";
+NSNotificationName const TerminalAttentionNotification = @"TerminalAttentionNotification";
 
 - (WKWebView *)webView {
     if (_webView == nil) {
@@ -187,6 +189,13 @@ NSNotificationName const TerminalTitleDidChangeNotification = @"TerminalTitleDid
         _windowTitle = message.body;
         _windowTitleGroup = self.foregroundProcessGroup;
         [NSNotificationCenter.defaultCenter postNotificationName:TerminalTitleDidChangeNotification object:self];
+    } else if ([message.name isEqualToString:@"notify"]) {
+        // [title, text]: the bell's both empty; iTerm2's, no title. The tab
+        // shows its own title for it, which says where it came from.
+        NSArray<NSString *> *notice = message.body;
+        _attentionText = notice[1];
+        _attentionCount++;
+        [NSNotificationCenter.defaultCenter postNotificationName:TerminalAttentionNotification object:self];
     }
 }
 

@@ -3,6 +3,7 @@
 //  iSH
 //
 
+#import <UserNotifications/UserNotifications.h>
 #import "TerminalSession.h"
 #import "AppDelegate.h"
 #import "UserPreferences.h"
@@ -15,6 +16,7 @@
 #include "fs/path.h"
 
 NSNotificationName const TerminalSessionDidChangeNotification = @"TerminalSessionDidChangeNotification";
+NSString *const TerminalSessionNotificationUUIDKey = @"session";
 
 @interface TerminalSession ()
 @property Terminal *terminal;
@@ -25,12 +27,15 @@ NSNotificationName const TerminalSessionDidChangeNotification = @"TerminalSessio
 @property NSDate *startDate;
 @property (nullable) NSString *shownTitle; // displayTitle as last announced
 @property TerminalSessionActivity shownActivity; // activity as last announced
-// What of it is seen: its output so far, and whether a job ended since
+// What of it is seen: its output and its programs' bells and notifications
+// so far, and whether a job ended since
 @property NSUInteger seenOutputCount;
+@property NSUInteger seenAttentionCount;
 @property BOOL finishedUnseen;
 // A job owned the terminal when last checked
 @property BOOL jobRan;
 - (void)refreshState;
+- (void)attentionAsked;
 @end
 
 @implementation TerminalSession
@@ -99,6 +104,8 @@ NSNotificationName const TerminalSessionDidChangeNotification = @"TerminalSessio
 - (TerminalSessionActivity)activity {
     if (self.state != TerminalSessionStateRunning)
         return TerminalSessionActivityNone;
+    if (self.terminal.attentionCount != self.seenAttentionCount)
+        return TerminalSessionActivityBell;
     if (self.finishedUnseen)
         return TerminalSessionActivityFinished;
     if (self.terminal.outputCount != self.seenOutputCount)
@@ -108,6 +115,7 @@ NSNotificationName const TerminalSessionDidChangeNotification = @"TerminalSessio
 
 - (void)markSeen {
     self.seenOutputCount = self.terminal.outputCount;
+    self.seenAttentionCount = self.terminal.attentionCount;
     self.finishedUnseen = NO;
     [self announceChanges];
 }
@@ -139,6 +147,27 @@ NSNotificationName const TerminalSessionDidChangeNotification = @"TerminalSessio
     self.shownTitle = title;
     self.shownActivity = activity;
     [self notifyChanged];
+}
+
+// A program asked to be told of: with the app away (in the background, a
+// keep-alive's, or behind Control Center), a notification of the system's,
+// the tab's title over what it said ("Bell" for the bell). A session's next
+// takes the place of its last. Tapped, it shows the tab (AppDelegate).
+- (void)attentionAsked {
+    [self refreshState];
+    if (UIApplication.sharedApplication.applicationState == UIApplicationStateActive)
+        return;
+    UNMutableNotificationContent *content = [UNMutableNotificationContent new];
+    content.title = self.displayTitle;
+    content.body = self.terminal.attentionText.length > 0 ? self.terminal.attentionText : @"Bell";
+    content.sound = UNNotificationSound.defaultSound;
+    content.threadIdentifier = self.uuid.UUIDString;
+    content.userInfo = @{TerminalSessionNotificationUUIDKey: self.uuid.UUIDString};
+    UNNotificationRequest *request = [UNNotificationRequest requestWithIdentifier:self.uuid.UUIDString content:content trigger:nil];
+    [UNUserNotificationCenter.currentNotificationCenter addNotificationRequest:request withCompletionHandler:^(NSError *error) {
+        if (error != nil)
+            NSLog(@"notification of %@: %@", self.uuid, error);
+    }];
 }
 
 - (void)setTitle:(NSString *)title {
@@ -266,6 +295,10 @@ NSNotificationName const TerminalSessionDidChangeNotification = @"TerminalSessio
         [NSNotificationCenter.defaultCenter addObserver:self
                                                selector:@selector(terminalTitleChanged:)
                                                    name:TerminalTitleDidChangeNotification
+                                                 object:nil];
+        [NSNotificationCenter.defaultCenter addObserver:self
+                                               selector:@selector(terminalAskedAttention:)
+                                                   name:TerminalAttentionNotification
                                                  object:nil];
         __weak typeof(self) weakSelf = self;
         NSTimer *titles = [NSTimer timerWithTimeInterval:1 repeats:YES block:^(NSTimer *_) {
@@ -460,6 +493,13 @@ static int start_process(NSArray<NSString *> *command, NSString *directory, Term
     for (TerminalSession *session in [self.mutableSessions copy]) {
         if (session.terminal == notification.object)
             [session refreshState];
+    }
+}
+
+- (void)terminalAskedAttention:(NSNotification *)notification {
+    for (TerminalSession *session in [self.mutableSessions copy]) {
+        if (session.terminal == notification.object)
+            [session attentionAsked];
     }
 }
 

@@ -1,11 +1,13 @@
 // The terminal's page (app/terminal: term.js on xterm.js) in headless
 // Chromium, with a stand-in for the app's message handlers (Terminal.m,
 // TerminalView.m): output in UTF-8 split anywhere, the answers to programs,
-// bracketed paste, OSC 52, titles, the application cursor mode, sizes, the
-// scroll view's sync both ways, its drags as a full-screen program's wheel,
-// long-press selection and its rect, Cmd-click
-// links, wrapped lines, resizing, and no errors. WebKit is not Chromium, so
-// this checks term.js, not the app.
+// bracketed paste, OSC 52, titles, the application cursor mode, sizes (and
+// the size a font makes), the scroll view's sync both ways, Shift-Page Up,
+// its drags as a full-screen program's wheel, long-press selection and its
+// rect, a long press on a link, Cmd-click links, wrapped lines and wide
+// characters, resizing, the bell and notifications, find, an input method's
+// composition and the cursor's place, and no errors. WebKit is not Chromium,
+// so this checks term.js, not the app.
 //
 // Run, after `npm install playwright && npx playwright install chromium`:
 //   node tests/terminal/term-page-test.js app/terminal/term.html
@@ -30,7 +32,8 @@ const utf8 = (s) => Buffer.from(s, 'utf8').toString('latin1');
     await page.addInitScript(() => {
         window.__messages = [];
         const names = ['load', 'log', 'sendInput', 'sendBinary', 'resize', 'propUpdate', 'setTitle', 'copyText',
-                       'syncFocus', 'focus', 'newScrollRange', 'newScrollTop', 'newWheelScrolling', 'openLink'];
+                       'syncFocus', 'focus', 'newScrollRange', 'newScrollTop', 'newWheelScrolling', 'openLink',
+                       'findResults', 'cursorRect', 'notify'];
         window.webkit = { messageHandlers: {} };
         for (const name of names)
             window.webkit.messageHandlers[name] = { postMessage: (body) => window.__messages.push([name, body]) };
@@ -44,9 +47,28 @@ const utf8 = (s) => Buffer.from(s, 'utf8').toString('latin1');
     check('no errors logged at load', !msgs.some(([n, b]) => n == 'log' && /error/i.test(b)), JSON.stringify(msgs.filter(([n]) => n == 'log')));
 
     await page.evaluate(() => exports.updateStyle({ foregroundColor: '#fff', backgroundColor: '#000', fontFamily: 'monospace',
-        fontSize: 14, colorPaletteOverrides: null, blinkCursor: false, cursorShape: 'BEAM' }));
+        fontSize: 14, colorPaletteOverrides: null, blinkCursor: false, cursorShape: 'BEAM', minimumContrastRatio: 1 }));
     const style = await page.evaluate(() => [term.options.cursorStyle, term.options.theme.selectionBackground, term.options.fontSize]);
     check('updateStyle', style[0] == 'bar' && style[1] == 'rgba(255, 255, 255, 0.35)' && style[2] == 14, JSON.stringify(style));
+    // a bigger font, fewer columns: the size it returns is the terminal's
+    const zoomed = await page.evaluate(() => {
+        const options = { foregroundColor: '#fff', backgroundColor: '#000', fontFamily: 'monospace',
+                          colorPaletteOverrides: null, blinkCursor: false, cursorShape: 'BEAM', minimumContrastRatio: 1 };
+        const big = exports.updateStyle({ ...options, fontSize: 28 });
+        const back = exports.updateStyle({ ...options, fontSize: 14 });
+        return { big, back, now: exports.getSize() };
+    });
+    const contrast = await page.evaluate(() => {
+        exports.updateStyle({ foregroundColor: '#fff', backgroundColor: '#000', fontFamily: 'monospace', fontSize: 14,
+                              colorPaletteOverrides: null, blinkCursor: false, cursorShape: 'BEAM', minimumContrastRatio: 4.5 });
+        const raised = term.options.minimumContrastRatio;
+        exports.updateStyle({ foregroundColor: '#fff', backgroundColor: '#000', fontFamily: 'monospace', fontSize: 14,
+                              colorPaletteOverrides: null, blinkCursor: false, cursorShape: 'BEAM', minimumContrastRatio: 1 });
+        return [raised, term.options.minimumContrastRatio];
+    });
+    check('Increase Contrast: the minimum contrast ratio, and back', contrast.join() == '4.5,1', JSON.stringify(contrast));
+    check('updateStyle returns the size it makes', zoomed.big[0] < zoomed.back[0] && zoomed.back.join() == zoomed.now.join(),
+          JSON.stringify(zoomed));
     const renderer = await page.evaluate(() => !!document.querySelector('.xterm-screen canvas'));
     console.log('  renderer: ' + (renderer ? 'WebGL (canvas)' : 'DOM'));
 
@@ -100,6 +122,14 @@ const utf8 = (s) => Buffer.from(s, 'utf8').toString('latin1');
     msgs = await take();
     const vy = await page.evaluate(() => term.buffer.active.viewportY);
     check("the app's scroll moves it, not told back", vy == 10 && !msgs.some(([n]) => n == 'newScrollTop'), JSON.stringify({ vy, msgs }));
+    await page.evaluate((y) => exports.newScrollTop(y), 100 * cellH);
+    await page.evaluate(() => exports.scrollPages(-1));
+    await page.waitForTimeout(50);
+    const paged = await page.evaluate(() => [term.buffer.active.viewportY, term.rows]);
+    check('Shift-Page Up: a page up, a line of it kept', paged[0] == 100 - (paged[1] - 1), JSON.stringify(paged));
+    await page.evaluate(() => exports.scrollToTop());
+    await page.waitForTimeout(50);
+    check('Shift-Home: the top', (await page.evaluate(() => term.buffer.active.viewportY)) == 0, '');
     await page.evaluate(() => exports.scrollToBottom());
     await page.waitForTimeout(50);
     msgs = await take();
@@ -172,6 +202,39 @@ const utf8 = (s) => Buffer.from(s, 'utf8').toString('latin1');
     msgs = await take();
     check('Cmd-click opens the link', msgs.some(([n, b]) => n == 'openLink' && b == 'https://example.com/a?b=1'), JSON.stringify(msgs));
 
+    // a long press on a link: all of it, and what it opens, for the menu's Open Link
+    await page.evaluate(([x, y]) => exports.selectWordAt(x, y), [lx, ly]);
+    sel = await page.evaluate(() => exports.getSelection());
+    check('a long press on a link selects it, ? and = too, the comma after not',
+          sel && sel.text == 'https://example.com/a?b=1' && sel.link == 'https://example.com/a?b=1', JSON.stringify(sel));
+    const [okx, oky] = await pointOf(32, 1);
+    await page.evaluate(([x, y]) => exports.extendSelectionTo(x, y), [okx, oky]);
+    sel = await page.evaluate(() => exports.getSelection());
+    check('dragged on past it, it is no longer a link', sel && sel.text == 'https://example.com/a?b=1, ok' && sel.link === null, JSON.stringify(sel));
+    await page.evaluate(([x, y]) => exports.selectWordAt(x, y), [sx, sy]);
+    sel = await page.evaluate(() => exports.getSelection());
+    check('a word is not a link', sel && sel.text == 'bar/baz-1' && sel.link === null, JSON.stringify(sel));
+    await page.evaluate(() => term.select(0, term.buffer.active.viewportY + 1, 3));
+    sel = await page.evaluate(() => exports.getSelection());
+    check("another's selection is not the long press's", sel && sel.text == 'see' && sel.link === null, JSON.stringify(sel));
+    await page.evaluate(() => exports.clearSelection());
+
+    // after a wide character, across a wrap: the link's cells, not half of the character's
+    const linkCols = (await page.evaluate(() => exports.getSize()))[0];
+    const longUrl = 'https://example.com/' + 'p'.repeat(linkCols);
+    await write(utf8('\x1b[H\x1b[2J链' + longUrl + ' x\r\n'));
+    const [w1x, w1y] = await pointOf(linkCols - 1, 0);
+    await page.evaluate(([x, y]) => exports.selectWordAt(x, y), [w1x, w1y]);
+    sel = await page.evaluate(() => exports.getSelection());
+    check('a link after a wide character, wrapped: all of it, nothing of the character',
+          sel && sel.text.replace(/\n/g, '') == longUrl && sel.link == longUrl, JSON.stringify(sel));
+    const [cx, cy] = await pointOf(1, 0);
+    await take();
+    await page.evaluate(([x, y]) => exports.openLinkAt(x, y), [cx, cy]);
+    msgs = await take();
+    check("the second half of the wide character is the character's, not the link's", !msgs.some(([n]) => n == 'openLink'), JSON.stringify(msgs));
+    await page.evaluate(() => exports.clearSelection());
+
     // a wrapped line: one line of text, a word across the wrap
     const cols = (await page.evaluate(() => exports.getSize()))[0];
     await write('\x1b[H\x1b[2J' + 'x'.repeat(cols - 3) + ' abcdef tail\r\n');
@@ -225,6 +288,76 @@ const utf8 = (s) => Buffer.from(s, 'utf8').toString('latin1');
     saved = await page.evaluate(() => exports.serialize());
     check("serialize leaves out a full-screen program's screen", saved.includes('plain') && !saved.includes('FULLSCREEN'), JSON.stringify(saved));
     await write('\x1b[?1049l');
+
+    // what a program asks to be told of: the bell, iTerm2's and ghostty's
+    // notifications as Claude Code writes them; not ConEmu's progress
+    await take();
+    await write('\x07');
+    await write('\x1b]9;Claude Code: Claude is waiting for your input\x07');
+    await write('\x1b]9;4;3;\x07');
+    await write('\x1b]777;notify;Claude Code;Claude needs your permission; to use Bash\x1b\\');
+    await write('\x1b]777;preexec\x07');
+    msgs = await take();
+    const notices = msgs.filter(([n]) => n == 'notify').map(([, b]) => b);
+    check('the bell, OSC 9 and OSC 777 notify told; OSC 9;4 progress not',
+          JSON.stringify(notices) == JSON.stringify([['', ''], ['', 'Claude Code: Claude is waiting for your input'],
+                                                     ['Claude Code', 'Claude needs your permission; to use Bash']]),
+          JSON.stringify(notices));
+    check('another OSC 777 logged with what it was', msgs.some(([n, b]) => n == 'log' && b.includes('"preexec"')), JSON.stringify(msgs));
+
+    // find (the app's find bar): every match, the one found selected, which
+    // of how many told to the app
+    await page.evaluate(() => { exports.reset(); exports.clearScrollback(); });
+    await write('alpha beta\r\nbeta gamma\r\nBETA\r\n');
+    await take();
+    const lastResult = async () => (await take()).filter(([n]) => n == 'findResults').map(([, b]) => b).pop();
+    await page.evaluate(() => exports.find('beta', false, true));
+    let found = await lastResult();
+    let foundText = await page.evaluate(() => term.getSelection());
+    check('find: every match, whatever its case, one of them found and selected',
+          found && found[1] == 3 && found[0] >= 0 && foundText.toLowerCase() == 'beta', JSON.stringify({ found, foundText }));
+    const first = found[0];
+    await page.evaluate(() => exports.find('beta', false, false));
+    found = await lastResult();
+    check('find next: the next one', found && found[0] == (first + 1) % 3 && found[1] == 3, JSON.stringify(found));
+    await page.evaluate(() => exports.find('beta', true, false));
+    found = await lastResult();
+    check('find previous: back to it', found && found[0] == first, JSON.stringify(found));
+    await page.evaluate(() => exports.find('betaz', false, true));
+    found = await lastResult();
+    check('typed on to no match: none found', found && found[0] == -1 && found[1] == 0, JSON.stringify(found));
+    await page.evaluate(() => exports.find('gamma', false, true));
+    await page.waitForTimeout(100);   // drawn at the next frame
+    const decorated = await page.evaluate(() => document.querySelectorAll('.xterm-decoration').length);
+    await page.evaluate(() => exports.clearFind());
+    const cleared = await page.evaluate(() => [term.hasSelection(), document.querySelectorAll('.xterm-decoration').length]);
+    check('matches highlighted; clearFind takes them and the selection away', decorated > 0 && !cleared[0] && cleared[1] == 0,
+          JSON.stringify({ decorated, cleared }));
+
+    // an input method's composition, at the cursor; where the cursor is, told
+    await write('$ ab');
+    await page.waitForTimeout(50);
+    msgs = await take();
+    const told = msgs.filter(([n]) => n == 'cursorRect').map(([, b]) => b).pop();
+    const expected = await page.evaluate(() => {
+        const rect = document.querySelector('.xterm-screen').getBoundingClientRect();
+        const [w, h] = exports.getCharacterSize();
+        const b = term.buffer.active;
+        return [rect.left + b.cursorX * w, rect.top + (b.baseY + b.cursorY - b.viewportY) * h, w, h];
+    });
+    check('where the cursor is, told to the app', told && told.every((v, i) => Math.abs(v - expected[i]) < 0.5),
+          JSON.stringify({ told, expected }));
+    const shownComposition = await page.evaluate(() => {
+        exports.setComposition('ni hao');
+        const c = document.getElementById('composition');
+        const r = c.getBoundingClientRect();
+        return { text: c.textContent, display: getComputedStyle(c).display, left: r.left, top: r.top };
+    });
+    check('a composition shows at the cursor', shownComposition.text == 'ni hao' && shownComposition.display == 'block' &&
+          Math.abs(shownComposition.left - expected[0]) < 0.5 && Math.abs(shownComposition.top - expected[1]) < 0.5,
+          JSON.stringify({ shownComposition, expected }));
+    const hidden = await page.evaluate(() => { exports.setComposition(''); return getComputedStyle(document.getElementById('composition')).display; });
+    check('and goes when it is typed or dropped', hidden == 'none', hidden);
 
     await page.evaluate(() => { exports.setFocused(true); exports.setFocused(false); exports.reset(); exports.clearScreen(); exports.setAccessibilityEnabled(true); });
     msgs = await take();

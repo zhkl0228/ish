@@ -9,6 +9,7 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #import <SystemConfiguration/SystemConfiguration.h>
+#import <UserNotifications/UserNotifications.h>
 #import "AboutViewController.h"
 #import "AppDelegate.h"
 #import "TerminalSession.h"
@@ -49,7 +50,7 @@ extern void native_builtins_init(void);
 #import "LinuxInterop.h"
 #endif
 
-@interface AppDelegate ()
+@interface AppDelegate () <UNUserNotificationCenterDelegate>
 
 @property BOOL exiting;
 @property SCNetworkReachabilityRef reachability;
@@ -396,6 +397,15 @@ void NetworkReachabilityCallback(SCNetworkReachabilityRef target, SCNetworkReach
     [self configureDns];
 }
 
+- (void)userNotificationCenter:(UNUserNotificationCenter *)center didReceiveNotificationResponse:(UNNotificationResponse *)response withCompletionHandler:(void (^)(void))completionHandler {
+    NSString *uuid = response.notification.request.content.userInfo[TerminalSessionNotificationUUIDKey];
+    for (TerminalViewController *controller in ConnectedTerminalViewControllers()) {
+        if ([controller showSessionWithUUID:[[NSUUID alloc] initWithUUIDString:uuid]])
+            break;
+    }
+    completionHandler();
+}
+
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
     // get the network permissions popup to appear on chinese devices
     [[NSURLSession.sharedSession dataTaskWithURL:[NSURL URLWithString:@"http://captive.apple.com"]] resume];
@@ -405,6 +415,9 @@ void NetworkReachabilityCallback(SCNetworkReachabilityRef target, SCNetworkReach
 
     // Resumes location updates if the keep-alive was left on.
     [BackgroundKeepAlive shared];
+    // A tab's notification tapped shows the tab (TerminalSession's
+    // attentionAsked); set before launch ends, for one that launched the app
+    UNUserNotificationCenter.currentNotificationCenter.delegate = self;
     // Starts collecting what gets copied, for the clipboard manager.
     [ClipboardStore.shared start];
 

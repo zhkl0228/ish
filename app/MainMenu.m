@@ -104,6 +104,15 @@ static UIMenu *EditExtras(void) {
     ]);
 }
 
+// Find in what the terminal holds (TerminalViewController's find bar)
+static UIMenu *EditFind(void) {
+    return Group(@"edit.find", @[
+        Key(@"Find…", @"magnifyingglass", @selector(showFind:), @"f", kCmd, nil),
+        Key(@"Find Next", nil, @selector(findNextMatch:), @"g", kCmd, nil),
+        Key(@"Find Previous", nil, @selector(findPreviousMatch:), @"g", kShiftCmd, nil),
+    ]);
+}
+
 static NSArray<UIMenuElement *> *ThemeItems(void) {
     NSMutableArray<UIMenuElement *> *items = [NSMutableArray new];
     for (Theme *theme in Theme.defaultThemes)
@@ -127,7 +136,7 @@ static UIMenu *ViewMenu(void) {
         Group(@"view.font", @[
             Key(@"Bigger", @"plus.magnifyingglass", @selector(increaseFontSize:), @"+", kCmd, nil),
             Key(@"Smaller", @"minus.magnifyingglass", @selector(decreaseFontSize:), @"-", kCmd, nil),
-            Key(@"Actual Size", nil, @selector(resetFontSize:), @"0", kCmd, nil),
+            Key(@"Default Size", nil, @selector(resetFontSize:), @"0", kCmd, nil),
         ]),
         Group(@"view.appearance", @[
             DynamicSubmenu(@"Theme", @"paintpalette", @"theme", ^{ return ThemeItems(); }),
@@ -149,7 +158,8 @@ static UIMenu *ViewMenu(void) {
 
 static UIMenu *TabsMenu(void) {
     NSMutableArray<UIMenuElement *> *tabs = [NSMutableArray new];
-    // Titles and visibility are filled in by validateCommand: from the tabs that exist.
+    // Titles and visibility are filled in by validateCommand: from the tabs that
+    // exist. The ninth is the last tab.
     for (int i = 1; i <= 9; i++) {
         [tabs addObject:Key([NSString stringWithFormat:@"Tab %d", i], nil, @selector(selectTabByNumber:),
                             [NSString stringWithFormat:@"%d", i], kCmd, @(i - 1))];
@@ -250,7 +260,8 @@ static UICommand *SettingsCommand(void) {
 + (void)buildWithBuilder:(id<UIMenuBuilder>)builder {
     // Stock menus that make no sense for a terminal. Their key equivalents would
     // otherwise swallow the keys (Cmd+I for italic, for instance) before any
-    // command of ours sees them.
+    // command of ours sees them. Find is ours (EditFind), for the terminal's
+    // text, which is not the web view's.
     for (UIMenuIdentifier identifier in @[UIMenuFormat, UIMenuUndoRedo, UIMenuSpelling, UIMenuSubstitutions,
                                           UIMenuTransformations, UIMenuSpeech, UIMenuLookup, UIMenuLearn,
                                           UIMenuFind, UIMenuFile, UIMenuPreferences]) {
@@ -273,6 +284,7 @@ static UICommand *SettingsCommand(void) {
         [builder insertSiblingMenu:EditExtras() afterMenuForIdentifier:UIMenuStandardEdit];
     else
         [builder insertChildMenu:EditExtras() atEndOfMenuForIdentifier:UIMenuEdit];
+    [builder insertSiblingMenu:EditFind() afterMenuForIdentifier:ID(@"edit.clear")];
 
     UIMenu *view = ViewMenu();
     if ([builder menuForIdentifier:UIMenuView] != nil) {
@@ -307,6 +319,7 @@ static UICommand *SettingsCommand(void) {
         ShellMenu(),
         Submenu(@"Edit", @"eraser", @"edit", @[
             EditExtras(),
+            EditFind(),
         ]),
         ViewMenu(),
         TabsMenu(),

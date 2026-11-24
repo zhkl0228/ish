@@ -30,6 +30,7 @@
 #include "kernel/signal.h"
 #include "fs/devices.h"
 
+@class FindBar;
 
 @interface TerminalViewController () <UIGestureRecognizerDelegate, TabBarViewDelegate, ClipboardShelfDelegate>
 
@@ -52,6 +53,11 @@
 @property (weak, nonatomic) IBOutlet NSLayoutConstraint *barHeight;
 
 @property (weak, nonatomic) IBOutlet UIButton *pasteButton;
+// After tab: /, and held, the other symbols (addSymbolKey)
+@property BarButton *symbolKey;
+// At the right end, after paste: the keyboard put down (addHideKeyboardKey)
+@property BarButton *hideKeyboardKey;
+@property (nullable) KeyPopupView *symbolPopup;
 
 // Sessions shown in this window, in tab order. All of them are also in the TerminalSessionStore.
 @property NSMutableArray<TerminalSession *> *tabs;
@@ -64,7 +70,14 @@
 @property BOOL shelfShown;
 @property (nullable) ClipboardStackView *stackView;
 
+// Find (⌘F), created the first time it is shown; hidden while not finding
+@property (nullable) FindBar *findBar;
+
 @property BOOL ignoreKeyboardMotion;
+// How much of the view's bottom the keyboard and the keys over it cover (0
+// with them away): the terminal's bottom is above it, and above the home
+// indicator (applyBottomPad)
+@property CGFloat keyboardPad;
 // The last keyboard notice not yet acted on, and whether a turn of the run
 // loop is to act on it (keyboardDidSomething:)
 @property (nullable) NSNotification *pendingKeyboardNotice;
@@ -76,6 +89,18 @@
 // The bar's arrow keys carry their direction in the storyboard tag:
 // 1 up, 2 down, 3 left, 4 right. These are the CSI final bytes.
 static const char arrowKeyFinals[] = {[1] = 'A', [2] = 'B', [3] = 'D', [4] = 'C'};
+
+// The symbol key: tapped, /; held, the symbols a terminal takes that the
+// keyboard keeps on its 123 and #+= pages, the most used in the row nearest
+// the key. Held and let go without moving, / still.
+static NSString *const kSymbolKeySymbol = @"/";
+static NSArray<NSArray<NSString *> *> *HeldSymbols(void) {
+    return @[
+        @[@"|", @"-", @"~", @"_", @"\\", @"*", @">", @"$"],
+        @[@"&", @"<", @";", @":", @"=", @"+", @"\"", @"'"],
+        @[@"`", @"{", @"}", @"[", @"]", @"#", @"%", @"^"],
+    ];
+}
 
 // An arrow key's face: a filled triangle pointing its way, narrower than an
 // equilateral one, `base` across and `base` * 14 / 11 from base to tip. nil
@@ -106,6 +131,129 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
     // drawn in the key's tint, white or black with the keyboard
     return [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
 }
+
+#pragma mark - Find bar
+
+// Find in what the terminal holds (⌘F, the commands menu's Find): a field
+// over the terminal's top, at its right on a wide screen; which match of how
+// many is found; the previous and the next; Done (or Esc) puts it away.
+// Return finds the next, Shift-Return the previous.
+@interface FindBar : UIVisualEffectView <UITextFieldDelegate>
+@property (readonly) UITextField *field;
+@property (readonly) UILabel *countLabel;
+// What it asks of the terminal: a find, and to be put away
+@property (copy) void (^find)(NSString *text, BOOL backwards, BOOL incremental);
+@property (copy) void (^done)(void);
+- (void)showIndex:(NSInteger)index count:(NSInteger)count;
+@end
+
+@implementation FindBar
+
+- (instancetype)init {
+    if (self = [super initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemMaterial]]) {
+        self.layer.cornerRadius = 12;
+        self.clipsToBounds = YES;
+
+        _field = [UITextField new];
+        _field.placeholder = @"Find";
+        _field.autocapitalizationType = UITextAutocapitalizationTypeNone;
+        _field.autocorrectionType = UITextAutocorrectionTypeNo;
+        _field.spellCheckingType = UITextSpellCheckingTypeNo;
+        _field.smartQuotesType = UITextSmartQuotesTypeNo;
+        _field.smartDashesType = UITextSmartDashesTypeNo;
+        _field.returnKeyType = UIReturnKeySearch;
+        _field.clearButtonMode = UITextFieldViewModeWhileEditing;
+        UIImageView *glass = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"magnifyingglass"]];
+        glass.tintColor = UIColor.secondaryLabelColor;
+        _field.leftView = glass;
+        _field.leftViewMode = UITextFieldViewModeAlways;
+        _field.delegate = self;
+        [_field addTarget:self action:@selector(textChanged:) forControlEvents:UIControlEventEditingChanged];
+
+        _countLabel = [UILabel new];
+        _countLabel.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightRegular];
+        _countLabel.textColor = UIColor.secondaryLabelColor;
+        [_countLabel setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+        [_countLabel setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+
+        UIButton *previous = [self buttonWithSymbol:@"chevron.up" label:@"Previous" action:@selector(previousPressed:)];
+        UIButton *next = [self buttonWithSymbol:@"chevron.down" label:@"Next" action:@selector(nextPressed:)];
+        UIButton *done = [UIButton buttonWithType:UIButtonTypeSystem];
+        [done setTitle:@"Done" forState:UIControlStateNormal];
+        done.titleLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
+        [done addTarget:self action:@selector(donePressed:) forControlEvents:UIControlEventPrimaryActionTriggered];
+        [done setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+        [done setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+
+        UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:@[_field, _countLabel, previous, next, done]];
+        row.alignment = UIStackViewAlignmentCenter;
+        row.spacing = 4;
+        [row setCustomSpacing:10 afterView:_countLabel];
+        [row setCustomSpacing:10 afterView:next];
+        row.translatesAutoresizingMaskIntoConstraints = NO;
+        [self.contentView addSubview:row];
+        [NSLayoutConstraint activateConstraints:@[
+            [row.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor constant:12],
+            [row.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor constant:-12],
+            [row.topAnchor constraintEqualToAnchor:self.contentView.topAnchor],
+            [row.bottomAnchor constraintEqualToAnchor:self.contentView.bottomAnchor],
+            [row.heightAnchor constraintEqualToConstant:44],
+            [_field.heightAnchor constraintEqualToAnchor:row.heightAnchor],
+        ]];
+    }
+    return self;
+}
+
+- (UIButton *)buttonWithSymbol:(NSString *)symbol label:(NSString *)label action:(SEL)action {
+    UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
+    [button setImage:[UIImage systemImageNamed:symbol] forState:UIControlStateNormal];
+    button.accessibilityLabel = label;
+    [button addTarget:self action:action forControlEvents:UIControlEventPrimaryActionTriggered];
+    [NSLayoutConstraint activateConstraints:@[
+        [button.widthAnchor constraintEqualToConstant:36],
+        [button.heightAnchor constraintEqualToConstant:44],
+    ]];
+    return button;
+}
+
+- (void)textChanged:(UITextField *)field {
+    self.find(field.text, NO, YES);
+}
+- (BOOL)textFieldShouldReturn:(UITextField *)field {
+    self.find(field.text, NO, NO);
+    return NO;
+}
+- (void)previousPressed:(id)sender {
+    self.find(self.field.text, YES, NO);
+}
+- (void)nextPressed:(id)sender {
+    self.find(self.field.text, NO, NO);
+}
+- (void)donePressed:(id)sender {
+    self.done();
+}
+
+- (NSArray<UIKeyCommand *> *)keyCommands {
+    UIKeyCommand *escape = [UIKeyCommand keyCommandWithInput:UIKeyInputEscape modifierFlags:0 action:@selector(donePressed:)];
+    UIKeyCommand *previous = [UIKeyCommand keyCommandWithInput:@"\r" modifierFlags:UIKeyModifierShift action:@selector(previousPressed:)];
+    escape.wantsPriorityOverSystemBehavior = YES;
+    previous.wantsPriorityOverSystemBehavior = YES;
+    return @[escape, previous];
+}
+
+// "3/12"; "0/0" for no match; nothing before there is text to find. The
+// matches are counted up to the first 1000.
+- (void)showIndex:(NSInteger)index count:(NSInteger)count {
+    if (self.field.text.length == 0) {
+        self.countLabel.text = nil;
+        return;
+    }
+    self.countLabel.text = [NSString stringWithFormat:@"%ld/%ld%@", (long) index + 1, (long) count, count >= 1000 ? @"+" : @""];
+}
+
+@end
+
+#pragma mark - TerminalViewController
 
 @implementation TerminalViewController
 
@@ -159,6 +307,8 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
                  object:nil];
 
 
+    [self addSymbolKey];
+    [self addHideKeyboardKey];
     [self _updateStyleFromPreferences:NO];
     
     // Two fingers across the terminal: the next tab, or the previous one
@@ -170,14 +320,12 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
         [self.termView addGestureRecognizer:swipe];
     }
 
-    self.barView.accessibilityCustomActions = @[[[UIAccessibilityCustomAction alloc] initWithName:@"Hide Keyboard" actionHandler:^BOOL(UIAccessibilityCustomAction *action) {
-        return [self.termView resignFirstResponder];
-    }]];
-    // The bar is a row of flat keys, a point apart: esc, ctrl and tab from the
-    // left edge, the four arrows and paste to the right one, the room a wide
-    // screen leaves between them (the spacer, in the storyboard). 42 points
-    // tall on a phone (50 on an iPad) and about as wide (resizeBar). esc and
-    // ctrl are named in lowercase; tab, paste and the arrows are drawn.
+    // The bar is a row of flat keys, a point apart: esc, ctrl, tab and / from
+    // the left edge, the four arrows, paste and hide keyboard to the right one,
+    // the room a wide screen leaves between them (the spacer, in the
+    // storyboard). 42 points tall on a phone (50 on an iPad) and about as wide
+    // (resizeBar). esc and ctrl are named in lowercase; tab, paste, hide
+    // keyboard and the arrows are drawn.
     bool phone = UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone;
     self.barHeight.constant = phone ? 42 : 50;
     CGFloat keyFontSize = phone ? 18 : 21;
@@ -186,6 +334,7 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
     NSDictionary<NSString *, UIButton *> *namedKeys = @{
         @"esc": self.escapeKey,
         @"ctrl": self.controlKey,
+        kSymbolKeySymbol: self.symbolKey,
     };
     [namedKeys enumerateKeysAndObjectsUsingBlock:^(NSString *name, UIButton *key, BOOL *_) {
         [key setTitle:name forState:UIControlStateNormal];
@@ -199,6 +348,7 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
     NSDictionary<NSString *, UIButton *> *symbolKeys = @{
         @"arrow.right.to.line": self.tabKey,
         @"doc.on.clipboard": self.pasteButton,
+        @"keyboard.chevron.compact.down": self.hideKeyboardKey,
     };
     [symbolKeys enumerateKeysAndObjectsUsingBlock:^(NSString *symbol, UIButton *key, BOOL *_) {
         [key setTitle:nil forState:UIControlStateNormal];
@@ -238,6 +388,18 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
     }]];
     [center addObserver:self selector:@selector(pasteStackDidChange:) name:ClipboardStackDidChangeNotification object:nil];
     [self pasteStackDidChange:nil];
+
+    // Tab held: Shift-Tab
+    UILongPressGestureRecognizer *holdTab = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(tabKeyHeld:)];
+    [self.tabKey addGestureRecognizer:holdTab];
+    self.tabKey.accessibilityCustomActions = @[[[UIAccessibilityCustomAction alloc] initWithName:@"Shift-Tab" actionHandler:^BOOL(UIAccessibilityCustomAction *_) {
+        [weakSelf.termView insertSequence:@"\x1b[Z"];
+        return YES;
+    }]];
+    // A key clicks as it goes down, as the keyboard's do with their clicks on
+    // in Settings (BarView's enableInputClicksWhenVisible)
+    for (UIButton *key in self.barButtons)
+        [key addTarget:self action:@selector(barKeyDown:) forControlEvents:UIControlEventTouchDown];
 }
 
 - (void)awakeFromNib {
@@ -416,6 +578,16 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
 
 - (NSUUID *)sessionTerminalUUID {
     return self.selectedSession.uuid;
+}
+
+- (BOOL)showSessionWithUUID:(NSUUID *)uuid {
+    for (TerminalSession *session in self.tabs) {
+        if ([session.uuid isEqual:uuid]) {
+            self.selectedSession = session;
+            return YES;
+        }
+    }
+    return NO;
 }
 
 - (Terminal *)sessionTerminal {
@@ -640,10 +812,15 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
         self.view.backgroundColor = [[UIColor alloc] ish_initWithHexString:UserPreferences.shared.palette.backgroundColor];
         [self.tabBar setBackgroundColor:self.view.backgroundColor
                         foregroundColor:[[UIColor alloc] ish_initWithHexString:UserPreferences.shared.palette.foregroundColor]];
-        UIKeyboardAppearance keyAppearance = UserPreferences.shared.keyboardAppearance;
-        self.termView.keyboardAppearance = keyAppearance;
+        self.termView.keyboardAppearance = UserPreferences.shared.keyboardAppearance;
+        // The keys in the theme's colors, as the tab strip is: its background
+        // nudged toward its foreground, more so pressed
+        UIColor *background = self.view.backgroundColor;
+        UIColor *foreground = [[UIColor alloc] ish_initWithHexString:UserPreferences.shared.palette.foregroundColor];
         for (BarButton *button in self.barButtons) {
-            button.keyAppearance = keyAppearance;
+            [button setKeyColor:[background ish_blendedWithColor:foreground fraction:0.18]
+                   pressedColor:[background ish_blendedWithColor:foreground fraction:0.36]
+                      textColor:foreground];
         }
         // the gaps between the keys and the rest of the row
         self.barView.backgroundColor = self.view.backgroundColor;
@@ -750,10 +927,10 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
     UIView *extraKeys = self.termView.inputAccessoryView;
     NSLog(@"%@ keyboard %@ -> pad %.1f; extra keys at %@ (window %@)", notification.name, @(keyboardFrame), pad,
           @([self.view convertRect:extraKeys.bounds fromView:extraKeys]), extraKeys.window != nil ? @"yes" : @"no");
+    self.keyboardPad = pad;
     // Nothing to move: no layout, which would lay out the keyboard's window
-    if (self.bottomConstraint.constant == pad)
+    if (![self applyBottomPad])
         return;
-    self.bottomConstraint.constant = pad;
 
     BOOL initialLayout = self.termView.needsUpdateConstraints;
     [self.view setNeedsUpdateConstraints];
@@ -769,6 +946,23 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
                          }
                          completion:nil];
     }
+}
+
+// The terminal's bottom: above the keyboard, and with it away (put down, or
+// none on screen) above the home indicator, whose bar would be over the last
+// line. Whether that moved it.
+- (BOOL)applyBottomPad {
+    CGFloat pad = MAX(self.keyboardPad, self.view.safeAreaInsets.bottom);
+    if (self.bottomConstraint.constant == pad)
+        return NO;
+    self.bottomConstraint.constant = pad;
+    return YES;
+}
+
+// A rotation, or the phone folded or unfolded, changes the home indicator's room
+- (void)viewSafeAreaInsetsDidChange {
+    [super viewSafeAreaInsetsDidChange];
+    [self applyBottomPad];
 }
 
 - (void)setHasExternalKeyboard:(BOOL)hasExternalKeyboard {
@@ -817,9 +1011,9 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
 
 - (void)resizeBar {
     // Keys 41 points wide on a phone and 50 on an iPad, which in Slide Over is
-    // as narrow as a phone; narrower if the row is (39 on a 320-point iPhone
-    // SE). Every arranged view but the spacer between tab and the arrows is a
-    // key.
+    // as narrow as a phone; narrower if the row is (38 on a 393-point iPhone,
+    // 31 on a 320-point iPhone SE). Every arranged view but the spacer between
+    // / and the arrows is a key.
     bool phone = UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone;
     NSUInteger views = self.bar.arrangedSubviews.count;
     NSUInteger keys = views - 1;
@@ -829,6 +1023,80 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
     [UIView performWithoutAnimation:^{
         [self.barView layoutIfNeeded];
     }];
+}
+
+// A key of the bar's made here rather than in the storyboard, at index of the
+// row, as wide as the others
+- (BarButton *)addBarKeyAtIndex:(NSUInteger)index {
+    BarButton *key = [[BarButton alloc] initWithFrame:CGRectZero];
+    key.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.bar insertArrangedSubview:key atIndex:index];
+    [key.widthAnchor constraintEqualToAnchor:self.pasteButton.widthAnchor].active = YES;
+    self.barButtons = [self.barButtons arrayByAddingObject:key];
+    return key;
+}
+
+- (void)addSymbolKey {
+    BarButton *key = [self addBarKeyAtIndex:[self.bar.arrangedSubviews indexOfObject:self.tabKey] + 1];
+    key.accessibilityLabel = @"Slash";
+    [key addTarget:self action:@selector(pressSymbolKey:) forControlEvents:UIControlEventPrimaryActionTriggered];
+    UILongPressGestureRecognizer *hold = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(symbolKeyHeld:)];
+    hold.minimumPressDuration = 0.4;
+    [key addGestureRecognizer:hold];
+    // VoiceOver: each symbol an action of the key
+    __weak typeof(self) weakSelf = self;
+    NSMutableArray<UIAccessibilityCustomAction *> *actions = [NSMutableArray new];
+    for (NSArray<NSString *> *row in HeldSymbols()) {
+        for (NSString *symbol in row) {
+            [actions addObject:[[UIAccessibilityCustomAction alloc] initWithName:symbol actionHandler:^BOOL(UIAccessibilityCustomAction *_) {
+                [weakSelf pressKey:symbol];
+                return YES;
+            }]];
+        }
+    }
+    key.accessibilityCustomActions = actions;
+    self.symbolKey = key;
+}
+
+// The keyboard put down, these keys with it; a tap on the terminal brings
+// them back
+- (void)addHideKeyboardKey {
+    BarButton *key = [self addBarKeyAtIndex:self.bar.arrangedSubviews.count];
+    key.accessibilityLabel = @"Hide Keyboard";
+    [key addTarget:self.termView action:@selector(loseFocus:) forControlEvents:UIControlEventPrimaryActionTriggered];
+    self.hideKeyboardKey = key;
+}
+
+- (void)pressSymbolKey:(id)sender {
+    [self pressKey:kSymbolKeySymbol];
+}
+
+- (void)symbolKeyHeld:(UILongPressGestureRecognizer *)hold {
+    switch (hold.state) {
+        case UIGestureRecognizerStateBegan:
+            self.symbolPopup = [[KeyPopupView alloc] initWithRows:HeldSymbols()];
+            [self.symbolPopup showOverKey:self.symbolKey within:self.bar];
+            [self.symbolPopup track:[hold locationInView:self.symbolPopup.superview]];
+            break;
+        case UIGestureRecognizerStateChanged:
+            [self.symbolPopup track:[hold locationInView:self.symbolPopup.superview]];
+            break;
+        case UIGestureRecognizerStateEnded: {
+            KeyPopupView *popup = self.symbolPopup;
+            NSString *symbol = popup.moved ? popup.chosen : kSymbolKeySymbol;
+            [popup removeFromSuperview];
+            self.symbolPopup = nil;
+            if (symbol != nil) {
+                [UIDevice.currentDevice playInputClick];
+                [self pressKey:symbol];
+            }
+            break;
+        }
+        default:
+            [self.symbolPopup removeFromSuperview];
+            self.symbolPopup = nil;
+            break;
+    }
 }
 
 - (IBAction)pressEscape:(id)sender {
@@ -843,6 +1111,19 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
 
 - (IBAction)pressControl:(id)sender {
     self.controlKey.selected = !self.controlKey.selected;
+}
+
+- (void)barKeyDown:(UIButton *)key {
+    [UIDevice.currentDevice playInputClick];
+}
+
+// Shift-Tab, as xterm sends it: claude's next mode, a completion menu's
+// previous entry. The key's own tab is not sent: the hold took its touch.
+- (void)tabKeyHeld:(UILongPressGestureRecognizer *)recognizer {
+    if (recognizer.state != UIGestureRecognizerStateBegan)
+        return;
+    [UIDevice.currentDevice playInputClick];
+    [self.termView insertSequence:@"\x1b[Z"];
 }
 
 // An arrow key sends its sequence on touch down and, while held, repeats it
@@ -885,13 +1166,13 @@ static NSString *ShellQuoted(NSString *string) {
 }
 
 - (void)increaseFontSize:(id)sender {
-    self.termView.overrideFontSize = self.termView.effectiveFontSize + 1;
+    [self.termView changeFontSize:UserPreferences.shared.fontSize.intValue + 1];
 }
 - (void)decreaseFontSize:(id)sender {
-    self.termView.overrideFontSize = self.termView.effectiveFontSize - 1;
+    [self.termView changeFontSize:UserPreferences.shared.fontSize.intValue - 1];
 }
 - (void)resetFontSize:(id)sender {
-    self.termView.overrideFontSize = 0;
+    [self.termView changeFontSize:kDefaultFontSize];
 }
 
 // Shortcuts that are not menu items: a second binding for Bigger (the unshifted key)
@@ -923,7 +1204,10 @@ static NSString *ShellQuoted(NSString *string) {
     BOOL running = self.selectedSession.state == TerminalSessionStateRunning;
     UserPreferences *prefs = UserPreferences.shared;
     if (action == @selector(selectTabByNumber:)) {
-        NSUInteger index = [command.propertyList unsignedIntegerValue];
+        // ⌘9 the last tab: listed when there are more than eight, else
+        // the last listed is it
+        NSUInteger number = [command.propertyList unsignedIntegerValue];
+        NSUInteger index = number == 8 && count > 8 ? count - 1 : number;
         if (index < count) {
             command.title = self.tabs[index].displayTitle;
             command.state = self.tabs[index] == self.selectedSession ? UIMenuElementStateOn : UIMenuElementStateOff;
@@ -1090,6 +1374,74 @@ static NSString *ShellQuoted(NSString *string) {
 
 #pragma mark Edit menu
 
+- (BOOL)finding {
+    return self.findBar != nil && !self.findBar.hidden;
+}
+
+// The find bar, its field taking the keyboard; its text selected, so that
+// what is typed finds anew
+- (void)showFind:(id)sender {
+    if (self.findBar == nil) {
+        FindBar *bar = [FindBar new];
+        bar.translatesAutoresizingMaskIntoConstraints = NO;
+        __weak typeof(self) weakSelf = self;
+        bar.find = ^(NSString *text, BOOL backwards, BOOL incremental) {
+            [weakSelf.termView find:text backwards:backwards incremental:incremental];
+        };
+        bar.done = ^{
+            [weakSelf hideFind];
+        };
+        self.termView.findResults = ^(NSInteger index, NSInteger count) {
+            [weakSelf.findBar showIndex:index count:count];
+        };
+        [self.view addSubview:bar];
+        UILayoutGuide *safe = self.view.safeAreaLayoutGuide;
+        // The width of the screen less a margin on a phone; at the right, no
+        // wider than a phone's, on a wide one (unfolded, an iPad)
+        NSLayoutConstraint *width = [bar.widthAnchor constraintEqualToConstant:420];
+        width.priority = UILayoutPriorityDefaultHigh;
+        [NSLayoutConstraint activateConstraints:@[
+            [bar.topAnchor constraintEqualToAnchor:self.tabBar.bottomAnchor constant:8],
+            [bar.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-8],
+            [bar.leadingAnchor constraintGreaterThanOrEqualToAnchor:safe.leadingAnchor constant:8],
+            width,
+        ]];
+        self.findBar = bar;
+    }
+    FindBar *bar = self.findBar;
+    bar.overrideUserInterfaceStyle = UserPreferences.shared.requestingDarkAppearance ? UIUserInterfaceStyleDark : UIUserInterfaceStyleLight;
+    bar.hidden = NO;
+    [self.view bringSubviewToFront:bar];
+    [bar.field becomeFirstResponder];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [bar.field selectAll:nil];
+    });
+}
+
+// ⌘G and ⇧⌘G: again, with what the find bar has; the find bar if it has nothing
+- (void)findNextMatch:(id)sender {
+    [self findAgainBackwards:NO];
+}
+- (void)findPreviousMatch:(id)sender {
+    [self findAgainBackwards:YES];
+}
+- (void)findAgainBackwards:(BOOL)backwards {
+    if (!self.finding || self.findBar.field.text.length == 0) {
+        [self showFind:nil];
+        return;
+    }
+    [self.termView find:self.findBar.field.text backwards:backwards incremental:NO];
+}
+
+// Done: the highlights go, and the keyboard goes back to the terminal
+- (void)hideFind {
+    if (!self.finding)
+        return;
+    [self.termView clearFind];
+    self.findBar.hidden = YES;
+    [self.termView becomeFirstResponder];
+}
+
 - (void)paste:(id)sender {
     [self.termView paste:sender];
 }
@@ -1151,8 +1503,13 @@ static NSString *ShellQuoted(NSString *string) {
 - (void)previousTab:(id)sender {
     [self selectNeighborTab:-1];
 }
+// ⌘1 to ⌘8 the first eight tabs, ⌘9 the last, as in browsers
 - (void)selectTabByNumber:(UICommand *)sender {
-    [self selectTabAtIndex:[sender.propertyList unsignedIntegerValue]];
+    NSUInteger number = [sender.propertyList unsignedIntegerValue];
+    if (number == 8 && self.tabs.count > 0)
+        [self selectTabAtIndex:self.tabs.count - 1];
+    else
+        [self selectTabAtIndex:number];
 }
 
 - (void)moveSelectedTabBy:(NSInteger)offset {
@@ -1499,13 +1856,16 @@ static NSString *ShellQuoted(NSString *string) {
 }
 
 - (void)setTerminal:(Terminal *)terminal {
+    // what was found is the terminal's that is going
+    if (terminal != _terminal)
+        [self hideFind];
     _terminal = terminal;
     self.termView.terminal = self.terminal;
 }
 
 @end
 
-@interface BarView : UIInputView
+@interface BarView : UIInputView <UIInputViewAudioFeedback>
 @property (weak) IBOutlet TerminalViewController *terminalViewController;
 @property (nonatomic) IBInspectable BOOL allowsSelfSizing;
 @end
@@ -1514,6 +1874,11 @@ static NSString *ShellQuoted(NSString *string) {
 
 - (void)layoutSubviews {
     [self.terminalViewController resizeBar];
+}
+
+// The keys' clicks (playInputClick), which follow Settings' keyboard clicks
+- (BOOL)enableInputClicksWhenVisible {
+    return YES;
 }
 
 @end

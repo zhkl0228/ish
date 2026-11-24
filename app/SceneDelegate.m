@@ -5,6 +5,7 @@
 //  Created by Theodore Dubois on 10/26/19.
 //
 
+#import <UserNotifications/UserNotifications.h>
 #import "SceneDelegate.h"
 #import "AboutViewController.h"
 #import "TerminalSession.h"
@@ -103,6 +104,8 @@ NSArray<NSUUID *> *SceneTerminalUUIDs(NSUserActivity *activity) {
 - (void)sceneDidBecomeActive:(UIScene *)scene {
     TerminalViewController *terminalViewController = (TerminalViewController *) self.window.rootViewController;;
     currentTerminalViewController = terminalViewController;
+    // The tabs' notifications are of what the tabs show now, marked
+    [UNUserNotificationCenter.currentNotificationCenter removeAllDeliveredNotifications];
 }
 
 - (void)sceneWillResignActive:(UIScene *)scene {

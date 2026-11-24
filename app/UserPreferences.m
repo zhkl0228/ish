@@ -38,6 +38,8 @@ NSDictionary<NSString *, NSString *> *kvoProperties;
 
 static NSString *const kSystemMonospacedFontName = @"ui-monospace";
 
+const int kDefaultFontSize = 12;
+
 @interface UserPreferences () {
     BOOL _hostnameIsOverridden;
 }
@@ -155,7 +157,7 @@ bool (*remove_user_default)(const char *name);
     if (self) {
         _defaults = [NSUserDefaults standardUserDefaults];
         [_defaults registerDefaults:@{
-            kPreferenceFontSizeKey: @(12),
+            kPreferenceFontSizeKey: @(kDefaultFontSize),
             kPreferenceCapsLockMappingKey: @(CapsLockMapControl),
             kPreferenceOptionMappingKey: @(OptionMapNone),
             kPreferenceBacktickEscapeKey: @(NO),

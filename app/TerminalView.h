@@ -18,8 +18,10 @@ enum OverrideAppearance {
 
 @property IBInspectable (nonatomic) BOOL canBecomeFirstResponder;
 
-@property (nonatomic) CGFloat overrideFontSize;
-@property (readonly) CGFloat effectiveFontSize;
+// The font size, the one in Settings (UserPreferences' fontSize): a pinch on
+// the terminal, ⌘+ and ⌘- change it, within the sizes it can be, and the
+// terminal shows the size and the columns and rows it makes
+- (void)changeFontSize:(int)size;
 @property (nonatomic) enum OverrideAppearance overrideAppearance;
 
 @property (nonatomic) UIKeyboardAppearance keyboardAppearance;
@@ -39,6 +41,16 @@ enum OverrideAppearance {
 // Consulted by paste: before it pastes the system clipboard; returns YES if it
 // pasted something itself (the clipboard manager's Paste Stack).
 @property (copy, nullable) BOOL (^pasteInterceptor)(void);
+
+// Find in what the terminal holds: the matches highlighted, the next one (or
+// the previous one) selected and scrolled to; as the text is typed
+// (incremental), the one found stays while it still matches. clearFind takes
+// the highlights and the selection away.
+- (void)find:(NSString *)text backwards:(BOOL)backwards incremental:(BOOL)incremental;
+- (void)clearFind;
+// Which match is found (-1 for none) of how many, after a find and again as
+// output changes them
+@property (copy, nullable) void (^findResults)(NSInteger index, NSInteger count);
 
 // Screen housekeeping, for the menu commands.
 - (void)clearScreen; // the screen but for the line being typed (term.js)
