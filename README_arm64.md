@@ -249,6 +249,11 @@ minirootfs. Each push to master publishes the ipa and its dSYMs as a release, th
 five kept: the newest is at `releases/latest/download/iSH-ARM64-unsigned.ipa`. It is
 unsigned: sign it with your own developer account to install it.
 
+`uname -v` (and `/proc/version`) says which build runs: `#1 SMP iSH 2.1.0 (806) <commit>
+<commit date>` (`iSH cli` in the command line tool, `-dirty` after a commit built with
+changes); `/proc/ish/version` says the same and the JIT's abi, which an AOT image must match.
+`uname -r` stays `4.20.69-ish`: programs read it to tell what the kernel has.
+
 **AddressSanitizer.** A heap overflow or use-after-free in iSH itself usually
 crashes it later, somewhere in `malloc` or `free`, or not at all.
 `tools/build-asan.sh` builds an ASan `ish`, which stops at the bad access and

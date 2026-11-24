@@ -1,0 +1,3 @@
+// Made by meson (vcs_tag, meson.build) at every build: the date of the
+// commit built
+#define ISH_COMMIT_DATE "@DATE@"

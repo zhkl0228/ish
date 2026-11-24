@@ -1655,7 +1655,20 @@ libfakefs = library('fakefs',
 
 arch_kernel_src = ['kernel/arch/arm64/calls.c', 'kernel/sysvipc.c', 'kernel/shm.c', 'kernel/msg.c', 'kernel/sem.c']
 
+# The commit built and its date, which uname -v and /proc/ish/version say
+# (kernel/uname.c): looked up at every build, a header rewritten only when
+# they change. "-dirty" when the work tree has changes; out of a git
+# checkout, "unknown". Tags left out: the releases' (ipa-...) are not
+# versions of the source.
+ish_commit = vcs_tag(
+    command: ['git', 'describe', '--always', '--dirty', '--abbrev=8', '--exclude=*'],
+    input: 'kernel/ish-commit.h.in', output: 'ish-commit.h', replace_string: '@COMMIT@', fallback: 'unknown')
+ish_commit_date = vcs_tag(
+    command: ['git', 'log', '-1', '--format=%cs'],
+    input: 'kernel/ish-commit-date.h.in', output: 'ish-commit-date.h', replace_string: '@DATE@', fallback: 'unknown')
+
 src = [
+    ish_commit, ish_commit_date,
     'kernel/init.c',
     'kernel/errno.c',
 

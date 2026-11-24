@@ -1,0 +1,2 @@
+// Made by meson (vcs_tag, meson.build) at every build: the commit built
+#define ISH_COMMIT "@COMMIT@"

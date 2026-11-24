@@ -1,11 +1,17 @@
 #include "fs/proc.h"
 #include "fs/proc/ish.h"
+#include "kernel/calls.h"
 #include "kernel/errno.h"
 #include "fs/poll.h"
 #include "platform/platform.h"
 #include "fs/real.h"
 #include "kernel/memory.h"
 #include "asbestos/asbestos.h"
+#ifdef ISH_JIT
+#include "asbestos/guest-arm64/jit.h"
+#endif
+#include "ish-commit.h"
+#include "ish-commit-date.h"
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -161,8 +167,16 @@ static bool proc_ish_defaults_readdir(struct proc_entry *entry, unsigned long *i
     return true;
 }
 
+// The build: the app's version (the first line, as it was alone before), the
+// commit and its date, and the JIT's abi, which an AOT image must match
 static int proc_ish_show_version(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
-    proc_printf(buf, "%s\n", proc_ish_version);
+    proc_printf(buf, "%s\n", ish_build_name());
+    proc_printf(buf, "commit: %s (%s)\n", ISH_COMMIT, ISH_COMMIT_DATE);
+#ifdef ISH_JIT
+    proc_printf(buf, "abi: %08x (JIT_CODE_VERSION %u)\n", jit_abi(), jit_code_version());
+#else
+    proc_printf(buf, "abi: none (no JIT)\n");
+#endif
     return 0;
 }
 

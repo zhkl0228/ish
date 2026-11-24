@@ -1,7 +1,10 @@
 #include <sys/utsname.h>
 #include <string.h>
 #include "kernel/calls.h"
+#include "fs/proc/ish.h"
 #include "platform/platform.h"
+#include "ish-commit.h"
+#include "ish-commit-date.h"
 
 #if __linux__
 #include <sys/sysinfo.h>
@@ -9,7 +12,14 @@
 
 #define SYSINFO_DEBUG 0
 
-const char *uname_version = "SUPER AWESOME";
+// What uname -v (and /proc/version) says of this ish, where Linux says its
+// build ("#1 SMP PREEMPT_DYNAMIC <date>"): the app's version, "iSH cli" in the
+// command line tool, the commit built and its date. The release (uname -r)
+// stays 4.20.69, which programs read to tell what the kernel has (libuv takes
+// io_uring from 5.10 on).
+const char *ish_build_name(void) {
+    return proc_ish_version[0] != '\0' ? proc_ish_version : "iSH cli";
+}
 const char *uname_hostname_override = NULL;
 
 void do_uname(struct uname *uts) {
@@ -23,7 +33,7 @@ void do_uname(struct uname *uts) {
     strcpy(uts->system, "Linux");
     strcpy(uts->hostname, hostname);
     strcpy(uts->release, "4.20.69-ish");
-    snprintf(uts->version, sizeof(uts->version), "%s %s %s", uname_version, __DATE__, __TIME__);
+    snprintf(uts->version, sizeof(uts->version), "#1 SMP %s %s %s", ish_build_name(), ISH_COMMIT, ISH_COMMIT_DATE);
     strcpy(uts->arch, "aarch64");
     strcpy(uts->domain, "(none)");
 }

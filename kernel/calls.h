@@ -284,6 +284,8 @@ struct uname {
     char domain[UNAME_LENGTH];   // lol
 };
 void do_uname(struct uname *uts);
+// The app's name and version, "iSH cli" in the command line tool (kernel/uname.c)
+const char *ish_build_name(void);
 dword_t sys_uname(addr_t uts_addr);
 dword_t sys_sethostname(addr_t hostname_addr, dword_t hostname_len);
 

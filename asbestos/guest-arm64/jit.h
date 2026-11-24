@@ -81,6 +81,11 @@ struct asbestos;
 // The address space is going away: release its module contexts.
 void jit_asbestos_free(struct asbestos *asbestos);
 
+// What an AOT image must have been made with to be used (asbestos/guest-arm64/aot.h):
+// this ish's abi, and the version of the code it emits, which the abi covers
+uint32_t jit_abi(void);
+unsigned jit_code_version(void);
+
 // Block chaining (asbestos lock held): patch / restore the direct branch in
 // `from`'s native exit for jump_ip[i]. No-ops for blocks without one.
 void jit_link(struct fiber_block *from, int i, struct fiber_block *to);

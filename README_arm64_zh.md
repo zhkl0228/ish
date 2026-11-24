@@ -235,6 +235,11 @@ CLI（不许有警告），再在 Alpine aarch64 minirootfs 上跑回归测试�
 和 dSYM 发布成一个 Release，只保留最新 5 个；最新的固定在
 `releases/latest/download/iSH-ARM64-unsigned.ipa`。ipa 不签名，用自己的开发者账号签名后安装。
 
+`uname -v`（以及 `/proc/version`）说明运行的是哪个构建：`#1 SMP iSH 2.1.0 (806) <commit>
+<commit 日期>`（命令行工具里是 `iSH cli`；构建时工作区有改动则 commit 后带 `-dirty`）；
+`/proc/ish/version` 给出同样的信息，外加 JIT 的 abi（AOT 镜像必须与之一致）。
+`uname -r` 保持 `4.20.69-ish`：程序靠它判断内核支持哪些功能。
+
 **AddressSanitizer。** iSH 自身的堆越界或 use-after-free 通常要过一阵才在 `malloc`、`free`
 里崩，或者根本不崩。`tools/build-asan.sh` 构建 ASan 版的 `ish`，它停在出错的那次访问上，
 报出位置以及那块内存在哪分配、在哪释放：
