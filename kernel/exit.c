@@ -35,6 +35,10 @@ __attribute__((weak)) void restore_termios(void) {}
 static bool delete_timers_if_last(struct task *task) {
     struct timer *timers[1 + TIMERS_MAX];
     int count = 0;
+    // and the thread sampling for the CPU-time itimers, joined after: it uses
+    // the group, and takes pids_lock (kernel/time.c)
+    bool join_cpu_itimer = false;
+    pthread_t cpu_itimer_thread;
     lock(&pids_lock);
     struct tgroup *group = task->group;
     bool last = true;
@@ -56,10 +60,20 @@ static bool delete_timers_if_last(struct task *task) {
             timer->timer = NULL;
             timer->tgroup = NULL;
         }
+        lock(&group->lock);
+        if (group->cpu_itimer_running) {
+            group->cpu_itimer_stop = true;
+            group->cpu_itimer_running = false;
+            cpu_itimer_thread = group->cpu_itimer_thread;
+            join_cpu_itimer = true;
+        }
+        unlock(&group->lock);
     }
     unlock(&pids_lock);
     for (int i = 0; i < count; i++)
         timer_free(timers[i]);
+    if (join_cpu_itimer)
+        pthread_join(cpu_itimer_thread, NULL);
     return last;
 }
 

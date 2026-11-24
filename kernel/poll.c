@@ -192,13 +192,23 @@ static dword_t poll_common(addr_t fds, dword_t nfds, struct timespec *timeout) {
         poll_add_fd(poll, files[i], polls[i].fd, events | POLL_ALWAYS_LISTENING, (union poll_fd_info) (void *) files[i]);
     }
 
+    // An fd that is not is POLLNVAL, and ready, as Linux counts it: the poll
+    // does not wait. poll_wait counts the fds it watches only: the poll
+    // waited (for good with no timeout) and said 0, that revents set or not
+    // (CPython's test_poll unit tests hung).
+    int invalid = 0;
     for (unsigned i = 0; i < nfds; i++) {
         polls[i].revents = 0;
-        if (polls[i].fd >= 0 && files[i] == NULL)
+        if (polls[i].fd >= 0 && files[i] == NULL) {
             polls[i].revents = POLL_NVAL;
+            invalid++;
+        }
     }
+    struct timespec no_wait = {0, 0};
     struct poll_context context = {polls, files, nfds};
-    int res = poll_wait(poll, poll_event_callback, &context, timeout);
+    int res = poll_wait(poll, poll_event_callback, &context, invalid > 0 ? &no_wait : timeout);
+    if (res >= 0)
+        res += invalid;
     poll_destroy(poll);
     for (unsigned i = 0; i < nfds; i++) {
         if (files[i] != NULL)

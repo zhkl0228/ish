@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h>
+#include <string.h>
 #include <stdatomic.h>
 #include "debug.h"
 #include "kernel/task.h"
@@ -183,6 +184,11 @@ static struct tgroup *tgroup_copy(struct tgroup *old_group) {
         unlock(&group->tty->lock);
     }
     group->itimer = NULL;
+    // nor are the CPU-time ones, nor the thread sampling for them
+    memset(group->cpu_itimer_expires, 0, sizeof(group->cpu_itimer_expires));
+    memset(group->cpu_itimer_interval, 0, sizeof(group->cpu_itimer_interval));
+    group->cpu_itimer_running = false;
+    group->cpu_itimer_stop = false;
     // POSIX timers are not inherited across fork
     for (int i = 0; i < TIMERS_MAX; i++) {
         group->posix_timers[i] = (struct posix_timer) {};

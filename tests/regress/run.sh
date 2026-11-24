@@ -881,6 +881,94 @@ EOF
         status=1
     fi
     echo
+    echo "########## a name ending in a slash: O_CREAT EISDIR, unlink ENOTDIR ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_trailing_slash" tests/regress/regress_trailing_slash.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_trailing_slash 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_trailing_slash"
+    else
+        echo "failed to build regress_trailing_slash" >&2
+        status=1
+    fi
+    echo
+    echo "########## utimensat with AT_SYMLINK_NOFOLLOW: a symlink's own times ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_symlink_utime" tests/regress/regress_symlink_utime.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_symlink_utime 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_symlink_utime"
+    else
+        echo "failed to build regress_symlink_utime" >&2
+        status=1
+    fi
+    echo
+    echo "########## tcdrain, tcsendbreak, tcflow on a pseudo-terminal (ENOTTY) ##########"
+    if "$CC_GUEST" -static -O0 -Wall -pthread -o "$GUEST_ROOT/tmp/regress_tty_flow" tests/regress/regress_tty_flow.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_tty_flow 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_tty_flow"
+    else
+        echo "failed to build regress_tty_flow" >&2
+        status=1
+    fi
+    echo
+    echo "########## prlimit of a process by its pid (EINVAL) ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_prlimit" tests/regress/regress_prlimit.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_prlimit 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_prlimit"
+    else
+        echo "failed to build regress_prlimit" >&2
+        status=1
+    fi
+    echo
+    echo "########## mremap: lengths in whole pages, a range not all mapped (iSH crashed) ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_mremap" tests/regress/regress_mremap.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_mremap 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_mremap"
+    else
+        echo "failed to build regress_mremap" >&2
+        status=1
+    fi
+    echo
+    echo "########## poll of an fd that is not: POLLNVAL, ready at once (it waited) ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_poll_nval" tests/regress/regress_poll_nval.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_poll_nval 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_poll_nval"
+    else
+        echo "failed to build regress_poll_nval" >&2
+        status=1
+    fi
+    echo
+    echo "########## ITIMER_VIRTUAL and ITIMER_PROF ##########"
+    if "$CC_GUEST" -static -O0 -Wall -pthread -o "$GUEST_ROOT/tmp/regress_cpu_itimers" tests/regress/regress_cpu_itimers.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_cpu_itimers 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_cpu_itimers"
+    else
+        echo "failed to build regress_cpu_itimers" >&2
+        status=1
+    fi
+    echo
+    echo "########## a pipe or FIFO end used the other way: EBADF at once (it waited) ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_pipe_wrong_end" tests/regress/regress_pipe_wrong_end.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_pipe_wrong_end 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_pipe_wrong_end"
+    else
+        echo "failed to build regress_pipe_wrong_end" >&2
+        status=1
+    fi
+    echo
     echo "########## calls CPython's test_posix found wrong (fexecve, chown, linkat, affinity, ...) ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_posix_calls" tests/regress/regress_posix_calls.c; then
         out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_posix_calls 2>&1)

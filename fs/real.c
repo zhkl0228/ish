@@ -196,9 +196,20 @@ int realfs_fstat(struct fd *fd, struct statbuf *fake_stat) {
 // host call it is already in. The call used to be retried on every EINTR, so
 // no signal could end its wait: not SIGINT's handler (Python's Ctrl-C while
 // reading a child's output), not SIGSTOP (Ctrl-Z). 0 when ready.
+//
+// An end not open the way it is used is EBADF, as Linux says of it before
+// anything else: it would never be ready, and on a Linux host (iSH's Linux
+// CLI) poll never says a pipe's read end writable, so a write to it waited
+// for good (CPython's test_signal, test_wakeup_write_error). Asked only when
+// it is not ready at once, not on the way of every read and write.
 static int realfs_wait_ready(struct fd *fd, short events) {
     if (!S_ISFIFO(fd->type) || (fd->flags & O_NONBLOCK_) || current == NULL)
         return 0;
+    struct pollfd ready = {.fd = fd->real_fd, .events = events};
+    if (poll(&ready, 1, 0) > 0)
+        return 0;
+    if ((fcntl(fd->real_fd, F_GETFL) & O_ACCMODE) == (events & POLLOUT ? O_RDONLY : O_WRONLY))
+        return _EBADF;
     for (;;) {
         if (task_signal_pending(current))
             return _EINTR;
@@ -935,9 +946,13 @@ int realfs_fsetattr(struct fd *fd, struct attr attr) {
     return err;
 }
 
+// The path is the file's: generic_utime followed its symlinks, or not, as
+// asked. The host following it again, utimensat with AT_SYMLINK_NOFOLLOW set
+// the times of what a symlink points to (a dangling one's ENOENT: CPython's
+// shutil.copytree(symlinks=True), whose copystat sets a copied link's).
 int realfs_utime(struct mount *mount, const char *path, struct timespec atime, struct timespec mtime) {
     struct timespec times[2] = {atime, mtime};
-    int err = utimensat(mount->root_fd, fix_path(path), times, 0);
+    int err = utimensat(mount->root_fd, fix_path(path), times, AT_SYMLINK_NOFOLLOW);
     if (err < 0)
         return errno_map();
     return 0;

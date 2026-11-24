@@ -588,8 +588,14 @@ addr_t sys_mremap(addr_t addr, dword_t old_len, dword_t new_len, dword_t flags) 
         FIXME("missing MREMAP_FIXED");
         return _EINVAL;
     }
-    pages_t old_pages = PAGE(old_len);
-    pages_t new_pages = PAGE(new_len);
+    // Whole pages, as Linux's PAGE_ALIGN: rounded down, a mapping shrunk to
+    // less than a page was taken for none, and its last page unmapped (CPython's
+    // mmap.resize(512) of a page at an offset, test_mmap's test_offset: the
+    // read after was a SIGSEGV). A length of 0 is EINVAL.
+    if (new_len == 0)
+        return _EINVAL;
+    pages_t old_pages = PAGE_ROUND_UP(old_len);
+    pages_t new_pages = PAGE_ROUND_UP(new_len);
 
     // shrinking always works
     if (new_pages <= old_pages) {
@@ -603,9 +609,11 @@ addr_t sys_mremap(addr_t addr, dword_t old_len, dword_t new_len, dword_t flags) 
     if (entry == NULL)
         return _EFAULT;
     dword_t pt_flags = entry->flags;
+    // all of it one mapping, as Linux's vma_to_resize: a page not mapped was
+    // read through a NULL entry (&& for ||), and iSH crashed
     for (page_t page = PAGE(addr); page < PAGE(addr) + old_pages; page++) {
         entry = mem_pt(current->mem, page);
-        if (entry == NULL && entry->flags != pt_flags)
+        if (entry == NULL || entry->flags != pt_flags)
             return _EFAULT;
     }
     if (!(pt_flags & P_ANONYMOUS)) {

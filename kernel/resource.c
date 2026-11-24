@@ -87,11 +87,16 @@ dword_t sys_old_getrlimit32(dword_t resource, addr_t rlim_addr) {
     return 0;
 }
 
-static int check_setrlimit(int resource, struct rlimit_ new_limit) {
+// A limit the task's process may be given, as Linux's do_prlimit: a soft one
+// above the hard one is EINVAL (it was taken), and raising the hard one
+// needs privilege.
+static int check_setrlimit(struct task *task, int resource, struct rlimit_ new_limit) {
+    if (new_limit.cur > new_limit.max)
+        return _EINVAL;
     if (superuser())
         return 0;
     struct rlimit_ old_limit;
-    int err = rlimit_get(current, resource, &old_limit);
+    int err = rlimit_get(task, resource, &old_limit);
     if (err < 0)
         return err;
     if (new_limit.max > old_limit.max)
@@ -104,7 +109,7 @@ dword_t sys_setrlimit32(dword_t resource, addr_t rlim_addr) {
     if (user_get(rlim_addr, rlimit))
         return _EFAULT;
     STRACE("setrlimit(%d, {cur=%#x, max=%#x})", resource, rlimit.cur, rlimit.max);
-    int err = check_setrlimit(resource, rlimit);
+    int err = check_setrlimit(current, resource, rlimit);
     if (err < 0)
         return err;
     return rlimit_set(current, resource, rlimit);
@@ -128,36 +133,47 @@ dword_t sys_setrlimit64(dword_t resource, addr_t rlim_addr) {
     if (user_get(rlim_addr, rlimit))
         return _EFAULT;
     STRACE("setrlimit64(%d, {cur=%#llx, max=%#llx})", resource, (unsigned long long)rlimit.cur, (unsigned long long)rlimit.max);
-    int err = check_setrlimit(resource, rlimit);
+    int err = check_setrlimit(current, resource, rlimit);
     if (err < 0)
         return err;
     return rlimit_set(current, resource, rlimit);
 }
 
+// Any process's limits, by its pid (a thread's tid names its process's), 0
+// the caller's, as Linux's. It was EINVAL for any pid but 0, the caller's own
+// too: util-linux's prlimit --pid, CPython's resource.prlimit(pid), and for a
+// process that is not, EINVAL where Linux says ESRCH (CPython's test_prlimit,
+// which takes EINVAL from it for a soft limit above the hard one).
 dword_t sys_prlimit64(pid_t_ pid, dword_t resource, addr_t new_limit_addr, addr_t old_limit_addr) {
     STRACE("prlimit64(%d, %d)", pid, resource);
-    if (pid != 0)
-        return _EINVAL;
-
-    if (old_limit_addr != 0) {
-        struct rlimit_ rlimit;
-        int err = rlimit_get(current, resource, &rlimit);
-        if (err < 0)
-            return err;
-        STRACE(" old={cur=%#x, max=%#x}", rlimit.cur, rlimit.max);
-        if (user_put(old_limit_addr, rlimit))
+    struct rlimit_ new_limit;
+    if (new_limit_addr != 0) {
+        if (user_get(new_limit_addr, new_limit))
             return _EFAULT;
+        STRACE(" new={cur=%#x, max=%#x}", new_limit.cur, new_limit.max);
     }
 
-    if (new_limit_addr != 0) {
-        struct rlimit_ rlimit;
-        if (user_get(new_limit_addr, rlimit))
+    lock(&pids_lock);
+    struct task *task = pid == 0 ? current : pid_get_task(pid);
+    if (task == NULL) {
+        unlock(&pids_lock);
+        return _ESRCH;
+    }
+    struct rlimit_ old_limit;
+    int err = rlimit_get(task, resource, &old_limit);
+    if (err == 0 && new_limit_addr != 0) {
+        err = check_setrlimit(task, resource, new_limit);
+        if (err == 0)
+            err = rlimit_set(task, resource, new_limit);
+    }
+    unlock(&pids_lock);
+    if (err < 0)
+        return err;
+
+    if (old_limit_addr != 0) {
+        STRACE(" old={cur=%#x, max=%#x}", old_limit.cur, old_limit.max);
+        if (user_put(old_limit_addr, old_limit))
             return _EFAULT;
-        STRACE(" new={cur=%#x, max=%#x}", rlimit.cur, rlimit.max);
-        int err = check_setrlimit(resource, rlimit);
-        if (err < 0)
-            return err;
-        return rlimit_set(current, resource, rlimit);
     }
     return 0;
 }
