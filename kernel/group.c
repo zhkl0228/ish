@@ -80,10 +80,16 @@ pid_t_ sys_getpgrp(void) {
 // Must lock pids_lock and task->group->lock
 void task_leave_session(struct task *task) {
     struct tgroup *group = task->group;
+    // The session, found while this group is in it: once the last group has
+    // left a session whose leader is gone, its pid is no more (pid_get NULL),
+    // and init, reaping a process that had kept its terminal after its
+    // session's shell exited, read the session of NULL (build/ish-crash-reports
+    // 222919)
+    struct pid *session = pid_get(group->sid);
     list_remove_safe(&group->session);
     if (group->tty) {
         lock(&ttys_lock);
-        if (list_empty(&pid_get(group->sid)->session)) {
+        if (list_empty(&session->session)) {
             lock(&group->tty->lock);
             group->tty->session = 0;
             unlock(&group->tty->lock);

@@ -572,6 +572,32 @@ EOF
     rm -rf "$ttydir"
 
     echo
+    echo "########## a session's last process, orphaned, reaped by init after its leader ##########"
+    # It needs /dev/ptmx and to be init: a fakefs of its own, the test /init.
+    sessdir=$(mktemp -d)
+    if [ -x "$FAKEFSIFY" ] && "$CC_GUEST" -static -O0 -Wall -o "$sessdir/init" \
+            tests/regress/regress_session_orphan.c &&
+        python3 -I - "$sessdir" <<'EOF' &&
+import sys, tarfile
+d = sys.argv[1]
+with tarfile.open(d + '/root.tar.gz', 'w:gz') as t:
+    for name in ('.', './dev', './dev/pts', './tmp', './proc'):
+        ti = tarfile.TarInfo(name); ti.type = tarfile.DIRTYPE; ti.mode = 0o755; t.addfile(ti)
+    ti = t.gettarinfo(d + '/init', './init'); ti.uid = ti.gid = 0; ti.uname = ti.gname = 'root'
+    with open(d + '/init', 'rb') as f:
+        t.addfile(ti, f)
+EOF
+        "$FAKEFSIFY" "$sessdir/root.tar.gz" "$sessdir/fs"
+    then
+        out=$(timeout 60 "$ISH" -f "$sessdir/fs" /init < /dev/null 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+    else
+        echo "failed to set up the session test (needs $FAKEFSIFY and python3)" >&2
+        status=1
+    fi
+    rm -rf "$sessdir"
+
     echo "########## /dev/shm on a fakefs root: a fresh fakefs each boot ##########"
     # Beside the rootfs, which must be on a filesystem iSH works on: one that
     # keeps a file unlinked while open usable (ftruncate), which $TMPDIR or
