@@ -32,6 +32,19 @@ tests/regress/run.sh -m -f -r alpine-arm64-fakefs   # fakefs: runs the cp cases
 `aarch64-linux-musl-gcc` (override with `$CC_GUEST`). If no cross-compiler is
 installed it skips rather than fails, since the toolchain is not vendored here.
 
+On an aarch64 Linux host (Ubuntu's `musl-tools`) the host's `musl-gcc` builds
+the guest's binaries: `CC_GUEST=musl-gcc`. It has no kernel headers, so
+`regress_packet` and `regress_netlink_stub` fail to build with it; give it
+`-isystem` a directory with links to `/usr/include/linux`,
+`/usr/include/asm-generic` and `/usr/include/aarch64-linux-gnu/asm`, by a
+script that runs `musl-gcc -isystem <dir> "$@"`.
+
+Keep the rootfs on a disk of the machine's own. Docker Desktop's share of the
+Mac's disk (virtiofs) does not let a socket be chmod'ed (`EINVAL`), so iSH,
+which gives a socket bound on its rootfs the mode asked for that way, fails
+`bind()`: `regress_unix_path` (3 checks) and `regress_inotify` (1) fail there
+and nowhere else.
+
 Every assertion in `regress_syscall.c` is mount-independent, so `-r` mode is the
 one that matters for the syscall cases. `-f` mode exists for the `cp` cases,
 which need GNU coreutils — usually only present in the fakefs rootfs. Staging a

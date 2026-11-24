@@ -201,22 +201,25 @@ static int proc_ish_show_host(struct proc_entry *UNUSED(entry), struct proc_data
                 (unsigned long long) shared, shared_bytes / 1048576.0, (unsigned long long) reused,
                 reused_bytes / 1048576.0);
     // Where the host mappings and the app's malloc go. Since the app started:
-    // anonymous host mmaps (each a mapping; pt_map_nothing), and of them the
-    // commits of a lazy reservation's page on its first touch, each a host
-    // page (whole) or a guest page; MADV_DONTNEED's pages zeroed in place,
-    // which stay the app's. Now: the translated blocks of every address space.
-    uint64_t anon_mmaps, anon_pages, calls, whole, single, pages_committed;
-    ish_anon_mmap_stats(&anon_mmaps, &anon_pages);
+    // the anonymous host mmaps that became guest memory, each a mapping,
+    // PROT_NONE ones too, and of them the commits of a lazy reservation's page
+    // on its first touch, each a host page (whole) or a guest page, and the
+    // pages copied on write, a guest page each; MADV_DONTNEED's pages zeroed
+    // in place, which stay the app's. Now: the translated blocks of every
+    // address space.
+    uint64_t anon_mmaps, anon_pages, cow_copies, calls, whole, single, pages_committed;
+    ish_anon_mmap_stats(&anon_mmaps, &anon_pages, &cow_copies);
     ish_cluster_stats(&calls, &whole, &single, NULL, NULL, NULL, NULL, &pages_committed);
     extern _Atomic uint64_t st_dontneed_zeroed;
-    proc_printf(buf, "anonymous host mmaps: %llu, for %.1f MB; of them lazy commits %llu (%llu host pages, %llu guest "
-                "pages), %.1f MB\n", (unsigned long long) anon_mmaps, anon_pages * PAGE_SIZE / 1048576.0,
-                (unsigned long long) calls, (unsigned long long) whole, (unsigned long long) single,
-                pages_committed * PAGE_SIZE / 1048576.0);
-    proc_printf(buf, "MADV_DONTNEED zeroed in place: %llu pages, %.1f MB\n",
+    proc_printf(buf, "anonymous host mmaps since the app started: %llu, for %.1f MB; of them lazy commits %llu "
+                "(%llu host pages, %llu guest pages), %.1f MB; copies on write %llu, %.1f MB\n",
+                (unsigned long long) anon_mmaps, anon_pages * PAGE_SIZE / 1048576.0, (unsigned long long) calls,
+                (unsigned long long) whole, (unsigned long long) single, pages_committed * PAGE_SIZE / 1048576.0,
+                (unsigned long long) cow_copies, cow_copies * PAGE_SIZE / 1048576.0);
+    proc_printf(buf, "MADV_DONTNEED zeroed in place since the app started: %llu pages, %.1f MB\n",
                 (unsigned long long) atomic_load(&st_dontneed_zeroed),
                 atomic_load(&st_dontneed_zeroed) * PAGE_SIZE / 1048576.0);
-    proc_printf(buf, "translated blocks: %llu, %.1f MB\n", (unsigned long long) atomic_load(&st_fiber_blocks),
+    proc_printf(buf, "translated blocks now: %llu, %.1f MB\n", (unsigned long long) atomic_load(&st_fiber_blocks),
                 atomic_load(&st_fiber_bytes) / 1048576.0);
     return 0;
 }

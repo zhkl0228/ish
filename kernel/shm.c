@@ -130,6 +130,7 @@ int_t sys_shmget(int_t key, addr_t size, int_t flags) {
         unlock(&shm_lock);
         return _ENOMEM;
     }
+    anon_mmap_count(1, pages);
     struct shm_segment *seg = calloc(1, sizeof(*seg));
     struct data *data = calloc(1, sizeof(*data));
     *data = (struct data) {

@@ -217,9 +217,13 @@ void ish_cluster_stats(uint64_t *calls, uint64_t *full, uint64_t *single,
                        uint64_t *why_mapped, uint64_t *why_flags,
                        uint64_t *why_nocluster, uint64_t *why_enomem,
                        uint64_t *pages_committed);
-// All anonymous host mmaps and the guest pages they backed, across every
-// path — the denominator the cluster hit rate has to be read against.
-void ish_anon_mmap_stats(uint64_t *mmaps, uint64_t *pages);
+// The anonymous host mmaps that became guest memory since the app started,
+// PROT_NONE ones too, a mapping in 16MB chunks one for each, and the guest
+// pages they hold; of them the pages copied on write. Any out-param may be
+// NULL.
+void ish_anon_mmap_stats(uint64_t *mmaps, uint64_t *pages, uint64_t *cow_copies);
+// Count mmaps anonymous host mmaps that became guest memory, of pages pages
+void anon_mmap_count(uint64_t mmaps, pages_t pages);
 // Set the flags on memory
 int pt_set_flags(struct mem *mem, page_t start, pages_t pages, int flags);
 // Copy pages from src memory to dst memory using copy-on-write

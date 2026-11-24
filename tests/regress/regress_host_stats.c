@@ -1,25 +1,29 @@
 // Regression test for what /proc/ish/host says of the host mappings and the
 // app's malloc (0d586712):
 //
-//   anonymous host mmaps: N, for X MB; of them lazy commits C (H host pages,
-//       G guest pages), Y MB
-//   MADV_DONTNEED zeroed in place: P pages, Z MB
-//   translated blocks: B, W MB
+//   anonymous host mmaps since the app started: N, for X MB; of them lazy
+//       commits C (H host pages, G guest pages), Y MB; copies on write K, V MB
+//   MADV_DONTNEED zeroed in place since the app started: P pages, Z MB
+//   translated blocks now: B, W MB
 //
-// The first two count since the app started, the last is what every address
-// space holds now. Checked here:
+// Checked here:
 //  - a 512MB read-write MAP_NORESERVE reservation (a lazy one, as JSC's heap)
 //    touched every 16KB over 64MB: 4096 lazy commits, each an anonymous host
 //    mmap, a host page or a guest page each, at least 16MB committed;
 //  - MADV_DONTNEED over those 64MB zeroes in place what was committed, and the
 //    bytes read zero; over a shared mapping it zeroes nothing, which keeps its
 //    contents;
+//  - an 8MB PROT_NONE mapping, a host one though it costs no memory: an
+//    anonymous host mmap of 8MB;
+//  - 256 pages a forked child writes: as many copies on write, each an
+//    anonymous host mmap;
 //  - 20000 functions of their own, called once each: 20000 blocks more, and
 //    their bytes at least the 128 of each block's gadgets (16 unsigned longs,
 //    FIBER_BLOCK_INITIAL_CAPACITY); unmapped, and in a child that exits or
 //    execs, the blocks go again.
 // On 0d586712 itself the bytes check fails: it counted a block's used, its
-// gadgets' unsigned longs, as bytes (0.3 MB for 20000 blocks).
+// gadgets' unsigned longs, as bytes (0.3 MB for 20000 blocks); and it counted
+// no PROT_NONE mapping and no page copied on write.
 // Natively there is no /proc/ish/host and nothing is checked.
 //
 // Build: aarch64-linux-musl-gcc -static -O0 -o regress_host_stats regress_host_stats.c
@@ -52,8 +56,8 @@ static void check(const char *name, int ok, const char *detail) {
 static char detail[256];
 
 struct stats {
-    unsigned long long anon_mmaps, lazy, host_pages, guest_pages, zeroed, blocks;
-    double anon_mb, committed_mb, zeroed_mb, blocks_mb;
+    unsigned long long anon_mmaps, lazy, host_pages, guest_pages, cow, zeroed, blocks;
+    double anon_mb, committed_mb, cow_mb, zeroed_mb, blocks_mb;
 };
 
 static char text[1 << 16];
@@ -66,11 +70,13 @@ static struct stats read_stats(void) {
     text[n] = '\0';
     int lines = 0;
     for (char *line = strtok(text, "\n"); line != NULL; line = strtok(NULL, "\n")) {
-        lines += sscanf(line, "anonymous host mmaps: %llu, for %lf MB; of them lazy commits %llu (%llu host pages, "
-                        "%llu guest pages), %lf MB", &s.anon_mmaps, &s.anon_mb, &s.lazy, &s.host_pages,
-                        &s.guest_pages, &s.committed_mb) == 6;
-        lines += sscanf(line, "MADV_DONTNEED zeroed in place: %llu pages, %lf MB", &s.zeroed, &s.zeroed_mb) == 2;
-        lines += sscanf(line, "translated blocks: %llu, %lf MB", &s.blocks, &s.blocks_mb) == 2;
+        lines += sscanf(line, "anonymous host mmaps since the app started: %llu, for %lf MB; of them lazy commits "
+                        "%llu (%llu host pages, %llu guest pages), %lf MB; copies on write %llu, %lf MB",
+                        &s.anon_mmaps, &s.anon_mb, &s.lazy, &s.host_pages, &s.guest_pages, &s.committed_mb, &s.cow,
+                        &s.cow_mb) == 8;
+        lines += sscanf(line, "MADV_DONTNEED zeroed in place since the app started: %llu pages, %lf MB", &s.zeroed,
+                        &s.zeroed_mb) == 2;
+        lines += sscanf(line, "translated blocks now: %llu, %lf MB", &s.blocks, &s.blocks_mb) == 2;
     }
     if (lines != 3) {
         printf("FAIL /proc/ish/host has %d of the 3 lines\n", lines);
@@ -131,6 +137,49 @@ static void lazy_commits_and_dontneed(void) {
     snprintf(detail, sizeof(detail), "%llu pages zeroed, a byte %d", s5.zeroed - s4.zeroed, shared[4096]);
     check("MADV_DONTNEED of a shared mapping zeroes nothing", s5.zeroed == s4.zeroed && shared[4096] == 1, detail);
     munmap(shared, MB);
+}
+
+static void prot_none_and_copies_on_write(void) {
+    struct stats s0 = read_stats();
+    // Under 128MB and without MAP_NORESERVE: not a lazy reservation, a host
+    // mapping of its own
+    void *none = mmap(NULL, 8 * MB, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (none == MAP_FAILED) {
+        printf("FAIL mmap of 8MB PROT_NONE\n");
+        exit(1);
+    }
+    struct stats s1 = read_stats();
+    snprintf(detail, sizeof(detail), "%llu mmaps, %.1f MB", s1.anon_mmaps - s0.anon_mmaps, s1.anon_mb - s0.anon_mb);
+    check("a PROT_NONE mapping is an anonymous host mmap",
+          s1.anon_mmaps - s0.anon_mmaps >= 1 && s1.anon_mb - s0.anon_mb > 7.95, detail);
+    munmap(none, 8 * MB);
+
+    char *pages = mmap(NULL, 256 * 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (pages == MAP_FAILED) {
+        printf("FAIL mmap of 1MB\n");
+        exit(1);
+    }
+    memset(pages, 1, 256 * 4096);
+    struct stats s2 = read_stats();
+    fflush(stdout);
+    pid_t pid = fork();
+    if (pid == 0) {
+        for (int i = 0; i < 256; i++)
+            pages[i * 4096] = 2;
+        _exit(0);
+    }
+    int status;
+    waitpid(pid, &status, 0);
+    struct stats s3 = read_stats();
+    // and a few more: the pages of the child's stack and data it writes, and
+    // this process's since the fork
+    unsigned long long cow = s3.cow - s2.cow;
+    snprintf(detail, sizeof(detail), "%llu copies (%.1f MB), %llu anonymous host mmaps", cow, s3.cow_mb - s2.cow_mb,
+             s3.anon_mmaps - s2.anon_mmaps);
+    check("each page a child writes a copy on write, an anonymous host mmap",
+          cow >= 256 && cow < 256 + 200 && s3.cow_mb - s2.cow_mb > 0.95 && s3.anon_mmaps - s2.anon_mmaps >= cow,
+          detail);
+    munmap(pages, 256 * 4096);
 }
 
 // FUNCS functions, add x0, x0, #(i % 4096); ret: a block each
@@ -212,6 +261,7 @@ int main(void) {
         return 0;
     }
     lazy_commits_and_dontneed();
+    prot_none_and_copies_on_write();
     translated_blocks();
     printf("%d passed, %d failed\n", passed, failed);
     return failed != 0;

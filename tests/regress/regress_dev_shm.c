@@ -8,6 +8,13 @@
 // A named semaphore wakes a forked child's sem_wait, and memory from
 // shm_open written by the child is seen by the parent. Natively passes.
 //
+// The two have names of their own: musl's sem_open and shm_open take the same
+// name to the same file, /dev/shm/<name> (glibc puts "sem." before a
+// semaphore's), and sem_unlink is shm_unlink. With one name for both, the
+// shm_unlink before shm_open removed the semaphore's file, sem_unlink then
+// the shared memory's, and the last shm_unlink failed with ENOENT, natively
+// as in iSH.
+//
 // Build: aarch64-linux-musl-gcc -static -O0 -o regress_dev_shm regress_dev_shm.c
 
 #include <fcntl.h>
@@ -35,8 +42,8 @@ int main(void) {
     check("/dev/shm is a sticky world-writable directory",
           stat("/dev/shm", &st) == 0 && S_ISDIR(st.st_mode) && (st.st_mode & 07777) == 01777);
 
-    sem_unlink("/regress_dev_shm");
-    sem_t *ready = sem_open("/regress_dev_shm", O_CREAT | O_EXCL, 0600, 0);
+    sem_unlink("/regress_dev_shm_sem");
+    sem_t *ready = sem_open("/regress_dev_shm_sem", O_CREAT | O_EXCL, 0600, 0);
     check("sem_open", ready != SEM_FAILED);
 
     shm_unlink("/regress_dev_shm");
@@ -64,7 +71,7 @@ int main(void) {
     int status;
     waitpid(child, &status, 0);
 
-    check("sem_unlink", sem_unlink("/regress_dev_shm") == 0);
+    check("sem_unlink", sem_unlink("/regress_dev_shm_sem") == 0);
     check("shm_unlink", shm_unlink("/regress_dev_shm") == 0);
     printf("%d passed, %d failed\n", passed, failed);
     return failed != 0;

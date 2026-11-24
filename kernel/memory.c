@@ -727,12 +727,20 @@ int pt_unmap_always(struct mem *mem, page_t start, pages_t pages) {
     return 0;
 }
 
-// [T-ish-cluster-hitrate] Every anonymous host allocation, and the guest pages
-// it backs, regardless of which path asked for it. Without this the cluster
-// hit rate is unanchored: a high hit rate means nothing if most memory is
-// actually arriving through mmap/brk instead.
-_Atomic uint64_t st_anon_mmaps;        // host mmap calls for anonymous memory
-_Atomic uint64_t st_anon_pages_mapped; // guest pages they backed
+// Every anonymous host mmap that became guest memory since the app started,
+// for /proc/ish/host, and the guest pages it holds. Each is a host mapping,
+// and the app's host mappings and address space are what run out: a PROT_NONE
+// one, which costs no memory, is counted too, a mapping made in 16MB chunks
+// once for each, and a page copied on write, which has a host mapping of its
+// own. Of them the lazy commits are pt_map_cluster's.
+_Atomic uint64_t st_anon_mmaps;
+_Atomic uint64_t st_anon_pages_mapped;
+_Atomic uint64_t st_cow_copies;        // of them, pages copied on write
+
+void anon_mmap_count(uint64_t mmaps, pages_t pages) {
+    atomic_fetch_add_explicit(&st_anon_mmaps, mmaps, memory_order_relaxed);
+    atomic_fetch_add_explicit(&st_anon_pages_mapped, (uint64_t) pages, memory_order_relaxed);
+}
 
 // A chunk of a mapping the host has no free range for: 16MB, a multiple of
 // every host page size
@@ -865,17 +873,13 @@ int pt_map_nothing(struct mem *mem, page_t start, pages_t pages, unsigned flags)
     int err;
     if (memory != MAP_FAILED) {
         err = pt_map(mem, start, pages, memory, 0, flags | P_ANONYMOUS);
+        if (err >= 0)
+            anon_mmap_count(1, pages);
     } else {
         err = pt_map_chunked(mem, start, pages, 0, flags | P_ANONYMOUS, map_anonymous_chunk, &host_prot);
         if (err < 0)
             return err;
-    }
-    if (host_prot != PROT_NONE) {
-        // PROT_NONE reservations cost no physical memory, so they would only
-        // dilute the ratio we are trying to measure.
-        atomic_fetch_add_explicit(&st_anon_mmaps, 1, memory_order_relaxed);
-        atomic_fetch_add_explicit(&st_anon_pages_mapped, (uint64_t)pages,
-                                  memory_order_relaxed);
+        anon_mmap_count((map_size + MAP_CHUNK_BYTES - 1) / MAP_CHUNK_BYTES, pages);
     }
 #if ANON_MMAP_LIMIT_PAGES > 0
     // [T-ish-anon-count-negative] Charge HERE, not at the call sites.
@@ -1018,10 +1022,11 @@ int pt_map_cluster(struct mem *mem, page_t page, unsigned flags,
     return 0;
 }
 
-// Snapshot the cluster-commit counters for host-side diagnostics.
-void ish_anon_mmap_stats(uint64_t *mmaps, uint64_t *pages) {
+// Snapshot the anonymous host mmap counters for /proc/ish/host.
+void ish_anon_mmap_stats(uint64_t *mmaps, uint64_t *pages, uint64_t *cow_copies) {
     if (mmaps) *mmaps = atomic_load(&st_anon_mmaps);
     if (pages) *pages = atomic_load(&st_anon_pages_mapped);
+    if (cow_copies) *cow_copies = atomic_load(&st_cow_copies);
 }
 
 void ish_cluster_stats(uint64_t *calls, uint64_t *full, uint64_t *single,
@@ -1580,7 +1585,10 @@ have_entry:
                 if (entry->flags & P_ANONYMOUS)
                     atomic_fetch_add(&anon_page_count, 1);
 #endif
-                pt_map(mem, page, 1, copy, 0, entry->flags &~ P_COW);
+                if (pt_map(mem, page, 1, copy, 0, entry->flags &~ P_COW) >= 0) {
+                    anon_mmap_count(1, 1);
+                    atomic_fetch_add_explicit(&st_cow_copies, 1, memory_order_relaxed);
+                }
                 mem_changed(mem);
             } else {
                 munmap(copy, PAGE_SIZE);
