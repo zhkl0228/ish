@@ -1503,6 +1503,10 @@ have_entry:
         if (entry->flags & P_COW) {
             void *copy = mmap(NULL, PAGE_SIZE, PROT_READ | PROT_WRITE,
                     MAP_PRIVATE | MAP_ANONYMOUS, 0, 0);
+            // (Claude Code and Kimi Code running at once: MAP_FAILED, and the
+            // page was copied to (void *) -1)
+            if (copy == MAP_FAILED)
+                host_out_of_memory("a page copied on write", PAGE_SIZE);
 
             read_wrunlock(&mem->lock);
 #ifndef NDEBUG

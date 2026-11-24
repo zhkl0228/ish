@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <stdarg.h>
@@ -184,13 +185,15 @@ void die(const char *msg, ...) {
 // the OS still lets the app take (os_proc_available_memory: 0 is its limit
 // met, 0 too where there is none), x2 the app's footprint, x3 its host
 // mappings, x4 malloc's bytes in use, x5 what was being allocated (a string:
-// the frame that called says it too). The same goes to stderr, for the CLI,
-// from the stack.
+// the frame that called says it too), x6 errno (ENOMEM, 12, for both a limit
+// met and no address space left). The same goes to stderr, for the CLI, from
+// the stack.
 void host_out_of_memory(const char *what, size_t size) {
+    int error = errno;
     struct host_memory m = get_host_memory();
     char line[256];
-    int n = snprintf(line, sizeof(line), "host out of memory: %zu bytes for %s; the OS lets the app take %llu more, "
-                     "footprint %llu, %llu mappings, malloc in use %llu\n", size, what,
+    int n = snprintf(line, sizeof(line), "host out of memory: %zu bytes for %s (errno %d); the OS lets the app take "
+                     "%llu more, footprint %llu, %llu mappings, malloc in use %llu\n", size, what, error,
                      (unsigned long long) m.available, (unsigned long long) m.footprint,
                      (unsigned long long) m.mappings, (unsigned long long) m.malloc_in_use);
     write(2, line, n < (int) sizeof(line) ? n : (int) sizeof(line) - 1);
@@ -201,7 +204,8 @@ void host_out_of_memory(const char *what, size_t size) {
     register uint64_t x3 __asm__("x3") = m.mappings;
     register uint64_t x4 __asm__("x4") = m.malloc_in_use;
     register const char *x5 __asm__("x5") = what;
-    __asm__ volatile("brk #0x4f4d" :: "r"(x0), "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5));   // 'OM'
+    register uint64_t x6 __asm__("x6") = (uint64_t) error;
+    __asm__ volatile("brk #0x4f4d" :: "r"(x0), "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5), "r"(x6));   // 'OM'
 #endif
     abort();
 }
