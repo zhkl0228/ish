@@ -57,11 +57,17 @@ static int open_flags_real_from_fake(int flags) {
     if (flags & O_APPEND_) real_flags |= O_APPEND;
     if (flags & O_NONBLOCK_) real_flags |= O_NONBLOCK;
     if (flags & O_NOFOLLOW_) real_flags |= O_NOFOLLOW;
-    /* O_DIRECTORY is deliberately not forwarded: generic_openat() already
-     * enforces ENOTDIR against the guest's view of the type, and Darwin's
-     * open() has no O_DIRECTORY. O_PATH/O_DIRECT have no Darwin equivalent
-     * either (F_NOCACHE is the closest to O_DIRECT and is advisory), so they
-     * stay guest-side only. */
+#ifdef O_DIRECTORY
+    // generic_openat says ENOTDIR of what the guest takes for no directory,
+    // after this open; the host's says it before it opens the file, as
+    // Linux's does. A FIFO's open waits for its other end: os.walk (scandir)
+    // of one waited for good, where Linux says ENOTDIR at once (CPython's
+    // test_walk_named_pipe). A guest's directory is the host's, in fakefs
+    // too, and what is none is none on the host either.
+    if (flags & O_DIRECTORY_) real_flags |= O_DIRECTORY;
+#endif
+    /* O_PATH/O_DIRECT have no Darwin equivalent (F_NOCACHE is the closest to
+     * O_DIRECT and is advisory), so they stay guest-side only. */
     return real_flags;
 }
 

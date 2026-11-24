@@ -166,6 +166,12 @@ static struct fd *generic_openat_path(struct fd *at, const char *path_raw, int f
     fd->flags = flags;
 
     int accmode;
+    // Before anything opens it further or asks may it be, as Linux's
+    // lookup says it: a device was opened (dev_open) to be said no directory
+    err = _ENOTDIR;
+    if (!S_ISDIR(fd->type) && flags & O_DIRECTORY_)
+        goto error;
+
     if (flags & O_RDWR_) accmode = AC_R | AC_W;
     else if (flags & O_WRONLY_) accmode = AC_W;
     else accmode = AC_R;
@@ -194,9 +200,6 @@ static struct fd *generic_openat_path(struct fd *at, const char *path_raw, int f
         goto error;
     err = _EISDIR;
     if (S_ISDIR(fd->type) && flags & (O_RDWR_ | O_WRONLY_))
-        goto error;
-    err = _ENOTDIR;
-    if (!S_ISDIR(fd->type) && flags & O_DIRECTORY_)
         goto error;
     fd->inotify_opened = true;
     inotify_fd(fd, IN_OPEN_);
