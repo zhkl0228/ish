@@ -652,8 +652,15 @@ int pt_map(struct mem *mem, page_t start, pages_t pages, void *memory, size_t of
     assert((uintptr_t) memory % real_page_size == 0 || memory == vdso_data);
 
     struct data *data = data_new(memory, pages * PAGE_SIZE + offset, start);
-    if (data == NULL)
+    if (data == NULL) {
+        // The memory is given to the mapping, by every caller: with nothing
+        // to hold it, it goes, or it stays a host mapping no page reaches
+        // (anonymous memory, a page copied on write, a file's mapping). The
+        // vdso is in iSH's own data, not a host mapping.
+        if (memory != vdso_data)
+            munmap(memory, pages * PAGE_SIZE + offset);
         return _ENOMEM;
+    }
     pt_map_data(mem, start, pages, data, offset, flags);
     return 0;
 }
@@ -1587,12 +1594,22 @@ have_entry:
 #if ANON_MMAP_LIMIT_PAGES > 0
                 // pt_map will unmap the old page (decrementing anon_page_count),
                 // so pre-increment for the new CoW copy to keep balance.
-                if (entry->flags & P_ANONYMOUS)
+                bool anonymous = entry->flags & P_ANONYMOUS;
+                if (anonymous)
                     atomic_fetch_add(&anon_page_count, 1);
 #endif
                 if (pt_map(mem, page, 1, copy, 0, entry->flags &~ P_COW) >= 0) {
                     anon_mmap_count(1, 1);
                     atomic_fetch_add_explicit(&st_cow_copies, 1, memory_order_relaxed);
+                } else {
+                    // Not mapped (pt_map let the copy go), and the old page
+                    // not unmapped: what was counted for it is not. The page
+                    // stays copy on write, so the store faults (mem_ptr_nofault
+                    // gives no pointer to write a P_COW page through).
+#if ANON_MMAP_LIMIT_PAGES > 0
+                    if (anonymous)
+                        atomic_fetch_sub(&anon_page_count, 1);
+#endif
                 }
                 mem_changed(mem);
             } else {
