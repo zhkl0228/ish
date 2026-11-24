@@ -251,7 +251,9 @@ extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 
 // The blob, NUL after it; NULL for none (only its header), or with why set
 // for what csops said otherwise. A header too small for it is filled with
-// its length, and csops says ERANGE.
+// its length only, magic 0, and csops says ERANGE: the magic is the whole
+// blob's, read after (taken from that header, it was 0, and every
+// entitlement unknown on the device).
 static char *entitlements_blob(unsigned ops, uint32_t magic, size_t *len, char *why, size_t why_size) {
     uint32_t header[2] = {0, 0};
     if (csops(getpid(), ops, header, sizeof(header)) < 0 && errno != ERANGE) {
@@ -261,13 +263,16 @@ static char *entitlements_blob(unsigned ops, uint32_t magic, size_t *len, char *
     uint32_t total = ntohl(header[1]);
     if (total <= sizeof(header))
         return NULL;
-    if (ntohl(header[0]) != magic) {
-        snprintf(why, why_size, "csops(%u): magic %#x, length %u", ops, ntohl(header[0]), total);
-        return NULL;
-    }
     char *blob = malloc(total + 1);
     if (csops(getpid(), ops, blob, total) < 0) {
         snprintf(why, why_size, "csops(%u) of %u bytes: %s", ops, total, strerror(errno));
+        free(blob);
+        return NULL;
+    }
+    uint32_t blob_magic;
+    memcpy(&blob_magic, blob, sizeof(blob_magic));
+    if (ntohl(blob_magic) != magic) {
+        snprintf(why, why_size, "csops(%u): magic %#x, length %u", ops, ntohl(blob_magic), total);
         free(blob);
         return NULL;
     }
