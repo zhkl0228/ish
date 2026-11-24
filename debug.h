@@ -75,6 +75,10 @@ extern int log_override;
 #define ERRNO_DIE(msg) { perror(msg); abort(); }
 extern void (*die_handler)(const char *msg);
 _Noreturn void die(const char *msg, ...);
+// A host allocation of size bytes for what failed, where nothing can go on
+// without it: the host's memory reported without allocating any, then a trap
+// (kernel/log.c)
+_Noreturn void host_out_of_memory(const char *what, size_t size);
 
 #define STRACE(msg, ...) TRACE_(strace, msg, ##__VA_ARGS__)
 

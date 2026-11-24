@@ -167,6 +167,8 @@ static void fork_rate_wait(struct task *task) {
 
 static struct tgroup *tgroup_copy(struct tgroup *old_group) {
     struct tgroup *group = malloc(sizeof(struct tgroup));
+    if (group == NULL)
+        host_out_of_memory("a thread group", sizeof(struct tgroup));
     *group = *old_group;
     atomic_fetch_add_explicit(&ish_live_guest_procs, 1, memory_order_relaxed);   // [T-ish-freeze-watch]
     list_init(&group->threads);

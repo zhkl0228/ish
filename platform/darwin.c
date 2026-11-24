@@ -1,5 +1,6 @@
 #include <TargetConditionals.h>
 #include <mach/mach.h>
+#include <malloc/malloc.h>
 #include <sys/sysctl.h>
 #if TARGET_OS_IPHONE
 #include <os/proc.h>
@@ -58,6 +59,33 @@ unsigned get_per_cpu_usage(struct cpu_usage *usage, unsigned max) {
     }
     vm_deallocate(mach_task_self(), (vm_address_t) info, info_count * sizeof(*info));
     return n;
+}
+
+struct host_memory get_host_memory(void) {
+    struct host_memory m = {};
+#if TARGET_OS_IPHONE
+    m.available = os_proc_available_memory();
+#endif
+    task_vm_info_data_t vm = {};
+    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+    if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t) &vm, &count) == KERN_SUCCESS)
+        m.footprint = vm.phys_footprint;
+    // vm_region_64 from each region's end to the next, as vmmap counts them
+    for (vm_address_t address = 0;;) {
+        vm_size_t size = 0;
+        vm_region_basic_info_data_64_t info;
+        mach_msg_type_number_t info_count = VM_REGION_BASIC_INFO_COUNT_64;
+        mach_port_t object = MACH_PORT_NULL;
+        if (vm_region_64(mach_task_self(), &address, &size, VM_REGION_BASIC_INFO_64, (vm_region_info_t) &info,
+                         &info_count, &object) != KERN_SUCCESS)
+            break;
+        m.mappings++;
+        address += size;
+    }
+    malloc_statistics_t stats = {};
+    malloc_zone_statistics(NULL, &stats);
+    m.malloc_in_use = stats.size_in_use;
+    return m;
 }
 
 struct mem_usage get_mem_usage(void) {

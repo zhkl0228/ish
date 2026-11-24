@@ -1,4 +1,7 @@
 #include <sys/sysinfo.h>
+#include <fcntl.h>
+#include <malloc.h>
+#include <unistd.h>
 #include <time.h>
 #include <inttypes.h>
 #include <stdio.h>
@@ -64,6 +67,29 @@ struct mem_usage get_mem_usage() {
     usage.inactive *= 1024;
 
     return usage;
+}
+
+struct host_memory get_host_memory(void) {
+    struct host_memory m = {};
+    char buf[4096];
+    // the resident set, statm's second field, in pages
+    int fd = open("/proc/self/statm", O_RDONLY);
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n > 0) {
+        buf[n] = '\0';
+        unsigned long long size, resident;
+        sscanf(buf, "%llu %llu", &size, &resident);
+        m.footprint = resident * (uint64_t) sysconf(_SC_PAGESIZE);
+    }
+    // a line of /proc/self/maps per mapping
+    fd = open("/proc/self/maps", O_RDONLY);
+    while ((n = read(fd, buf, sizeof(buf))) > 0)
+        for (ssize_t i = 0; i < n; i++)
+            m.mappings += buf[i] == '\n';
+    close(fd);
+    m.malloc_in_use = mallinfo2().uordblks;
+    return m;
 }
 
 struct uptime_info get_uptime() {

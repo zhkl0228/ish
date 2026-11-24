@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <unistd.h>
 #include <fcntl.h>
 #include <stdarg.h>
 #include <string.h>
@@ -15,6 +16,7 @@
 #include "util/fifo.h"
 #include "kernel/task.h"
 #include "misc.h"
+#include "platform/platform.h"
 
 #define LOG_BUF_SHIFT 20
 static char log_buffer[1 << LOG_BUF_SHIFT];
@@ -173,6 +175,35 @@ void die(const char *msg, ...) {
     die_handler(buf);
     abort();
     va_end(args);
+}
+
+// Out of host memory, nothing can be reported in a way that needs any: not
+// printk (NSLog allocates), not die (the app's handler builds an NSException
+// and its message frames). The numbers go in the registers of a trap, which
+// the crash report keeps whatever the memory: x0 the bytes asked for, x1 what
+// the OS still lets the app take (os_proc_available_memory: 0 is its limit
+// met, 0 too where there is none), x2 the app's footprint, x3 its host
+// mappings, x4 malloc's bytes in use, x5 what was being allocated (a string:
+// the frame that called says it too). The same goes to stderr, for the CLI,
+// from the stack.
+void host_out_of_memory(const char *what, size_t size) {
+    struct host_memory m = get_host_memory();
+    char line[256];
+    int n = snprintf(line, sizeof(line), "host out of memory: %zu bytes for %s; the OS lets the app take %llu more, "
+                     "footprint %llu, %llu mappings, malloc in use %llu\n", size, what,
+                     (unsigned long long) m.available, (unsigned long long) m.footprint,
+                     (unsigned long long) m.mappings, (unsigned long long) m.malloc_in_use);
+    write(2, line, n < (int) sizeof(line) ? n : (int) sizeof(line) - 1);
+#if defined(__aarch64__)
+    register uint64_t x0 __asm__("x0") = size;
+    register uint64_t x1 __asm__("x1") = m.available;
+    register uint64_t x2 __asm__("x2") = m.footprint;
+    register uint64_t x3 __asm__("x3") = m.mappings;
+    register uint64_t x4 __asm__("x4") = m.malloc_in_use;
+    register const char *x5 __asm__("x5") = what;
+    __asm__ volatile("brk #0x4f4d" :: "r"(x0), "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5));   // 'OM'
+#endif
+    abort();
 }
 
 // fun little utility function

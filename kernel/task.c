@@ -242,7 +242,8 @@ static void task_run_cleanup(void *arg) {
 void task_run_current(void) {
     struct cpu_state *cpu = &current->cpu;
     struct tlb *tlb = calloc(1, sizeof(struct tlb));
-    if (!tlb) die("could not allocate TLB");
+    if (!tlb)
+        host_out_of_memory("a TLB", sizeof(struct tlb));
 
     // Register cleanup so the TLB (and its fiber_frame) is freed even when
     // the thread exits via pthread_exit() from deep in handle_interrupt()
