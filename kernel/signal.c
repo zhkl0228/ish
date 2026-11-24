@@ -62,15 +62,24 @@ static int signal_action(struct sighand *sighand, int sig) {
 #define SIGRTMIN_ 32
 
 // Queues sig on queue and pending, unless a standard signal is pending there
-// already. Returns whether it queued it.
-static bool queue_signal(struct list *queue, sigset_t_ *pending, int sig, struct siginfo_ info, bool forced) {
+// already. Returns whether it queued it. A SIGKILL takes kill_entry, the queue
+// owner's own, free while no SIGKILL is pending there: exit_group kills the
+// other threads of its process without allocating, as Linux's
+// zap_other_threads, also when the host has no memory left to give (Claude
+// Code and Kimi Code running at once: malloc returned NULL here, and the
+// app died of it).
+static bool queue_signal(struct list *queue, sigset_t_ *pending, struct sigqueue *kill_entry, int sig,
+                         struct siginfo_ info, bool forced) {
     if (sig < SIGRTMIN_ && sigset_has(*pending, sig))
         return false;
+    struct sigqueue *sigqueue = sig == SIGKILL_ ? kill_entry : malloc(sizeof(struct sigqueue));
+    if (sigqueue == NULL)
+        host_out_of_memory("a queued signal", sizeof(struct sigqueue));
     sigset_add(pending, sig);
-    struct sigqueue *sigqueue = malloc(sizeof(struct sigqueue));
     sigqueue->info = info;
     sigqueue->info.sig = sig;
     sigqueue->forced = forced;
+    sigqueue->spare = sigqueue == kill_entry;
     list_add_tail(queue, &sigqueue->queue);
     return true;
 }
@@ -121,7 +130,7 @@ static void wake_for_signal_unlocked(struct task *task) {
 }
 
 static void deliver_signal_unlocked(struct task *task, int sig, struct siginfo_ info, bool forced) {
-    if (!queue_signal(&task->queue, &task->pending, sig, info, forced))
+    if (!queue_signal(&task->queue, &task->pending, &task->kill_entry, sig, info, forced))
         return;
     signalfd_notify(task->sighand, sig);
     if (sigset_has(task->blocked & ~task->waiting, sig) && signal_is_blockable(sig))
@@ -279,7 +288,7 @@ void send_process_signal(struct tgroup *group, int sig, struct siginfo_ info) {
     if (group->leader->pid == 1 && action != SIGNAL_CALL_HANDLER && !blocked)
         action = SIGNAL_IGNORE;
     if ((action != SIGNAL_IGNORE || blocked) &&
-            queue_signal(&group->shared_queue, &group->shared_pending, sig, info, false)) {
+            queue_signal(&group->shared_queue, &group->shared_pending, &group->shared_kill_entry, sig, info, false)) {
         signalfd_notify(sighand, sig);
         // As Linux's complete_signal: wake the named thread if it would take
         // the signal, else the first that would. None would: it stays pending
@@ -770,7 +779,7 @@ void receive_signals(void) {
         int action = signal_action(sighand, sig);
         if (current->tgid == 1 && !sigqueue->forced &&
                 (action == SIGNAL_KILL || action == SIGNAL_STOP)) {
-            free(sigqueue);
+            sigqueue_free(sigqueue);
             continue;
         }
 
@@ -783,7 +792,7 @@ void receive_signals(void) {
         } else {
             handler_ran |= receive_signal(sighand, &sigqueue->info);
         }
-        free(sigqueue);
+        sigqueue_free(sigqueue);
     }
 
 #if defined(GUEST_ARM64)
@@ -1228,7 +1237,7 @@ bool dequeue_signal(sigset_t_ set, struct siginfo_ *info) {
     return false;
 found:
     *info = sigqueue->info;
-    free(sigqueue);
+    sigqueue_free(sigqueue);
     return true;
 }
 

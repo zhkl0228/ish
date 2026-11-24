@@ -221,7 +221,7 @@ noreturn void do_exit(int status) {
     struct sigqueue *sigqueue, *sigqueue_tmp;
     list_for_each_entry_safe(&current->queue, sigqueue, sigqueue_tmp, queue) {
         list_remove(&sigqueue->queue);
-        free(sigqueue);
+        sigqueue_free(sigqueue);
     }
     struct task *leader = current->group->leader;
 
@@ -684,7 +684,7 @@ static bool reap_if_zombie(struct task *task, struct siginfo_ *info_out, struct 
     struct sigqueue *sigqueue, *sigqueue_tmp;
     list_for_each_entry_safe(&task->group->shared_queue, sigqueue, sigqueue_tmp, queue) {
         list_remove(&sigqueue->queue);
-        free(sigqueue);
+        sigqueue_free(sigqueue);
     }
     cond_destroy(&task->group->child_exit);
     task_leave_session(task);

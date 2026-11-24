@@ -52,6 +52,7 @@ struct task {
     addr_t altstack;
     dword_t altstack_size;
     struct list queue;
+    struct sigqueue kill_entry; // a SIGKILL on queue (queue_signal)
     cond_t pause; // please don't signal this
     // private
     sigset_t_ saved_mask;
@@ -245,6 +246,7 @@ struct tgroup {
     // the threads share.
     sigset_t_ shared_pending;
     struct list shared_queue;
+    struct sigqueue shared_kill_entry; // a SIGKILL on shared_queue (queue_signal)
 
     struct tty *tty;
     struct timer *itimer;
