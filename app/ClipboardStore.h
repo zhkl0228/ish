@@ -123,7 +123,9 @@ typedef NS_ENUM(NSInteger, ClipCardSize) {
 // Settings, kept in user defaults.
 @interface ClipboardPreferences : NSObject
 + (instancetype)shared;
-@property (nonatomic) BOOL collectFromOtherApps; // read the pasteboard when iSH comes to the front
+// what other apps copied, as the clipboard is opened (readPasteboard) or it is
+// pasted with the paste key (notePastedItemProviders:)
+@property (nonatomic) BOOL collectFromOtherApps;
 @property (nonatomic) BOOL pasteToClipboardOnly; // otherwise items are typed into the terminal
 @property (nonatomic) BOOL alwaysPlainText;
 @property (nonatomic) ClipRetention retention;
@@ -170,8 +172,21 @@ extern NSNotificationName const ClipboardPauseDidChangeNotification;
 @property (readonly, nullable) NSDate *pausedUntil; // nil while paused means until resumed
 - (void)pauseFor:(NSTimeInterval)seconds; // 0 means until resumed
 - (void)resume;
-// Reads the pasteboard now if it changed since it was last seen.
+// Reads the pasteboard now if /dev/clipboard changed it since it was last
+// seen. What another app copied is not read here: iOS asks the user before
+// it lets iSH read that, each time, and this runs as iSH comes to the front
+// and while it is there. It is read as the user asks for it instead (the
+// next two).
 - (void)checkPasteboard;
+// Reads the pasteboard now, another app's copy too, with Collect from Other
+// Apps on: for the clipboard being opened, where iOS asking is for something
+// asked for.
+- (void)readPasteboard;
+// What the paste key pasted (iOS's paste button over it, which iOS hands the
+// clipboard to without asking): another app's copy goes into the history as
+// that app's, with Collect from Other Apps on, unless it is already there
+// (iSH's own copy, or one read or pasted before).
+- (void)notePastedItemProviders:(NSArray<NSItemProvider *> *)providers;
 
 #pragma mark Using items
 

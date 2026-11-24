@@ -1014,6 +1014,21 @@ static NSComparisonResult NewestFirst(ClipItem *a, ClipItem *b) {
     NSInteger count = UIPasteboard.generalPasteboard.changeCount;
     if (count == self.lastChangeCount)
         return;
+    // Another app's copy stays unread and unseen here: reading it, iOS asked
+    // "would like to paste from …" each time iSH came to the front, or while
+    // it was (a Mac's copy, by Universal Clipboard). It is taken as the
+    // clipboard is opened (readPasteboard) or as it is pasted
+    // (notePastedItemProviders:).
+    if (count == atomic_load(&linuxChangeCount))
+        [self capturePasteboardAsSource:ClipSourceLinux];
+}
+
+- (void)readPasteboard {
+    if (!self.started)
+        return;
+    NSInteger count = UIPasteboard.generalPasteboard.changeCount;
+    if (count == self.lastChangeCount)
+        return;
     if (count == atomic_load(&linuxChangeCount)) {
         [self capturePasteboardAsSource:ClipSourceLinux];
     } else if (ClipboardPreferences.shared.collectFromOtherApps) {
@@ -1021,6 +1036,31 @@ static NSComparisonResult NewestFirst(ClipItem *a, ClipItem *b) {
     } else {
         [self setSeenChangeCount:count];
     }
+}
+
+- (void)notePastedItemProviders:(NSArray<NSItemProvider *> *)providers {
+    NSInteger count = UIPasteboard.generalPasteboard.changeCount;
+    if (!self.started || !ClipboardPreferences.shared.collectFromOtherApps || count == self.lastChangeCount)
+        return;
+    [self setSeenChangeCount:count];
+    if (self.pausedUntil != nil && [self.pausedUntil compare:NSDate.date] != NSOrderedDescending)
+        [self resume];
+    if (self.paused)
+        return;
+    [self collectItemProviders:providers];
+}
+
+- (void)collectItemProviders:(NSArray<NSItemProvider *> *)providers {
+    [self loadItemProviders:providers then:^(NSArray<NSDictionary<NSString *, NSData *> *> *items) {
+        for (NSDictionary<NSString *, NSData *> *item in items) {
+            ClipCapture *capture = [ClipCapture new];
+            capture.items = @[item];
+            capture.source = ClipSourceOtherApp;
+            dispatch_async(self.ioQueue, ^{
+                [self ingestCapture:capture];
+            });
+        }
+    }];
 }
 
 - (void)setSeenChangeCount:(NSInteger)count {
@@ -1417,6 +1457,29 @@ static NSComparisonResult NewestFirst(ClipItem *a, ClipItem *b) {
 
 - (void)addItemProviders:(NSArray<NSItemProvider *> *)providers toPinboard:(ClipPinboard *)pinboard
                  atIndex:(NSUInteger)index completion:(void (^)(void))completion {
+    [self loadItemProviders:providers then:^(NSArray<NSDictionary<NSString *, NSData *> *> *items) {
+        NSUInteger at = index;
+        for (NSDictionary<NSString *, NSData *> *item in items) {
+            ClipCapture *capture = [ClipCapture new];
+            capture.items = @[item];
+            capture.source = ClipSourceCreated;
+            capture.pinboardID = pinboard.identifier;
+            capture.index = at++;
+            dispatch_async(self.ioQueue, ^{
+                [self ingestCapture:capture];
+            });
+        }
+        if (completion != nil)
+            dispatch_async(self.ioQueue, ^{
+                dispatch_async(dispatch_get_main_queue(), completion);
+            });
+    }];
+}
+
+// What each provider holds, an image, a URL or text, as a pasteboard item
+// (its types' data): those that loaded, in order, on the main thread
+- (void)loadItemProviders:(NSArray<NSItemProvider *> *)providers
+                     then:(void (^)(NSArray<NSDictionary<NSString *, NSData *> *> *items))then {
     dispatch_group_t group = dispatch_group_create();
     NSMutableArray *results = [NSMutableArray arrayWithCapacity:providers.count];
     for (NSUInteger i = 0; i < providers.count; i++)
@@ -1438,7 +1501,7 @@ static NSComparisonResult NewestFirst(ClipItem *a, ClipItem *b) {
         }
     }];
     dispatch_group_notify(group, dispatch_get_main_queue(), ^{
-        NSUInteger at = index;
+        NSMutableArray<NSDictionary<NSString *, NSData *> *> *items = [NSMutableArray new];
         for (id object in results) {
             NSMutableDictionary<NSString *, NSData *> *item = [NSMutableDictionary new];
             if ([object isKindOfClass:UIImage.class]) {
@@ -1452,19 +1515,9 @@ static NSComparisonResult NewestFirst(ClipItem *a, ClipItem *b) {
             }
             if (item.count == 0 || item.allValues.firstObject == nil)
                 continue;
-            ClipCapture *capture = [ClipCapture new];
-            capture.items = @[item];
-            capture.source = ClipSourceCreated;
-            capture.pinboardID = pinboard.identifier;
-            capture.index = at++;
-            dispatch_async(self.ioQueue, ^{
-                [self ingestCapture:capture];
-            });
+            [items addObject:item];
         }
-        if (completion != nil)
-            dispatch_async(self.ioQueue, ^{
-                dispatch_async(dispatch_get_main_queue(), completion);
-            });
+        then(items);
     });
 }
 

@@ -202,7 +202,7 @@ static SettingsSection *Section(NSString *title, NSString *footer, NSArray<Setti
             Choice(@"To Clipboard", ^{ return prefs.pasteToClipboardOnly; }, ^{ prefs.pasteToClipboardOnly = YES; }),
             Switch(@"Always Paste as Plain Text", ^{ return prefs.alwaysPlainText; }, ^(BOOL on) { prefs.alwaysPlainText = on; }),
         ]),
-        Section(@"Capture", @"iOS only lets iSH read what other apps copied while iSH is in front, so those copies are collected when you switch back. To skip the permission prompt, set Paste from Other Apps to Allow in Settings › Apps › iSH.", @[
+        Section(@"Capture", @"iOS asks before iSH reads what other apps copied, so iSH does not read it when you switch back: it is collected when you open the clipboard, where iOS may ask, or paste it with the paste key, where it does not.", @[
             Switch(@"Collect from Other Apps", ^{ return prefs.collectFromOtherApps; }, ^(BOOL on) { prefs.collectFromOtherApps = on; }),
             pause,
         ]),

@@ -1478,6 +1478,8 @@ static NSString *ShellQuoted(NSString *string) {
 // as paste: pastes the clipboard's string. The button is hidden while the
 // Paste Stack has items (pasteKey:).
 - (void)pasteItemProviders:(NSArray<NSItemProvider *> *)itemProviders {
+    // another app's copy, taken into the clipboard's history as it is pasted
+    [ClipboardStore.shared notePastedItemProviders:itemProviders];
     __weak typeof(self) weakSelf = self;
     [itemProviders.firstObject loadObjectOfClass:NSString.class
                                completionHandler:^(id<NSItemProviderReading> object, NSError *error) {
@@ -1762,8 +1764,9 @@ static NSString *ShellQuoted(NSString *string) {
         self.shelf = shelf;
     }
     ClipboardShelfView *shelf = self.shelf;
-    // Anything copied in another app while iSH was in the background shows up now.
-    [ClipboardStore.shared checkPasteboard];
+    // What was copied elsewhere shows: read as the clipboard is asked for, the
+    // one time iOS may ask about it, not as iSH comes to the front
+    [ClipboardStore.shared readPasteboard];
     shelf.overrideUserInterfaceStyle = UserPreferences.shared.requestingDarkAppearance ? UIUserInterfaceStyleDark : UIUserInterfaceStyleLight;
     [shelf prepareToShow];
     self.shelfShown = YES;
