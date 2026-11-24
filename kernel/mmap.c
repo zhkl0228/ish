@@ -935,7 +935,8 @@ addr_t sys_brk(addr_t new_brk) {
             goto out;
         }
 #endif
-        int err = pt_map_nothing(&mm->mem, start, size, P_WRITE);
+        // readable and writable, as Linux's heap (maps said -w-p of it)
+        int err = pt_map_nothing(&mm->mem, start, size, P_READ | P_WRITE);
         if (err < 0) {
 #if ANON_MMAP_LIMIT_PAGES > 0
             anon_pages_unreserve((long)size);

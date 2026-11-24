@@ -1298,10 +1298,10 @@ void *mem_ptr(struct mem *mem, addr_t addr, int type) {
             if (grow_count == 1) {
                 // Charging happens inside pt_map_nothing for whatever the
                 // cluster ends up committing — nothing to do here.
-                pt_map_cluster(mem, grow_start, P_WRITE | P_GROWSDOWN,
+                pt_map_cluster(mem, grow_start, P_READ | P_WRITE | P_GROWSDOWN,
                                NULL, NULL, NULL);
             } else {
-                pt_map_nothing(mem, grow_start, grow_count, P_WRITE | P_GROWSDOWN);
+                pt_map_nothing(mem, grow_start, grow_count, P_READ | P_WRITE | P_GROWSDOWN);
             }
         }
         write_wrunlock(&mem->lock);

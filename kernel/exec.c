@@ -95,8 +95,14 @@ static int load_entry(exec_prg_header ph, addr_t bias, struct fd *fd) {
     addr_t memsize = ph.memsize;
     addr_t filesize = ph.filesize;
 
-    int flags = P_READ;
+    // the segment's permissions, as Linux maps it: the executable's and the
+    // interpreter's code had no P_EXEC, and /proc/<pid>/maps said r--p of it
+    // where Linux says r-xp (what reads maps for code went without: a JVM's,
+    // a debugger's, an unwinder's)
+    int flags = 0;
+    if (ph.flags & PH_R) flags |= P_READ;
     if (ph.flags & PH_W) flags |= P_WRITE;
+    if (ph.flags & PH_X) flags |= P_EXEC;
 
     if ((err = fd->ops->mmap(fd, current->mem, PAGE(addr),
                     PAGE_ROUND_UP(filesize + PGOFFSET(addr)),
@@ -331,8 +337,9 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
     // musl's pthread_getattr_np measures the main thread's stack by probing
     // that mapping, so mapping one page made it report a 4 KB stack to
     // programs that size their stack checks by it.
+    // readable and writable, as Linux's (maps said -w-p of it)
     if ((err = pt_map_nothing(current->mem, STACK_INIT_PAGE - (STACK_INIT_PAGES - 1), STACK_INIT_PAGES,
-                    P_WRITE | P_GROWSDOWN)) < 0)
+                    P_READ | P_WRITE | P_GROWSDOWN)) < 0)
         goto beyond_hope;
     if ((err = pt_map_nothing(current->mem, STACK_TOP_PAGE, 1, P_READ)) < 0)
         goto beyond_hope;
