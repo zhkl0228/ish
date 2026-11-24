@@ -880,6 +880,28 @@ EOF
         echo "failed to build regress_big_commit" >&2
         status=1
     fi
+
+    # A fakefs of its own with a test as /init: <dir>/fs, from <source>, built
+    # with the flags given after it. It has what a realfs root cannot when ish
+    # runs as a user: the device nodes iSH makes at boot (/dev/null,
+    # /dev/ptmx), and owners of its own (a realfs file's are the host's, which
+    # a user cannot give away).
+    fakefs_init() {
+        local dir=$1 source=$2
+        shift 2
+        [ -x "$FAKEFSIFY" ] && "$CC_GUEST" -static -O0 -Wall "$@" -o "$dir/init" "$source" &&
+            python3 -I - "$dir" <<'EOF' &&
+import sys, tarfile
+d = sys.argv[1]
+with tarfile.open(d + '/root.tar.gz', 'w:gz') as t:
+    for name in ('.', './dev', './dev/pts', './tmp', './proc'):
+        ti = tarfile.TarInfo(name); ti.type = tarfile.DIRTYPE; ti.mode = 0o755; t.addfile(ti)
+    ti = t.gettarinfo(d + '/init', './init'); ti.uid = ti.gid = 0; ti.uname = ti.gname = 'root'
+    with open(d + '/init', 'rb') as f:
+        t.addfile(ti, f)
+EOF
+            "$FAKEFSIFY" "$dir/root.tar.gz" "$dir/fs"
+    }
     echo
     echo "########## a name ending in a slash: O_CREAT EISDIR, unlink ENOTDIR ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_trailing_slash" tests/regress/regress_trailing_slash.c; then
@@ -903,16 +925,18 @@ EOF
         status=1
     fi
     echo
-    echo "########## tcdrain, tcsendbreak, tcflow on a pseudo-terminal (ENOTTY) ##########"
-    if "$CC_GUEST" -static -O0 -Wall -pthread -o "$GUEST_ROOT/tmp/regress_tty_flow" tests/regress/regress_tty_flow.c; then
-        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_tty_flow 2>&1)
+    echo "########## tcdrain, tcsendbreak, tcflow on a pseudo-terminal (ENOTTY) (fakefs root) ##########"
+    # a pseudo-terminal needs /dev/ptmx
+    ttyflowdir=$(mktemp -d "$(cd "$(dirname "$ROOTFS")" && pwd)/regress-tty_flow.XXXXXX")
+    if fakefs_init "$ttyflowdir" tests/regress/regress_tty_flow.c -pthread; then
+        out=$(timeout 60 "$ISH" -f "$ttyflowdir/fs" /init 2>&1)
         echo "$out"
         echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
-        rm -f "$GUEST_ROOT/tmp/regress_tty_flow"
     else
-        echo "failed to build regress_tty_flow" >&2
+        echo "failed to set up regress_tty_flow (needs $FAKEFSIFY and python3)" >&2
         status=1
     fi
+    rm -rf "$ttyflowdir"
     echo
     echo "########## prlimit of a process by its pid (EINVAL) ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_prlimit" tests/regress/regress_prlimit.c; then
@@ -969,27 +993,31 @@ EOF
         status=1
     fi
     echo
-    echo "########## calls CPython's test_posix found wrong (fexecve, chown, linkat, affinity, ...) ##########"
-    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_posix_calls" tests/regress/regress_posix_calls.c; then
-        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_posix_calls 2>&1)
+    echo "########## calls CPython's test_posix found wrong (fexecve, chown, linkat, affinity, ...) (fakefs root) ##########"
+    # chown's checks need owners of its own
+    posixdir=$(mktemp -d "$(cd "$(dirname "$ROOTFS")" && pwd)/regress-posix_calls.XXXXXX")
+    if fakefs_init "$posixdir" tests/regress/regress_posix_calls.c; then
+        out=$(timeout 60 "$ISH" -f "$posixdir/fs" /init 2>&1)
         echo "$out"
         echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
-        rm -f "$GUEST_ROOT/tmp/regress_posix_calls"
     else
-        echo "failed to build regress_posix_calls" >&2
+        echo "failed to set up regress_posix_calls (needs $FAKEFSIFY and python3)" >&2
         status=1
     fi
+    rm -rf "$posixdir"
     echo
-    echo "########## *at calls from a directory fd that is no directory: ENOTDIR (iSH aborted) ##########"
-    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_dirfd_not_dir" tests/regress/regress_dirfd_not_dir.c; then
-        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_dirfd_not_dir 2>&1)
+    echo "########## *at calls from a directory fd that is no directory: ENOTDIR (iSH aborted) (fakefs root) ##########"
+    # /dev/null's fd is one of the cases
+    dirfddir=$(mktemp -d "$(cd "$(dirname "$ROOTFS")" && pwd)/regress-dirfd_not_dir.XXXXXX")
+    if fakefs_init "$dirfddir" tests/regress/regress_dirfd_not_dir.c; then
+        out=$(timeout 60 "$ISH" -f "$dirfddir/fs" /init 2>&1)
         echo "$out"
         echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
-        rm -f "$GUEST_ROOT/tmp/regress_dirfd_not_dir"
     else
-        echo "failed to build regress_dirfd_not_dir" >&2
+        echo "failed to set up regress_dirfd_not_dir (needs $FAKEFSIFY and python3)" >&2
         status=1
     fi
+    rm -rf "$dirfddir"
     echo
     echo "########## truncate(2) of a path (iSH aborted) ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_truncate_path" tests/regress/regress_truncate_path.c; then
@@ -1002,16 +1030,18 @@ EOF
         status=1
     fi
     echo
-    echo "########## open with O_DIRECTORY of no directory: ENOTDIR at once (a FIFO's open waited) ##########"
-    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_open_directory" tests/regress/regress_open_directory.c; then
-        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_open_directory 2>&1)
+    echo "########## open with O_DIRECTORY of no directory: ENOTDIR at once (a FIFO's open waited) (fakefs root) ##########"
+    # /dev/null is one of the cases
+    opendirdir=$(mktemp -d "$(cd "$(dirname "$ROOTFS")" && pwd)/regress-open_directory.XXXXXX")
+    if fakefs_init "$opendirdir" tests/regress/regress_open_directory.c; then
+        out=$(timeout 60 "$ISH" -f "$opendirdir/fs" /init 2>&1)
         echo "$out"
         echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
-        rm -f "$GUEST_ROOT/tmp/regress_open_directory"
     else
-        echo "failed to build regress_open_directory" >&2
+        echo "failed to set up regress_open_directory (needs $FAKEFSIFY and python3)" >&2
         status=1
     fi
+    rm -rf "$opendirdir"
     echo
     echo "########## interval timers: getitimer, fired one-shots, bad ids, TIMER_ABSTIME 0, timerfd set again ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_timer_values" tests/regress/regress_timer_values.c; then
