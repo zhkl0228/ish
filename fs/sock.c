@@ -1433,16 +1433,21 @@ int_t sys_shutdown(fd_t sock_fd, dword_t how) {
 
 #define DEFAULT_TCP_CONGESTION "cubic"
 
-// A socket option iSH does not know fails with EINVAL, as Linux fails an
-// unknown one: there is no telling what setting it would have meant. Said once
-// per level and option, with what was asked, to add it from (telnet's
-// SO_OOBINLINE failed with nothing but "Invalid argument" on its screen).
+// A socket option iSH does not know fails with ENOPROTOOPT, as Linux fails one
+// it does not know at that level: there is no telling what setting it would
+// have meant. Programs take that for "not supported", and only that: the JDK
+// probes TCP_QUICKACK and SO_INCOMING_NAPI_ID with getsockopt at its start and
+// takes any other error for supported, so with EINVAL it offered both and
+// setting TCP_QUICKACK failed with "Invalid argument". Said once per call,
+// level and option, with what was asked, to add it from (telnet's SO_OOBINLINE
+// failed with nothing but its own message on its screen).
 static void sock_opt_unknown(const char *call, struct fd *sock, dword_t level, dword_t option,
                              const char *value, dword_t value_len) {
     static lock_t seen_lock = LOCK_INITIALIZER;
     static uint64_t seen[64];
     static unsigned seen_count;
-    uint64_t key = (uint64_t) level << 32 | option;
+    // setsockopt's has the value, which getsockopt's, said first, would hide
+    uint64_t key = (uint64_t) level << 33 | (uint64_t) option << 1 | (call[0] == 's');
     lock(&seen_lock);
     bool first = true;
     for (unsigned i = 0; i < seen_count; i++) {
@@ -1457,7 +1462,7 @@ static void sock_opt_unknown(const char *call, struct fd *sock, dword_t level, d
     char hex[3 * 32 + 1] = "";
     for (dword_t i = 0; i < value_len && i < 32; i++)
         sprintf(hex + 3 * i, "%02x ", (unsigned char) value[i]);
-    printk("%s[%d]: %s level %u option %u (domain %d type %d) unknown, EINVAL; value (%u bytes): %s\n",
+    printk("%s[%d]: %s level %u option %u (domain %d type %d) unknown, ENOPROTOOPT; value (%u bytes): %s\n",
            current->comm, current->pid, call, level, option, sock->socket.domain, sock->socket.type,
            value_len, hex);
 }
@@ -1558,7 +1563,7 @@ int_t sys_setsockopt(fd_t sock_fd, dword_t level, dword_t option, addr_t value_a
     int real_opt = sock_opt_to_real(option, level);
     if (real_opt < 0) {
         sock_opt_unknown("setsockopt", sock, level, option, value, value_len);
-        return _EINVAL;
+        return _ENOPROTOOPT;
     }
     int real_level = sock_level_to_real(level);
     if (real_level < 0)
@@ -1695,7 +1700,7 @@ int_t sys_getsockopt(fd_t sock_fd, dword_t level, dword_t option, addr_t value_a
         int real_opt = sock_opt_to_real(option, level);
         if (real_opt < 0) {
             sock_opt_unknown("getsockopt", sock, level, option, NULL, 0);
-            return _EINVAL;
+            return _ENOPROTOOPT;
         }
         int real_level = sock_level_to_real(level);
         if (real_level < 0)
