@@ -2622,12 +2622,14 @@ int sock_unix_list(struct sock_unix_entry **entries) {
         if (err == 0) {
             struct sock_unix_entry *e = &list[i];
             e->type = sock->socket.type;
-            int listening = 0;
-            socklen_t len = sizeof(listening);
-            e->listening = getsockopt(sock->real_fd, SOL_SOCKET, SO_ACCEPTCONN, &listening, &len) == 0 &&
-                listening;
+            // iSH's own word for it, unix_listeners (sys_listen): the host's
+            // SO_ACCEPTCONN said none of them listened on Darwin, and on a
+            // Linux host that is itself iSH it is an option iSH does not know
+            lock(&peer_lock);
+            e->listening = !list_null(&sock->socket.unix_listening);
+            unlock(&peer_lock);
             struct sockaddr_storage addr;
-            len = sizeof(addr);
+            socklen_t len = sizeof(addr);
             e->connected = !e->listening &&
                 getpeername(sock->real_fd, (struct sockaddr *) &addr, &len) == 0;
             e->inode = sock->stat.inode;
