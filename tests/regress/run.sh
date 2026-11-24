@@ -881,6 +881,17 @@ EOF
         status=1
     fi
     echo
+    echo "########## a pipe or FIFO end used the other way: EBADF at once (it waited) ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_pipe_wrong_end" tests/regress/regress_pipe_wrong_end.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_pipe_wrong_end 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_pipe_wrong_end"
+    else
+        echo "failed to build regress_pipe_wrong_end" >&2
+        status=1
+    fi
+    echo
     echo "########## calls CPython's test_posix found wrong (fexecve, chown, linkat, affinity, ...) ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_posix_calls" tests/regress/regress_posix_calls.c; then
         out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_posix_calls 2>&1)
