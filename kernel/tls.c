@@ -36,7 +36,10 @@ int sys_set_thread_area(addr_t u_info) {
     return task_set_thread_area(current, u_info);
 }
 
+// As Linux's: the caller's thread id, which it said the process's (tgid). The
+// same in a process's main thread, as musl and glibc call it; not in another.
 int sys_set_tid_address(addr_t tid) {
+    STRACE("set_tid_address(0x%llx)", (unsigned long long) tid);
     current->clear_tid = tid;
-    return sys_getpid();
+    return current->pid;
 }
