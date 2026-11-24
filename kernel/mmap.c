@@ -646,6 +646,10 @@ int_t sys_mprotect(addr_t addr, addr_t len, int_t prot) {
     return err;
 }
 
+// Pages MADV_DONTNEED zeroed in place, for /proc/ish/host: a guest gives them
+// back (JSC's scavenger), and they stay the app's, written with zeros
+_Atomic uint64_t st_dontneed_zeroed;
+
 dword_t sys_madvise(addr_t addr, dword_t len, dword_t advice) {
     STRACE("madvise(0x%llx, 0x%x, %d)", (unsigned long long)addr, len, advice);
 #ifdef GUEST_ARM64
@@ -757,6 +761,7 @@ dword_t sys_madvise(addr_t addr, dword_t len, dword_t advice) {
             void *ptr = mem_ptr(current->mem, p, MEM_WRITE);
             if (ptr != NULL) {
                 memset(ptr, 0, PAGE_SIZE);
+                atomic_fetch_add_explicit(&st_dontneed_zeroed, 1, memory_order_relaxed);
                 any = true;
             }
             read_wrunlock(&current->mem->lock);

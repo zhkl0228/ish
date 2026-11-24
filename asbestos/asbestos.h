@@ -99,6 +99,8 @@ extern volatile bool g_trace_highbits;
 // Create a new asbestos
 struct asbestos *asbestos_new(struct mmu *mmu);
 void asbestos_free(struct asbestos *asbestos);
+// Every address space's translated blocks, and the bytes of their gadgets
+extern _Atomic uint64_t st_fiber_blocks, st_fiber_bytes;
 
 // Invalidate all fiber blocks in pages start (inclusive) to end (exclusive).
 // Locks the asbestos. Should only be called by memory.c in conjunction with
