@@ -277,8 +277,8 @@ static int futex_wait(addr_t uaddr, dword_t val, struct timespec *timeout) {
                         __atomic_exchange_n(&dumped, 1, __ATOMIC_SEQ_CST) == 0) {
                     dword_t curval = 0xffffffff;
                     { dword_t *vp = mem_ptr(current->mem, uaddr, MEM_READ); if (vp) curval = *vp; }
-                    printk("FUTEX-DBG: pid=%d stalled %ds on uaddr=0x%x (curval=0x%x, waited-for val=%d)\n",
-                           current->pid, stall_count/10, uaddr, curval, val);
+                    printk("FUTEX-DBG: pid=%d stalled %ds on uaddr=0x%llx (curval=0x%x, waited-for val=%d)\n",
+                           current->pid, stall_count/10, (unsigned long long) uaddr, curval, val);
                     lock(&pids_lock);
                     struct task *t;
                     list_for_each_entry(&current->group->threads, t, group_links) {
@@ -327,8 +327,8 @@ static int futex_wait(addr_t uaddr, dword_t val, struct timespec *timeout) {
                     live++;
                 unlock(&current->group->lock);
                 unlock(&pids_lock);
-                printk("FUTEX-STALL: pid=%d (%s) in untimed futex_wait(uaddr=0x%x val=%d) for 180s, %d threads; not killed (ISH_FUTEX_DBG=<secs> dumps every thread)\n",
-                       current->pid, current->comm, uaddr, val, live);
+                printk("FUTEX-STALL: pid=%d (%s) in untimed futex_wait(uaddr=0x%llx val=%d) for 180s, %d threads; not killed (ISH_FUTEX_DBG=<secs> dumps every thread)\n",
+                       current->pid, current->comm, (unsigned long long) uaddr, val, live);
             }
         }
         current->blocking = false;
