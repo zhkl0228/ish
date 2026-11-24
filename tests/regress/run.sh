@@ -903,6 +903,17 @@ EOF
             "$FAKEFSIFY" "$dir/root.tar.gz" "$dir/fs"
     }
     echo
+    echo "########## the mode of what is made: the umask's, not the host's too ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_create_mode" tests/regress/regress_create_mode.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_create_mode 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_create_mode"
+    else
+        echo "failed to build regress_create_mode" >&2
+        status=1
+    fi
+    echo
     echo "########## socket of a protocol the type does not have: EPROTONOSUPPORT (EINVAL) ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_socket_protocol" tests/regress/regress_socket_protocol.c; then
         out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_socket_protocol 2>&1)

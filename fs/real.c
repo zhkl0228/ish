@@ -110,9 +110,31 @@ static dev_t_ realfs_devnum_for_path(const char *path) {
     return 0;
 }
 
+// What realfs makes has the mode asked for, which has the guest's umask
+// applied already (sys_openat, sys_mkdirat, sys_mknodat): the host's umask,
+// applied again, took bits from it (group write under an umask of 022:
+// CPython's test_subprocess test_umask, through iSH's Linux CLI). fakefs,
+// which makes its files through realfs with modes of its own (0666, 0777)
+// and keeps the guest's in its database, keeps the host's umask on them.
+static bool realfs_exact_mode(struct mount *mount) {
+    return mount->fs == &realfs;
+}
+
 struct fd *realfs_open(struct mount *mount, const char *path, int flags, int mode) {
     int real_flags = open_flags_real_from_fake(flags);
-    int fd_no = openat(mount->root_fd, fix_path(path), real_flags, mode);
+    int fd_no;
+    if (flags & O_CREAT_ && realfs_exact_mode(mount)) {
+        // made with O_EXCL to know it is made here, then given its mode; one
+        // there already is opened as asked (made meanwhile by another, it
+        // has the host's umask, as before)
+        fd_no = openat(mount->root_fd, fix_path(path), real_flags | O_EXCL, mode);
+        if (fd_no >= 0)
+            fchmod(fd_no, mode & 07777);
+        else if (errno == EEXIST && !(flags & O_EXCL_))
+            fd_no = openat(mount->root_fd, fix_path(path), real_flags, mode);
+    } else {
+        fd_no = openat(mount->root_fd, fix_path(path), real_flags, mode);
+    }
     if (fd_no < 0)
         return ERR_PTR(errno_map());
     struct fd *fd = fd_create(&realfs_fdops);
@@ -884,6 +906,9 @@ int realfs_mknod(struct mount *mount, const char *path, mode_t_ mode, dev_t_ UNU
     }
     if (err < 0)
         return errno_map();
+    // the mode asked for, not less the host's umask (realfs_exact_mode)
+    if (realfs_exact_mode(mount) && fchmodat(mount->root_fd, fix_path(path), mode & 07777, 0) < 0)
+        return errno_map();
     return err;
 }
 
@@ -975,6 +1000,10 @@ int realfs_utime(struct mount *mount, const char *path, struct timespec atime, s
 int realfs_mkdir(struct mount *mount, const char *path, mode_t_ mode) {
     int err = mkdirat(mount->root_fd, fix_path(path), mode);
     if (err < 0)
+        return errno_map();
+    // the mode asked for, not less the host's umask (realfs_exact_mode); a
+    // directory's mode bits and its sticky bit, as Linux's mkdir takes
+    if (realfs_exact_mode(mount) && fchmodat(mount->root_fd, fix_path(path), mode & 01777, 0) < 0)
         return errno_map();
     return 0;
 }
