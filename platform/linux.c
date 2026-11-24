@@ -117,6 +117,53 @@ struct host_memory get_host_memory(void) {
     return m;
 }
 
+// /proc/self/maps again, read as get_host_memory reads it (an allocation would
+// be a mapping more, read while it is there), with each mapping's protection,
+// "start-end rwxp ..."; Linux has no tags. The address space runs from the
+// lowest mapping to the highest here.
+void get_host_ranges(struct host_ranges *ranges) {
+    *ranges = (struct host_ranges) {};
+    char buf[4096];
+    struct host_range mapped = {};
+    uint64_t stop = 0, end = 0;
+    int field = 0, perm = 0; // 0 start, 1 end, 2 the protection, 3 the rest of the line
+    int fd = open("/proc/self/maps", O_RDONLY);
+    ssize_t n;
+    while ((n = read(fd, buf, sizeof(buf))) > 0) {
+        for (ssize_t i = 0; i < n; i++) {
+            char c = buf[i];
+            if (c == '\n') {
+                if (mapped.start < 0xffff000000000000) {
+                    if (end == 0)
+                        ranges->lowest = mapped.start;
+                    else if (mapped.start > end)
+                        host_ranges_free(ranges, end, mapped.start - end);
+                    mapped.size = stop - mapped.start;
+                    host_ranges_keep(ranges->mapped, mapped);
+                    end = stop;
+                }
+                mapped = (struct host_range) {};
+                stop = 0;
+                field = perm = 0;
+            } else if (field == 0 && c == '-') {
+                field = 1;
+            } else if (field == 1 && c == ' ') {
+                field = 2;
+            } else if (field == 0) {
+                mapped.start = mapped.start << 4 | (uint64_t) (c <= '9' ? c - '0' : c - 'a' + 10);
+            } else if (field == 1) {
+                stop = stop << 4 | (uint64_t) (c <= '9' ? c - '0' : c - 'a' + 10);
+            } else if (field == 2) {
+                mapped.prot[perm++] = c;
+                if (perm == 3)
+                    field = 3;
+            }
+        }
+    }
+    close(fd);
+    ranges->highest = end;
+}
+
 struct uptime_info get_uptime() {
     struct sysinfo info;
     sysinfo(&info);

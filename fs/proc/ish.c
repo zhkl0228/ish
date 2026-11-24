@@ -175,6 +175,22 @@ static int proc_ish_show_host(struct proc_entry *UNUSED(entry), struct proc_data
     proc_printf(buf, "malloc in use: %.1f MB\n", m.malloc_in_use / 1048576.0);
     proc_printf(buf, "address space: %.1f MB in the mappings, %.1f MB the largest range none takes\n",
                 m.address_space / 1048576.0, m.largest_free / 1048576.0);
+    // Where it went: what is free in all and in how many pieces, the largest
+    // of them, and the largest mappings with what made them
+    struct host_ranges r;
+    get_host_ranges(&r);
+    proc_printf(buf, "free: %.1f MB in %llu ranges, of %#llx-%#llx\n", r.free_total / 1048576.0,
+                (unsigned long long) r.free_count, (unsigned long long) r.lowest, (unsigned long long) r.highest);
+    proc_printf(buf, "largest free ranges:\n");
+    for (int i = 0; i < HOST_RANGES_SHOWN && r.free[i].size != 0; i++)
+        proc_printf(buf, "  %#014llx-%#014llx %12.1f MB\n", (unsigned long long) r.free[i].start,
+                    (unsigned long long) (r.free[i].start + r.free[i].size), r.free[i].size / 1048576.0);
+    proc_printf(buf, "largest mappings:\n");
+    for (int i = 0; i < HOST_RANGES_SHOWN && r.mapped[i].size != 0; i++)
+        proc_printf(buf, "  %#014llx-%#014llx %12.1f MB %s tag %u share mode %u%s\n",
+                    (unsigned long long) r.mapped[i].start,
+                    (unsigned long long) (r.mapped[i].start + r.mapped[i].size), r.mapped[i].size / 1048576.0,
+                    r.mapped[i].prot, r.mapped[i].tag, r.mapped[i].share_mode, r.mapped[i].submap ? " submap" : "");
     return 0;
 }
 

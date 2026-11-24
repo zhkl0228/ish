@@ -97,6 +97,45 @@ struct host_memory get_host_memory(void) {
     return m;
 }
 
+// The same walk, with what each region is: vm_region_recurse_64 at depth 0
+// has the user tag, and its short info counts no pages (the extended info
+// would visit every page of a region hundreds of GB large).
+void get_host_ranges(struct host_ranges *ranges) {
+    *ranges = (struct host_ranges) {};
+    task_vm_info_data_t vm = {};
+    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+    task_info(mach_task_self(), TASK_VM_INFO, (task_info_t) &vm, &count);
+    ranges->lowest = vm.min_address;
+    ranges->highest = vm.max_address;
+    vm_address_t end = (vm_address_t) vm.min_address;
+    for (vm_address_t address = 0;;) {
+        vm_size_t size = 0;
+        natural_t depth = 0;
+        vm_region_submap_short_info_data_64_t info;
+        mach_msg_type_number_t info_count = VM_REGION_SUBMAP_SHORT_INFO_COUNT_64;
+        if (vm_region_recurse_64(mach_task_self(), &address, &size, &depth, (vm_region_recurse_info_t) &info,
+                                 &info_count) != KERN_SUCCESS)
+            break;
+        if (address > end)
+            host_ranges_free(ranges, end, address - end);
+        struct host_range mapped = {
+            .start = address,
+            .size = size,
+            .tag = info.user_tag,
+            .share_mode = info.share_mode,
+            .submap = info.is_submap,
+        };
+        mapped.prot[0] = info.protection & VM_PROT_READ ? 'r' : '-';
+        mapped.prot[1] = info.protection & VM_PROT_WRITE ? 'w' : '-';
+        mapped.prot[2] = info.protection & VM_PROT_EXECUTE ? 'x' : '-';
+        host_ranges_keep(ranges->mapped, mapped);
+        address += size;
+        end = address;
+    }
+    if (vm.max_address > end)
+        host_ranges_free(ranges, end, vm.max_address - end);
+}
+
 struct mem_usage get_mem_usage(void) {
 #if TARGET_OS_IPHONE
     // An app has a memory limit of its own, well under the device's memory,
