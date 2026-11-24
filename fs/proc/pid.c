@@ -73,7 +73,9 @@ static unsigned long timeval_ticks(struct timeval_ tv) {
     return (unsigned long) tv.sec * 100 + (unsigned long) tv.usec / 10000;
 }
 
-static int proc_pid_stat_show(struct proc_entry *entry, struct proc_data *buf) {
+// stat of the process (whole), or of one thread (/proc/<pid>/task/<tid>/stat),
+// as Linux's do_task_stat: the same but for the CPU time, the thread's own
+static int proc_stat_show(struct proc_entry *entry, struct proc_data *buf, bool whole) {
     struct task *task = proc_get_task(entry);
     if (task == NULL)
         return _ESRCH;
@@ -83,7 +85,7 @@ static int proc_pid_stat_show(struct proc_entry *entry, struct proc_data *buf) {
     unsigned long pages, resident, shared;
     task_mem_pages(task, &pages, &resident, &shared);
     // before the group's lock, which this takes
-    struct rusage_ rusage = rusage_of_group(task->group);
+    struct rusage_ rusage = whole ? rusage_of_group(task->group) : rusage_of_thread(task);
     lock(&task->group->lock);
     struct rusage_ children = task->group->children_rusage;
     lock(&task->sighand->lock);
@@ -155,6 +157,14 @@ static int proc_pid_stat_show(struct proc_entry *entry, struct proc_data *buf) {
     unlock(&task->general_lock);
     proc_put_task(task);
     return 0;
+}
+
+static int proc_pid_stat_show(struct proc_entry *entry, struct proc_data *buf) {
+    return proc_stat_show(entry, buf, true);
+}
+
+static int proc_tid_stat_show(struct proc_entry *entry, struct proc_data *buf) {
+    return proc_stat_show(entry, buf, false);
 }
 
 // What iSH knows of Linux's status file. ps takes VSZ and RSS from here
@@ -662,17 +672,12 @@ static void proc_pid_task_getname(struct proc_entry *entry, char *buf) {
     sprintf(buf, "%d", entry->pid);
 }
 
-static int proc_pid_task_readlink(struct proc_entry *entry, char *buf) {
-    sprintf(buf, "/proc/%d", entry->pid);
-    return 0;
-}
-
 static struct proc_dir_entry proc_pid_task;
 
-// Every thread of the process, by tid, each /proc/<tid> (which names its
-// thread). There was its leader only: /proc/self/task/<tid> of any other
-// thread was ENOENT. index is the last tid said, so a thread that comes or
-// goes between calls neither repeats one nor skips one.
+// Every thread of the process, by tid, each a directory of that thread
+// (proc_tid_children). There was its leader only: /proc/self/task/<tid> of
+// any other thread was ENOENT. index is the last tid said, so a thread that
+// comes or goes between calls neither repeats one nor skips one.
 static bool proc_pid_task_readdir(struct proc_entry *entry, unsigned long *index, struct proc_entry *next_entry) {
     struct task *task = proc_get_task(entry);
     if (task == NULL)
@@ -851,8 +856,29 @@ struct proc_dir_entry proc_pid = {NULL, S_IFDIR,
 static struct proc_dir_entry proc_pid_fd = {NULL, S_IFLNK,
     .getname = proc_pid_fd_getname, .readlink = proc_pid_fd_readlink};
 
-static struct proc_dir_entry proc_pid_task = {NULL, S_IFLNK,
-    .getname = proc_pid_task_getname, .readlink = proc_pid_task_readlink};
+// /proc/<pid>/task/<tid>: one thread's, as Linux's tid_base_stuff. Its stat
+// has the thread's own CPU time, where /proc/<pid>/stat (and /proc/<tid>/stat)
+// has the process's: task/<tid> was a symlink to /proc/<tid>, so every thread
+// said the process's, and top -H and ps -L could not tell which thread took
+// it. The rest are /proc/<pid>'s, which go by the task they name: its name,
+// state and signals in status and comm, its process's memory and files. No
+// fd: its entries' meta has one parent, /proc/<pid>/fd.
+static struct proc_children proc_tid_children = PROC_CHILDREN({
+    {"auxv", .show = proc_pid_auxv_show},
+    {"cmdline", .show = proc_pid_cmdline_show},
+    {"comm", S_IFREG | 0644, .show = proc_pid_comm_show, .pwrite = proc_pid_comm_pwrite},
+    {"cwd", S_IFLNK, .readlink = proc_pid_cwd_readlink},
+    {"exe", S_IFLNK, .readlink = proc_pid_exe_readlink},
+    {"maps", .show = proc_pid_maps_show},
+    {"smaps", .show = proc_pid_smaps_show},
+    {"mem", .pread = proc_pid_mem_pread, .pwrite = proc_pid_mem_pwrite, .show = proc_pid_mem_show},
+    {"stat", .show = proc_tid_stat_show},
+    {"statm", .show = proc_pid_statm_show},
+    {"status", .show = proc_pid_status_show},
+});
+
+static struct proc_dir_entry proc_pid_task = {NULL, S_IFDIR,
+    .getname = proc_pid_task_getname, .children = &proc_tid_children};
 
 static struct proc_dir_entry proc_pid_map_file = {NULL, S_IFLNK,
     .getname = proc_pid_map_file_getname, .readlink = proc_pid_map_file_readlink};
