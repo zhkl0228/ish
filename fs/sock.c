@@ -1119,6 +1119,12 @@ int_t sys_getpeername(fd_t sock_fd, addr_t sockaddr_addr, addr_t sockaddr_len_ad
     char sockaddr[sockaddr_len];
     dword_t buffer_len = sockaddr_len;
     int res = getpeername(sock->real_fd, (void *) sockaddr, &sockaddr_len);
+    // A connection its peer reset or closed: Darwin says EINVAL ("the socket
+    // has been shut down"), Linux ENOTCONN, which CPython's ssl takes for not
+    // connected and so reads what came before the TLS handshake (EINVAL it
+    // raised as it was: test_ssl's TestPreHandshakeClose)
+    if (res < 0 && errno == EINVAL)
+        return _ENOTCONN;
     if (res < 0)
         return errno_map();
 
