@@ -16,20 +16,23 @@
 // mapping, one host mmap too, failed the same way: claude.exe has a 230MB
 // writable segment, and every exec of it (Claude Code, and the ugrep it runs
 // as grep) died of SIGSEGV. A file whose length is not whole pages, mapped
-// whole, failed even where the rest had chunks: it runs past the file's end,
+// whole, failed even where the rest had chunks: it ran past the file's end,
 // and that path took one host mmap still. Each JVM maps the JDK's 140MB
-// lib/modules so at its start, and died of SIGSEGV before a word.
+// lib/modules so at its start, and died of SIGSEGV before a word. (Such a
+// mapping is the file's own now, as far as the host page its end falls in;
+// one further still goes past the end, in chunks.)
 //
 // Covers V8's code range (reserve, mprotect RWX, write and read its first and
 // last pages), a 512MB read-write mapping, a thread with a 256MB stack
 // (created, run, joined), a 256MB private mapping of a file from 4KB into
 // it: bytes on either side of the 16MB chunks' edges are the file's, and stay
 // so after MADV_DONTNEED, and a shared read-only mapping of a file 256MB and
-// 3210 bytes long, whole, as the JVM maps lib/modules: its bytes either side
-// of the chunks' edges and its last one, and zeros past its end. It catches the bug only where the host has no free
-// range of that size, as on an iPhone with Claude Code running (checked there:
-// all four fail without the fix); elsewhere, the Linux CLI say, it passes
-// either way.
+// 3210 bytes long, whole, as the JVM maps lib/modules, and 1MB further than
+// its end: its bytes either side of the chunks' edges and its last one, and
+// zeros past its end in its last page. It catches the bug only where the host
+// has no free range of that size, as on an iPhone with Claude Code running
+// (checked there: the first four fail without the fix); elsewhere, the Linux
+// CLI say, it passes either way.
 //
 // Build: aarch64-linux-musl-gcc -static -O0 -pthread -o regress_big_commit regress_big_commit.c
 // Run:   ish -r <rootfs> /tmp/regress_big_commit
@@ -167,6 +170,20 @@ int main(void) {
             check("its bytes read through its mapping", read_back, "a mark differs");
             check("zeros past its end", map[len] == 0 && map[len | 4095] == 0, "a byte past the end is not 0");
             munmap(map, len);
+        }
+        // The same file mapped 1MB further than its end, as a library's span
+        // with its BSS is: past the host page its end falls in there is no
+        // file to map. Only the file's bytes and its last page are read, as
+        // natively a page wholly past the end is SIGBUS.
+        map = mmap(NULL, len + MB, PROT_READ, MAP_SHARED, tail, 0);
+        check("256MB shared mapping of it, 1MB past its end", map != MAP_FAILED, strerror(errno));
+        if (map != MAP_FAILED) {
+            int read_back = 1;
+            for (size_t i = 0; i < sizeof(tail_marks) / sizeof(tail_marks[0]); i++)
+                read_back = read_back && map[tail_marks[i]] == mark_at(tail_marks[i]);
+            check("its bytes read through that mapping", read_back, "a mark differs");
+            check("zeros past its end there", map[len] == 0 && map[len | 4095] == 0, "a byte past the end is not 0");
+            munmap(map, len + MB);
         }
         close(tail);
     }

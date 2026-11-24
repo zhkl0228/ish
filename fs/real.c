@@ -380,6 +380,13 @@ static void *map_file_chunk(size_t from, size_t size, void *ctx) {
     return mmap(NULL, size, chunks->prot, chunks->flags, chunks->fd, chunks->offset + (off_t) from);
 }
 
+// Where the host page the file's end falls in ends. A mapping as far as there
+// is the file's own: the host zero-fills what lies past the end in that page,
+// as POSIX has it. Only beyond it is there no file to map.
+static off_t file_pages_end(off_t file_size) {
+    return (file_size + real_page_size - 1) / real_page_size * real_page_size;
+}
+
 // size bytes of a file from offset, of which the file has file_bytes: an
 // anonymous mapping (zeros past the file's end, as for BSS), the file mapped
 // over it as far as whole host pages go, the rest read in
@@ -422,9 +429,9 @@ struct past_end_chunks {
 static void *map_past_end_chunk(size_t from, size_t size, void *ctx) {
     struct past_end_chunks *chunks = ctx;
     off_t at = chunks->offset + (off_t) from;
-    size_t file_bytes = chunks->file_size > at ? (size_t) (chunks->file_size - at) : 0;
-    if (file_bytes >= size)
+    if (at + (off_t) size <= file_pages_end(chunks->file_size))
         return mmap(NULL, size, chunks->prot, chunks->flags, chunks->fd, at);
+    size_t file_bytes = chunks->file_size > at ? (size_t) (chunks->file_size - at) : 0;
     return map_past_end(chunks->fd, size, at, file_bytes, chunks->prot, chunks->flags);
 }
 
@@ -442,8 +449,10 @@ int realfs_mmap(struct fd *fd, struct mem *mem, page_t start, pages_t pages, off
     struct stat st;
     int have_stat = (fstat(fd->real_fd, &st) == 0);
 
-    // Check if the mapping extends beyond the file size.
-    if (have_stat && (off_t)(real_offset + map_size) > st.st_size) {
+    // A mapping beyond the host page the file's end falls in. One that ends in
+    // that page is the file's (file_pages_end), as most are whose file is not
+    // whole pages long: the JVM's of lib/modules, a library's segments.
+    if (have_stat && (off_t)(real_offset + map_size) > file_pages_end(st.st_size)) {
         // For MAP_SHARED writable mappings, use a direct file-backed mmap.
         // The host kernel handles beyond-EOF correctly: writes within the
         // file are flushed on munmap, and the zero-filled region between
