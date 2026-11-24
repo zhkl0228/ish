@@ -229,9 +229,11 @@ tests/regress/run.sh -i build-arm64-release/ish -r ./alpine-arm64-plain
 tests/smoke/run.sh -i build-arm64-release/ish -f ./alpine-arm64-fakefs
 ```
 
-CI（`.github/workflows/ci.yml`）在 macOS 上编译给手机用的 App（不签名），在 arm64 Linux
-runner 上运行 `tests/regress/ci.sh`：以 release 编译 CLI（不许有警告），再在 Alpine aarch64
-minirootfs 上跑回归测试。
+CI（`.github/workflows/ci.yml`）在 macOS 上 archive 给手机用的 App（不签名）并打成 ipa
+（`app/package-ipa.py`），在 arm64 Linux runner 上运行 `tests/regress/ci.sh`：以 release 编译
+CLI（不许有警告），再在 Alpine aarch64 minirootfs 上跑回归测试。每次推送 master 都会把 ipa
+和 dSYM 发布成一个 Release，只保留最新 5 个；最新的固定在
+`releases/latest/download/iSH-ARM64-unsigned.ipa`。ipa 不签名，用自己的开发者账号签名后安装。
 
 **AddressSanitizer。** iSH 自身的堆越界或 use-after-free 通常要过一阵才在 `malloc`、`free`
 里崩，或者根本不崩。`tools/build-asan.sh` 构建 ASan 版的 `ish`，它停在出错的那次访问上，

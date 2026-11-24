@@ -242,9 +242,12 @@ tests/regress/run.sh -i build-arm64-release/ish -r ./alpine-arm64-plain
 tests/smoke/run.sh -i build-arm64-release/ish -f ./alpine-arm64-fakefs
 ```
 
-CI (`.github/workflows/ci.yml`) builds the app for a phone (unsigned) on macOS, and on an
-arm64 Linux runner runs `tests/regress/ci.sh`: the CLI built as a release with no warning,
-then the regression tests on an Alpine aarch64 minirootfs.
+CI (`.github/workflows/ci.yml`) archives the app for a phone (unsigned) on macOS and makes
+its ipa (`app/package-ipa.py`), and on an arm64 Linux runner runs `tests/regress/ci.sh`: the
+CLI built as a release with no warning, then the regression tests on an Alpine aarch64
+minirootfs. Each push to master publishes the ipa and its dSYMs as a release, the newest
+five kept: the newest is at `releases/latest/download/iSH-ARM64-unsigned.ipa`. It is
+unsigned: sign it with your own developer account to install it.
 
 **AddressSanitizer.** A heap overflow or use-after-free in iSH itself usually
 crashes it later, somewhere in `malloc` or `free`, or not at all.

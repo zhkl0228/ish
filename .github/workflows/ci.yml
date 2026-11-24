@@ -21,8 +21,12 @@ jobs:
         run: tests/regress/ci.sh "$RUNNER_TEMP/ci"
 
   mac:
-    # The app as it is built for a phone, unsigned
+    # The app as it is built for a phone (archived, unsigned) and its ipa; on
+    # master, the ipa published as a release, the newest five kept: sign it
+    # with one's own developer account to install it
     runs-on: macos-26
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v6
         with:
@@ -31,4 +35,31 @@ jobs:
         run: |
           brew install llvm lld ninja libarchive meson
       - name: Build
-        run: xcodebuild -project iSH.xcodeproj -scheme iSH-ARM64 -arch arm64 -sdk iphoneos CODE_SIGNING_ALLOWED=NO
+        run: |
+          xcodebuild -project iSH.xcodeproj -scheme iSH-ARM64 -arch arm64 -sdk iphoneos \
+              -archivePath "$RUNNER_TEMP/iSH-ARM64.xcarchive" CODE_SIGNING_ALLOWED=NO archive
+      - name: Package
+        id: package
+        run: python3 app/package-ipa.py "$RUNNER_TEMP/iSH-ARM64.xcarchive" "$RUNNER_TEMP/ipa"
+      - name: Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.package.outputs.version }}
+          BUILD: ${{ steps.package.outputs.build }}
+        run: |
+          set -o pipefail
+          sha=${GITHUB_SHA::8}
+          tag="ipa-$(date -u +%Y%m%d-%H%M%S)-$sha"
+          printf '%s\n\nUnsigned: sign it with your own developer account to install it.\n' \
+              "$(git log -1 --format=%s "$GITHUB_SHA")" > "$RUNNER_TEMP/notes.md"
+          gh release create "$tag" --target "$GITHUB_SHA" --latest \
+              --title "iSH-ARM64 $VERSION ($BUILD) $sha" --notes-file "$RUNNER_TEMP/notes.md" \
+              "$RUNNER_TEMP/ipa/iSH-ARM64-unsigned.ipa" "$RUNNER_TEMP/ipa/iSH-ARM64-dSYMs.zip"
+          # the newest five ipa releases kept, the rest removed with their tags
+          gh release list --limit 100 --json tagName,createdAt \
+              --jq '[.[] | select(.tagName | startswith("ipa-"))] | sort_by(.createdAt) | reverse | .[5:] | .[].tagName' |
+          while read -r old; do
+              gh release delete "$old" --cleanup-tag --yes
+          done
