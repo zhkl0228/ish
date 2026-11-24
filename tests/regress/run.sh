@@ -982,6 +982,17 @@ EOF
         status=1
     fi
     echo
+    echo "########## mmap of a file past 4GB; what msync refuses ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_mmap_offset_msync" tests/regress/regress_mmap_offset_msync.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_mmap_offset_msync 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_mmap_offset_msync"
+    else
+        echo "failed to build regress_mmap_offset_msync" >&2
+        status=1
+    fi
+    echo
     echo "########## mremap: lengths in whole pages, a range not all mapped (iSH crashed) ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_mremap" tests/regress/regress_mremap.c; then
         out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_mremap 2>&1)

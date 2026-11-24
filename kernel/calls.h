@@ -61,7 +61,7 @@ addr_t sys_mremap(addr_t addr, addr_t old_len, addr_t new_len, dword_t flags);
 dword_t sys_madvise(addr_t addr, dword_t len, dword_t advice);
 dword_t sys_mbind(addr_t addr, dword_t len, int_t mode, addr_t nodemask, dword_t maxnode, uint_t flags);
 int_t sys_mlock(addr_t addr, dword_t len);
-int_t sys_msync(addr_t addr, dword_t len, int_t flags);
+int_t sys_msync(addr_t addr, addr_t len, int_t flags);
 int_t sys_membarrier(int_t cmd, uint_t flags, int_t cpu_id);
 
 // ARM64-specific memory management syscalls

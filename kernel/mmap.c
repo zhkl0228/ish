@@ -314,7 +314,7 @@ void mm_release(struct mm *mm) {
     mm_release_from(mm, "unknown");
 }
 
-static addr_t do_mmap(addr_t addr, uint64_t len, dword_t prot, dword_t flags, fd_t fd_no, dword_t offset) {
+static addr_t do_mmap(addr_t addr, uint64_t len, dword_t prot, dword_t flags, fd_t fd_no, uint64_t offset) {
     int err;
     pages_t pages = (len + PAGE_SIZE - 1) / PAGE_SIZE;
     if (!pages) return _EINVAL;
@@ -503,7 +503,9 @@ addr_t sys_mmap64(addr_t addr, addr_t len, dword_t prot, dword_t flags, fd_t fd_
         return _EINVAL;
 
     write_wrlock(&current->mem->lock);
-    addr_t res = do_mmap(addr, len, prot, flags, fd_no, (dword_t)offset);
+    // all 64 bits of it: cut to 32, a file mapped at 5GB was mapped at 1GB
+    // (CPython's test_mmap test_large_offset)
+    addr_t res = do_mmap(addr, len, prot, flags, fd_no, offset);
     write_wrunlock(&current->mem->lock);
     return res;
 }
@@ -813,8 +815,34 @@ int_t sys_mlock(addr_t UNUSED(addr), dword_t UNUSED(len)) {
     return 0;
 }
 
-int_t sys_msync(addr_t UNUSED(addr), dword_t UNUSED(len), int_t UNUSED(flags)) {
-    return 0;
+// A shared file mapping is the host's (MAP_SHARED), its writes the file's as
+// they are made, so there is nothing to write back. What Linux refuses is
+// refused: an address not page-aligned and flags it has not, or both
+// MS_ASYNC and MS_SYNC, are EINVAL (CPython's mmap.flush at an offset not
+// page-aligned, test_flush_return_value); a range with a page not mapped
+// ENOMEM, a page reserved and not yet touched being mapped. It said success
+// of anything.
+#define MS_ASYNC_ 1
+#define MS_INVALIDATE_ 2
+#define MS_SYNC_ 4
+int_t sys_msync(addr_t addr, addr_t len, int_t flags) {
+    STRACE("msync(%#llx, %#llx, %#x)", (unsigned long long) addr, (unsigned long long) len, flags);
+    if (PGOFFSET(addr) != 0)
+        return _EINVAL;
+    if (flags & ~(MS_ASYNC_ | MS_INVALIDATE_ | MS_SYNC_))
+        return _EINVAL;
+    if ((flags & MS_ASYNC_) && (flags & MS_SYNC_))
+        return _EINVAL;
+    int err = 0;
+    read_wrlock(&current->mem->lock);
+    for (page_t page = PAGE(addr); page < PAGE(addr) + PAGE_ROUND_UP(len); page++) {
+        if (mem_pt(current->mem, page) == NULL && mem_find_reservation(current->mem, page) == NULL) {
+            err = _ENOMEM;
+            break;
+        }
+    }
+    read_wrunlock(&current->mem->lock);
+    return err;
 }
 
 // membarrier(2). JSC's concurrent JIT and WTF's parking-lot use this to make
