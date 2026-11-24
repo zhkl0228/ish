@@ -380,6 +380,54 @@ static void *map_file_chunk(size_t from, size_t size, void *ctx) {
     return mmap(NULL, size, chunks->prot, chunks->flags, chunks->fd, chunks->offset + (off_t) from);
 }
 
+// size bytes of a file from offset, of which the file has file_bytes: an
+// anonymous mapping (zeros past the file's end, as for BSS), the file mapped
+// over it as far as whole host pages go, the rest read in
+static void *map_past_end(int fd, size_t size, off_t offset, size_t file_bytes, int prot, int flags) {
+    char *memory = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (memory == MAP_FAILED)
+        return MAP_FAILED;
+    size_t file_map_size = (file_bytes / real_page_size) * real_page_size;
+    if (file_map_size > 0) {
+        char *file_map = mmap(memory, file_map_size, prot, flags | MAP_FIXED, fd, offset);
+        if (file_map == MAP_FAILED)
+            file_map_size = 0;
+    }
+    if (file_map_size < file_bytes) {
+        size_t remaining = file_bytes - file_map_size;
+        size_t total_read = 0;
+        while (total_read < remaining) {
+            ssize_t n = pread(fd, memory + file_map_size + total_read, remaining - total_read,
+                              offset + (off_t) (file_map_size + total_read));
+            if (n <= 0) break;
+            total_read += n;
+        }
+    }
+    if (!(prot & PROT_WRITE) && file_map_size < size)
+        mprotect(memory + file_map_size, size - file_map_size, prot);
+    return memory;
+}
+
+// A chunk of a mapping that runs past the file's end: the file's own where it
+// has the whole chunk, as map_file_chunk maps it, map_past_end's where its end
+// falls in the chunk or before it
+struct past_end_chunks {
+    int fd;
+    int prot;
+    int flags;
+    off_t offset;
+    off_t file_size;
+};
+
+static void *map_past_end_chunk(size_t from, size_t size, void *ctx) {
+    struct past_end_chunks *chunks = ctx;
+    off_t at = chunks->offset + (off_t) from;
+    size_t file_bytes = chunks->file_size > at ? (size_t) (chunks->file_size - at) : 0;
+    if (file_bytes >= size)
+        return mmap(NULL, size, chunks->prot, chunks->flags, chunks->fd, at);
+    return map_past_end(chunks->fd, size, at, file_bytes, chunks->prot, chunks->flags);
+}
+
 int realfs_mmap(struct fd *fd, struct mem *mem, page_t start, pages_t pages, off_t offset, int prot, int flags) {
     int mmap_flags = 0;
     if (flags & MMAP_PRIVATE) mmap_flags |= MAP_PRIVATE;
@@ -412,37 +460,21 @@ int realfs_mmap(struct fd *fd, struct mem *mem, page_t start, pages_t pages, off
             // mmap failed — fall through to anonymous path
         }
 
-        // Create anonymous backing for the full range (zeros for BSS)
-        char *memory = mmap(NULL, map_size,
-                PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        if (memory == MAP_FAILED)
-            return _ENOMEM;
         size_t file_bytes = 0;
         if (st.st_size > real_offset)
             file_bytes = st.st_size - real_offset;
         if (file_bytes > map_size)
             file_bytes = map_size;
-        size_t file_map_size = (file_bytes / real_page_size) * real_page_size;
-        if (file_map_size > 0) {
-            char *file_map = mmap(memory, file_map_size,
-                    mmap_prot, mmap_flags | MAP_FIXED, fd->real_fd, real_offset);
-            if (file_map == MAP_FAILED)
-                file_map_size = 0;
+        char *memory = map_past_end(fd->real_fd, map_size, real_offset, file_bytes, mmap_prot, mmap_flags);
+        // In chunks when the host has no free range of the whole, as a mapping
+        // within the file is below: a file whose length is not whole pages,
+        // mapped whole, comes here, as each JVM maps the JDK's 140MB
+        // lib/modules at its start. With no 140MB free that was ENOMEM, and
+        // the JVM died of SIGSEGV before saying a word.
+        if (memory == MAP_FAILED) {
+            struct past_end_chunks chunks = {fd->real_fd, mmap_prot, mmap_flags, real_offset, st.st_size};
+            return pt_map_chunked(mem, start, pages, correction, prot, map_past_end_chunk, &chunks);
         }
-        if (file_map_size < file_bytes) {
-            size_t remaining = file_bytes - file_map_size;
-            size_t total_read = 0;
-            while (total_read < remaining) {
-                ssize_t n = pread(fd->real_fd, memory + file_map_size + total_read,
-                                  remaining - total_read,
-                                  real_offset + file_map_size + total_read);
-                if (n <= 0) break;
-                total_read += n;
-            }
-        }
-        if (!(mmap_prot & PROT_WRITE) && file_map_size < map_size)
-            mprotect(memory + file_map_size, map_size - file_map_size, mmap_prot);
-
         return pt_map(mem, start, pages, memory, correction, prot);
     }
 
