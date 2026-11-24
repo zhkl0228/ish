@@ -1683,21 +1683,12 @@ int_t sys_getsockopt(fd_t sock_fd, dword_t level, dword_t option, addr_t value_a
         // Whether it listens, as Linux says of any socket. It was ENOPROTOOPT:
         // iSH's Linux CLI, run in iSH, asks it of the host for /proc/net/tcp,
         // and a server handed its socket (inetd, socket activation) asks it.
-        // A unix socket's is iSH's own word for it (unix_listeners, as
-        // /proc/net/unix says): Darwin's SO_ACCEPTCONN said no of every one.
+        // iSH's own word for it, sys_listen's: Darwin's getsockopt does not
+        // know SO_ACCEPTCONN (ENOPROTOOPT of a TCP or UDP socket on iOS), and
+        // said no of every unix socket.
         if (value_len != sizeof(dword_t))
             return _EINVAL;
-        int listening = 0;
-        if (sock->socket.domain == AF_LOCAL_) {
-            lock(&peer_lock);
-            listening = !list_null(&sock->socket.unix_listening);
-            unlock(&peer_lock);
-        } else {
-            socklen_t len = sizeof(listening);
-            if (getsockopt(sock->real_fd, SOL_SOCKET, SO_ACCEPTCONN, &listening, &len) < 0)
-                return errno_map();
-        }
-        *(dword_t *) value = listening != 0;
+        *(dword_t *) value = sockrestart_listening(sock);
     } else if (level == SOL_SOCKET_ && option == SO_PEERCRED_) {
         struct ucred_ *cred = (struct ucred_ *) value;
         if (value_len != sizeof(*cred))
@@ -2646,10 +2637,9 @@ static bool sock_inet_query(struct fd *sock, struct sock_inet_entry *e) {
     else
         sockaddr_to_entry(&(struct sockaddr_storage) {}, e->remote, &e->remote_port);
 
-    int listening = 0;
-    len = sizeof(listening);
-    if (sock->socket.type == SOCK_STREAM_ &&
-            getsockopt(sock->real_fd, SOL_SOCKET, SO_ACCEPTCONN, &listening, &len) == 0 && listening) {
+    // iSH's own word for it (sys_listen): Darwin's getsockopt does not know
+    // SO_ACCEPTCONN
+    if (sock->socket.type == SOCK_STREAM_ && sockrestart_listening(sock)) {
         e->state = 10; // LISTEN
         e->tx_queue = e->rx_queue = 0;
         return true;

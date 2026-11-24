@@ -30,6 +30,13 @@ void sockrestart_end_listen(struct fd *sock) {
     unlock(&sockrestart_lock);
 }
 
+bool sockrestart_listening(struct fd *sock) {
+    lock(&sockrestart_lock);
+    bool listening = !list_null(&sock->sockrestart.listen);
+    unlock(&sockrestart_lock);
+    return listening;
+}
+
 static struct list listen_tasks = LIST_INITIALIZER(listen_tasks);
 
 void sockrestart_begin_task_wait(void) {

@@ -18,6 +18,11 @@ struct fd;
 
 void sockrestart_begin_listen(struct fd *sock);
 void sockrestart_end_listen(struct fd *sock);
+// Whether listen() made sock listen, until it is closed: the list the two
+// above keep is iSH's own word for it, of a socket of any family
+// (SO_ACCEPTCONN, /proc/net/tcp), as Darwin's getsockopt does not know
+// SO_ACCEPTCONN.
+bool sockrestart_listening(struct fd *sock);
 void sockrestart_begin_listen_wait(struct fd *sock);
 void sockrestart_end_listen_wait(struct fd *sock);
 // Whether fd is a socket: a wait on one is marked with the two below.
