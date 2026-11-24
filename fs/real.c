@@ -389,8 +389,10 @@ static off_t file_pages_end(off_t file_size) {
 
 // size bytes of a file from offset, of which the file has file_bytes: an
 // anonymous mapping (zeros past the file's end, as for BSS), the file mapped
-// over it as far as whole host pages go, the rest read in
-static void *map_past_end(int fd, size_t size, off_t offset, size_t file_bytes, int prot, int flags) {
+// over it as far as whole host pages go, the rest read in. *anonymous is how
+// much the file is not mapped over, for anon_mmap_count once it is mapped.
+static void *map_past_end(int fd, size_t size, off_t offset, size_t file_bytes, int prot, int flags,
+                          size_t *anonymous) {
     char *memory = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (memory == MAP_FAILED)
         return MAP_FAILED;
@@ -400,6 +402,7 @@ static void *map_past_end(int fd, size_t size, off_t offset, size_t file_bytes, 
         if (file_map == MAP_FAILED)
             file_map_size = 0;
     }
+    *anonymous = size - file_map_size;
     if (file_map_size < file_bytes) {
         size_t remaining = file_bytes - file_map_size;
         size_t total_read = 0;
@@ -424,6 +427,10 @@ struct past_end_chunks {
     int flags;
     off_t offset;
     off_t file_size;
+    // map_past_end's: its anonymous host mmaps, and how much of them the file
+    // is not mapped over, counted once all the chunks are mapped
+    uint64_t anonymous_mmaps;
+    size_t anonymous;
 };
 
 static void *map_past_end_chunk(size_t from, size_t size, void *ctx) {
@@ -432,7 +439,13 @@ static void *map_past_end_chunk(size_t from, size_t size, void *ctx) {
     if (at + (off_t) size <= file_pages_end(chunks->file_size))
         return mmap(NULL, size, chunks->prot, chunks->flags, chunks->fd, at);
     size_t file_bytes = chunks->file_size > at ? (size_t) (chunks->file_size - at) : 0;
-    return map_past_end(chunks->fd, size, at, file_bytes, chunks->prot, chunks->flags);
+    size_t anonymous;
+    void *memory = map_past_end(chunks->fd, size, at, file_bytes, chunks->prot, chunks->flags, &anonymous);
+    if (memory != MAP_FAILED) {
+        chunks->anonymous_mmaps++;
+        chunks->anonymous += anonymous;
+    }
+    return memory;
 }
 
 #if defined(__APPLE__)
@@ -631,7 +644,9 @@ int realfs_mmap(struct fd *fd, struct mem *mem, page_t start, pages_t pages, off
             file_bytes = st.st_size - real_offset;
         if (file_bytes > map_size)
             file_bytes = map_size;
-        char *memory = map_past_end(fd->real_fd, map_size, real_offset, file_bytes, mmap_prot, mmap_flags);
+        size_t anonymous;
+        char *memory = map_past_end(fd->real_fd, map_size, real_offset, file_bytes, mmap_prot, mmap_flags,
+                                    &anonymous);
         // In chunks when the host has no free range of the whole, as a mapping
         // within the file is below: a file whose length is not whole pages,
         // mapped whole, comes here, as each JVM maps the JDK's 140MB
@@ -639,12 +654,18 @@ int realfs_mmap(struct fd *fd, struct mem *mem, page_t start, pages_t pages, off
         // the JVM died of SIGSEGV before saying a word.
         if (memory == MAP_FAILED) {
             struct past_end_chunks chunks = {fd->real_fd, mmap_prot, mmap_flags, real_offset, st.st_size};
-            return pt_map_chunked(mem, start, pages, correction, prot, map_past_end_chunk, &chunks);
+            int err = pt_map_chunked(mem, start, pages, correction, prot, map_past_end_chunk, &chunks);
+            if (err >= 0)
+                anon_mmap_count(chunks.anonymous_mmaps, chunks.anonymous / PAGE_SIZE);
+            return err;
         }
-        if (shareable)
-            return shared_map_add(mem, start, pages, memory, correction, shared_flags, fd, offset, &st, real_offset,
-                                  map_size, mmap_flags);
-        return pt_map(mem, start, pages, memory, correction, prot);
+        int err = shareable
+            ? shared_map_add(mem, start, pages, memory, correction, shared_flags, fd, offset, &st, real_offset,
+                             map_size, mmap_flags)
+            : pt_map(mem, start, pages, memory, correction, prot);
+        if (err >= 0)
+            anon_mmap_count(1, anonymous / PAGE_SIZE);
+        return err;
     }
 
     char *memory = mmap(NULL, map_size,
