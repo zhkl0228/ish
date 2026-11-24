@@ -266,25 +266,52 @@ dword_t sys_dup(fd_t f) {
     return f_install(fd, 0);
 }
 
-dword_t sys_dup3(fd_t f, fd_t new_f, int_t flags) {
-    STRACE("dup3(%d, %d, %d)", f, new_f, flags);
+// f's file at new_f, what new_f had closed, as Linux's do_dup2. A new_f
+// below 0 or past RLIMIT_NOFILE is EBADF: -1 was taken for a table that
+// needs no growing, and the file written at files[-1], over malloc's header
+// of the table: iSH's heap was broken, and it crashed freeing the table at
+// exit (CPython's test_os test_dup2_negative_fd; the -1 returned said EPERM).
+// Under the table's lock, as f_install: another thread's open took the slot
+// meanwhile. new_f's close-on-exec is O_CLOEXEC's, cleared without it (it
+// kept the one of the file it had).
+static dword_t dup_to(fd_t f, fd_t new_f, int_t flags) {
     struct fdtable *table = current->files;
-    struct fd *fd = f_get(f);
-    if (fd == NULL)
+    lock(&table->lock);
+    struct fd *fd = fdtable_get(table, f);
+    if (fd == NULL || new_f < 0 || (unsigned) new_f >= rlimit(RLIMIT_NOFILE_)) {
+        unlock(&table->lock);
         return _EBADF;
+    }
     int err = fdtable_expand(table, new_f);
-    if (err < 0)
+    if (err < 0) {
+        unlock(&table->lock);
         return err;
+    }
     fd_retain(fd);
-    f_close(new_f);
+    fdtable_close(table, new_f);
     table->files[new_f] = fd;
     if (flags & O_CLOEXEC_)
         bit_set(new_f, table->cloexec);
+    else
+        bit_clear(new_f, table->cloexec);
+    unlock(&table->lock);
     return new_f;
 }
 
+// dup3 of an fd to itself, or with a flag but O_CLOEXEC, is EINVAL
+dword_t sys_dup3(fd_t f, fd_t new_f, int_t flags) {
+    STRACE("dup3(%d, %d, %d)", f, new_f, flags);
+    if (flags & ~O_CLOEXEC_ || f == new_f)
+        return _EINVAL;
+    return dup_to(f, new_f, flags);
+}
+
+// dup2 of an fd to itself is the fd, if it is one
 dword_t sys_dup2(fd_t f, fd_t new_f) {
-    return sys_dup3(f, new_f, 0);
+    STRACE("dup2(%d, %d)", f, new_f);
+    if (f == new_f)
+        return f_get(f) != NULL ? (dword_t) f : (dword_t) _EBADF;
+    return dup_to(f, new_f, 0);
 }
 
 int fd_getflags(struct fd *fd) {
@@ -310,16 +337,22 @@ dword_t sys_fcntl(fd_t f, dword_t cmd, addr_t arg) {
     fd_t new_f;
     int err;
     switch (cmd) {
+        // The lowest fd it may take at or past RLIMIT_NOFILE (a negative one,
+        // taken unsigned) is EINVAL, as Linux's f_dupfd: f_install_start
+        // asserted it at least 0, and iSH aborted. Under the table's lock, as
+        // f_install. Close-on-exec is set on the fd made only: a failure's
+        // error was set as a bit, before the bitmap.
         case F_DUPFD_:
-            STRACE("fcntl(%d, F_DUPFD, %d)", f, arg);
-            fd->refcount++;
-            return f_install_start(fd, arg);
-
         case F_DUPFD_CLOEXEC_:
-            STRACE("fcntl(%d, F_DUPFD_CLOEXEC, %d)", f, arg);
+            STRACE("fcntl(%d, %s, %d)", f, cmd == F_DUPFD_ ? "F_DUPFD" : "F_DUPFD_CLOEXEC", arg);
+            if (arg >= rlimit(RLIMIT_NOFILE_))
+                return _EINVAL;
+            lock(&table->lock);
             fd->refcount++;
-            new_f = f_install_start(fd, arg);
-            bit_set(new_f, table->cloexec);
+            new_f = f_install_start(fd, (fd_t) arg);
+            if (new_f >= 0 && cmd == F_DUPFD_CLOEXEC_)
+                bit_set(new_f, table->cloexec);
+            unlock(&table->lock);
             return new_f;
 
         case F_GETFD_:
