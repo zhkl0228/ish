@@ -256,7 +256,31 @@ static inline int sock_flags_from_real(int real) {
 #define IPV6_V6ONLY_ 26
 #define IPV6_MULTICAST_ALL_ 29
 #define IPV6_RECVPKTINFO_ 49
+#define IPV6_PKTINFO_ 50
+#define IPV6_RECVHOPLIMIT_ 51
+#define IPV6_HOPLIMIT_ 52
+#define IPV6_RECVTCLASS_ 66
 #define IPV6_TCLASS_ 67
+#define IP_PKTINFO_ 8
+
+// RFC 3542's IPv6 options and control messages, by the host's numbers.
+// XNU's netinet6/in6.h defines them only with __APPLE_USE_RFC_3542 (and
+// RFC 2292's otherwise, which mean other things); its kernel takes both.
+#if defined(__APPLE__)
+#define HOST_IPV6_RECVPKTINFO 61
+#define HOST_IPV6_RECVHOPLIMIT 37
+#define HOST_IPV6_RECVTCLASS 35
+#define HOST_IPV6_PKTINFO 46
+#define HOST_IPV6_HOPLIMIT 47
+#define HOST_IPV6_TCLASS 36
+#else
+#define HOST_IPV6_RECVPKTINFO IPV6_RECVPKTINFO
+#define HOST_IPV6_RECVHOPLIMIT IPV6_RECVHOPLIMIT
+#define HOST_IPV6_RECVTCLASS IPV6_RECVTCLASS
+#define HOST_IPV6_PKTINFO IPV6_PKTINFO
+#define HOST_IPV6_HOPLIMIT IPV6_HOPLIMIT
+#define HOST_IPV6_TCLASS IPV6_TCLASS
+#endif
 #define ICMP6_FILTER_ 1
 
 static inline int sock_opt_to_real(int fake, int level) {
@@ -312,12 +336,19 @@ static inline int sock_opt_to_real(int fake, int level) {
             case IP_RETOPTS_: return IP_RETOPTS;
             case IP_RECVTTL_: return IP_RECVTTL;
             case IP_RECVTOS_: return IP_RECVTOS;
+            case IP_PKTINFO_: return IP_PKTINFO; // its control message is translated (recvmsg)
         } break;
         case IPPROTO_IPV6: switch (fake) {
             case IPV6_UNICAST_HOPS_: return IPV6_UNICAST_HOPS;
             case IPV6_MULTICAST_HOPS_: return IPV6_MULTICAST_HOPS; // Java sets 1 on every UDP socket
             case IPV6_TCLASS_: return IPV6_TCLASS;
             case IPV6_V6ONLY_: return IPV6_V6ONLY;
+            // what they ask for comes as control messages, translated
+            // (recvmsg): they were ENOPROTOOPT (CPython's test_socket, its
+            // RFC 3542 tests)
+            case IPV6_RECVPKTINFO_: return HOST_IPV6_RECVPKTINFO;
+            case IPV6_RECVHOPLIMIT_: return HOST_IPV6_RECVHOPLIMIT;
+            case IPV6_RECVTCLASS_: return HOST_IPV6_RECVTCLASS;
         } break;
     }
     return -1;

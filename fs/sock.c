@@ -1782,6 +1782,140 @@ static void scm_free(struct scm *scm) {
     free(scm);
 }
 
+// The control messages of an IP or IPv6 socket, Linux's and the host's:
+// IPv6's hop limit, traffic class and packet info (RFC 3542), IPv4's TTL, TOS
+// and packet info, and a receive's SO_TIMESTAMP. Their numbers differ, and
+// the header's size and alignment (XNU's 12 bytes and 4, Linux's 16 and 8).
+// They were dropped: a receive gave none (iputils' ping says each reply's
+// TTL from IP_TTL; CPython's test_socket, its RFC 3542 tests), and a send's
+// were not sent.
+
+// A received one into the guest's buffer as Linux's put_cmsg puts one: whole,
+// or as much as fits past its header, which says that much (MSG_CTRUNC), or
+// none without room for a header (MSG_CTRUNC); the next at its aligned end.
+struct guest_cmsgs {
+    addr_t at;
+    size_t room;
+    size_t used;
+    bool truncated;
+};
+
+static int guest_cmsg_put(struct guest_cmsgs *out, int level, int type, const void *data, size_t len) {
+    size_t left = out->room - out->used;
+    size_t cmlen = sizeof(struct cmsghdr_) + len;
+    if (left < sizeof(struct cmsghdr_)) {
+        out->truncated = true;
+        return 0;
+    }
+    if (left < cmlen) {
+        out->truncated = true;
+        cmlen = left;
+    }
+    struct cmsghdr_ header = {.len = cmlen, .level = level, .type = type};
+    if (user_write(out->at + out->used, &header, sizeof(header)))
+        return _EFAULT;
+    if (cmlen > sizeof(header) && user_write(out->at + out->used + sizeof(header), data, cmlen - sizeof(header)))
+        return _EFAULT;
+    size_t space = CMSG_SPACE_(len);
+    out->used += space < left ? space : left;
+    return 0;
+}
+
+// sizes Linux and XNU agree on: struct in_pktinfo (ifindex, spec_dst,
+// addr) and struct in6_pktinfo (addr, ifindex)
+#define IN_PKTINFO_SIZE 12
+#define IN6_PKTINFO_SIZE 20
+
+static int host_cmsgs_to_guest(struct msghdr *msg, struct guest_cmsgs *out) {
+    // each at the aligned end of the last, as CMSG_NXTHDR (whose musl macro
+    // compares signed and unsigned)
+    uint8_t *at = msg->msg_control, *end = at + msg->msg_controllen;
+    for (struct cmsghdr *c; at + sizeof(struct cmsghdr) <= end; at += CMSG_SPACE(c->cmsg_len - CMSG_LEN(0))) {
+        c = (void *) at;
+        if (c->cmsg_len < CMSG_LEN(0) || at + c->cmsg_len > end)
+            break;
+        const uint8_t *data = CMSG_DATA(c);
+        size_t len = c->cmsg_len - CMSG_LEN(0);
+        int err = 0;
+        if (c->cmsg_level == IPPROTO_IPV6 && c->cmsg_type == HOST_IPV6_HOPLIMIT) {
+            err = guest_cmsg_put(out, IPPROTO_IPV6, IPV6_HOPLIMIT_, data, sizeof(int));
+        } else if (c->cmsg_level == IPPROTO_IPV6 && c->cmsg_type == HOST_IPV6_TCLASS) {
+            err = guest_cmsg_put(out, IPPROTO_IPV6, IPV6_TCLASS_, data, sizeof(int));
+        } else if (c->cmsg_level == IPPROTO_IPV6 && c->cmsg_type == HOST_IPV6_PKTINFO) {
+            err = guest_cmsg_put(out, IPPROTO_IPV6, IPV6_PKTINFO_, data, IN6_PKTINFO_SIZE);
+        } else if (c->cmsg_level == IPPROTO_IP && (c->cmsg_type == IP_TTL || c->cmsg_type == IP_RECVTTL)) {
+            // an int, as Linux's: XNU's (IP_RECVTTL) is a byte
+            int ttl = len == 1 ? data[0] : *(const int *) data;
+            err = guest_cmsg_put(out, IPPROTO_IP, IP_TTL_, &ttl, sizeof(ttl));
+        } else if (c->cmsg_level == IPPROTO_IP && (c->cmsg_type == IP_TOS || c->cmsg_type == IP_RECVTOS)) {
+            uint8_t tos = data[0];
+            err = guest_cmsg_put(out, IPPROTO_IP, IP_TOS_, &tos, sizeof(tos));
+        } else if (c->cmsg_level == IPPROTO_IP && c->cmsg_type == IP_PKTINFO) {
+            err = guest_cmsg_put(out, IPPROTO_IP, IP_PKTINFO_, data, IN_PKTINFO_SIZE);
+        } else if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_TIMESTAMP) {
+            // the guest's timeval, two 64-bit numbers (XNU's microseconds
+            // are 32 bits)
+            struct timeval tv;
+            memcpy(&tv, data, sizeof(tv));
+            int64_t guest_tv[2] = {tv.tv_sec, tv.tv_usec};
+            err = guest_cmsg_put(out, SOL_SOCKET_, SO_TIMESTAMP_, guest_tv, sizeof(guest_tv));
+        } else {
+            static _Atomic bool said;
+            if (!atomic_exchange(&said, true))
+                printk("%s[%d]: recvmsg: the host's control message, level %d type %d (%zu bytes), unknown: "
+                       "dropped\n", current->comm, current->pid, c->cmsg_level, c->cmsg_type, len);
+        }
+        if (err < 0)
+            return err;
+    }
+    return 0;
+}
+
+// A send's, the guest's into the host's buffer: those above, and IPv4's TTL
+// and TOS (the host's to take or refuse). Another, or one whose length does
+// not fit the buffer, is EINVAL, as Linux says of one it has not; a buffer
+// past the host's room ENOBUFS.
+static int guest_cmsgs_to_host(uint8_t *guest, size_t guest_len, char *host, size_t host_room, struct msghdr *msg) {
+    uint8_t *end = guest + guest_len;
+    size_t used = 0;
+    for (struct cmsghdr_ *g = (void *) guest; g != NULL; g = CMSG_NXTHDR_(g, end)) {
+        if (g->len < sizeof(struct cmsghdr_) || (uint8_t *) g + g->len > end)
+            return _EINVAL;
+        size_t len = g->len - sizeof(struct cmsghdr_);
+        int level = g->level, type;
+        if (g->level == IPPROTO_IPV6 && g->type == IPV6_HOPLIMIT_)
+            type = HOST_IPV6_HOPLIMIT;
+        else if (g->level == IPPROTO_IPV6 && g->type == IPV6_TCLASS_)
+            type = HOST_IPV6_TCLASS;
+        else if (g->level == IPPROTO_IPV6 && g->type == IPV6_PKTINFO_)
+            type = HOST_IPV6_PKTINFO;
+        else if (g->level == IPPROTO_IP && g->type == IP_PKTINFO_)
+            type = IP_PKTINFO;
+        else if (g->level == IPPROTO_IP && g->type == IP_TTL_)
+            type = IP_TTL;
+        else if (g->level == IPPROTO_IP && g->type == IP_TOS_)
+            type = IP_TOS;
+        else {
+            static _Atomic bool said;
+            if (!atomic_exchange(&said, true))
+                printk("%s[%d]: sendmsg: control message level %d type %d (%zu bytes) unknown, EINVAL\n",
+                       current->comm, current->pid, g->level, g->type, len);
+            return _EINVAL;
+        }
+        if (used + CMSG_SPACE(len) > host_room)
+            return _ENOBUFS;
+        struct cmsghdr *h = (void *) (host + used);
+        h->cmsg_len = CMSG_LEN(len);
+        h->cmsg_level = level;
+        h->cmsg_type = type;
+        memcpy(CMSG_DATA(h), g->data, len);
+        used += CMSG_SPACE(len);
+    }
+    msg->msg_control = host;
+    msg->msg_controllen = used;
+    return 0;
+}
+
 int_t sys_sendmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
     if (fd_is_packet(f_get(sock_fd)))
         return packet_unsupported(f_get(sock_fd), "sendmsg");
@@ -1930,6 +2064,16 @@ int_t sys_sendmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
         }
     }
 
+    // an IP or IPv6 socket's control messages, the host's (above): they
+    // were not sent. A buffer short of a header has none, as Linux's.
+    char host_control[512] __attribute__((aligned(8)));
+    if (sock->socket.domain != AF_LOCAL_ && msg_control != NULL &&
+            msg_fake.msg_controllen >= sizeof(struct cmsghdr_)) {
+        err = guest_cmsgs_to_host(msg_control, msg_fake.msg_controllen, host_control, sizeof(host_control), &msg);
+        if (err < 0)
+            goto out_free_scm;
+    }
+
     msg.msg_flags = sock_flags_to_real(msg_fake.msg_flags);
     err = _EINVAL;
     if (msg.msg_flags < 0)
@@ -2011,17 +2155,15 @@ int_t sys_recvmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
         msg.msg_namelen = 0;
     }
 
-    char real_msg_control[CMSG_SPACE(sizeof(int))] = {}; // only used if needed
-    // msg_control, with room for the one fd that stands for the ones sent
-    // (sys_sendmsg). On a unix socket always: without it the host drops that
-    // fd, and the batch it stands for would be taken by the next message.
-    if (msg_fake.msg_controllen != 0 || sock->socket.domain == AF_LOCAL_) {
-        msg.msg_control = real_msg_control;
-        msg.msg_controllen = sizeof(real_msg_control);
-    } else {
-        msg.msg_control = NULL;
-        msg.msg_controllen = 0;
-    }
+    char real_msg_control[1024] __attribute__((aligned(8))) = {};
+    // msg_control. On a unix socket, room for the one fd that stands for the
+    // ones sent (sys_sendmsg), always: without it the host drops that fd,
+    // and the batch it stands for would be taken by the next message. On
+    // another, room for what the host gives, IP and IPv6's control messages
+    // (host_cmsgs_to_guest), whatever the guest's room: what does not fit it
+    // is MSG_CTRUNC, as on Linux.
+    msg.msg_control = real_msg_control;
+    msg.msg_controllen = sock->socket.domain == AF_LOCAL_ ? CMSG_SPACE(sizeof(int)) : sizeof(real_msg_control);
 
     int real_flags = sock_flags_to_real(flags);
     if (real_flags < 0)
@@ -2158,6 +2300,15 @@ int_t sys_recvmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
     // by now the iovecs and scm have been freed so we can return
     if (res < 0)
         return err;
+
+    if (sock->socket.domain != AF_LOCAL_) {
+        struct guest_cmsgs out = {.at = msg_fake.msg_control, .room = control_room};
+        int cmsg_err = host_cmsgs_to_guest(&msg, &out);
+        if (cmsg_err < 0)
+            return cmsg_err;
+        msg_fake.msg_controllen = out.used;
+        control_truncated = out.truncated;
+    }
 
     // msg_name (changed)
     if (msg.msg_name != 0) {
