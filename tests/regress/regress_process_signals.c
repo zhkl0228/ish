@@ -188,12 +188,13 @@ int main(int argc, char **argv) {
     // threads that took it after hung: case 11's fork, and case 10's
     // SIGEV_THREAD thread if it had not left yet, which under load (ASan,
     // tests run side by side) it had not, about one run in twenty. The same
-    // on Linux; started anew, musl gives the main thread one.
+    // on Linux; started anew, musl gives the main thread one. Its own file is
+    // /proc/self/exe, wherever it was found (argv[0] need hold no path).
     if (getpid() == 1) {
         pid_t child = fork();
         if (child == 0) {
-            execv(argv[0], argv);
-            printf("FAIL execv %s: %s\n", argv[0], strerror(errno));
+            execv("/proc/self/exe", argv);
+            printf("FAIL execv /proc/self/exe: %s\n", strerror(errno));
             _exit(1);
         }
         int status;
