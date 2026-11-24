@@ -6,6 +6,12 @@
 #include <os/proc.h>
 #endif
 #include <sys/time.h>
+#include <arpa/inet.h>
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 #include "platform/platform.h"
 #include "debug.h"
 
@@ -66,6 +72,8 @@ struct host_memory get_host_memory(void) {
 #if TARGET_OS_IPHONE
     m.available = os_proc_available_memory();
 #endif
+    size_t physical_size = sizeof(m.physical);
+    sysctlbyname("hw.memsize", &m.physical, &physical_size, NULL, 0);
     task_vm_info_data_t vm = {};
     mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
     if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t) &vm, &count) == KERN_SUCCESS)
@@ -229,4 +237,81 @@ struct uptime_info get_uptime(void) {
         .load_15m = vm_loadavg.ldavg[2],
     };
     return uptime;
+}
+
+// libSystem's csops, as <sys/codesign.h> declares it (not in iOS's SDK): the
+// code signature the kernel keeps of the process. Its entitlements blob is an
+// 8-byte header, magic and length big-endian, then the entitlements: an XML
+// plist, or DER where the signature has those only.
+extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
+#define CS_OPS_ENTITLEMENTS_BLOB 7
+#define CS_OPS_DER_ENTITLEMENTS_BLOB 16
+#define CSMAGIC_EMBEDDED_ENTITLEMENTS 0xfade7171
+#define CSMAGIC_EMBEDDED_DER_ENTITLEMENTS 0xfade7172
+
+// The blob, NUL after it; NULL for none (only its header), or with why set
+// for what csops said otherwise. A header too small for it is filled with
+// its length, and csops says ERANGE.
+static char *entitlements_blob(unsigned ops, uint32_t magic, size_t *len, char *why, size_t why_size) {
+    uint32_t header[2] = {0, 0};
+    if (csops(getpid(), ops, header, sizeof(header)) < 0 && errno != ERANGE) {
+        snprintf(why, why_size, "csops(%u): %s", ops, strerror(errno));
+        return NULL;
+    }
+    uint32_t total = ntohl(header[1]);
+    if (total <= sizeof(header))
+        return NULL;
+    if (ntohl(header[0]) != magic) {
+        snprintf(why, why_size, "csops(%u): magic %#x, length %u", ops, ntohl(header[0]), total);
+        return NULL;
+    }
+    char *blob = malloc(total + 1);
+    if (csops(getpid(), ops, blob, total) < 0) {
+        snprintf(why, why_size, "csops(%u) of %u bytes: %s", ops, total, strerror(errno));
+        free(blob);
+        return NULL;
+    }
+    blob[total] = '\0';
+    *len = total;
+    return blob;
+}
+
+enum entitlement_state host_entitlement(const char *name, char *why, size_t why_size) {
+    why[0] = '\0';
+    size_t len = 0;
+    char *xml = entitlements_blob(CS_OPS_ENTITLEMENTS_BLOB, CSMAGIC_EMBEDDED_ENTITLEMENTS, &len, why, why_size);
+    if (xml != NULL) {
+        // <key>name</key>, then <true/>, whitespace between
+        char key[256];
+        snprintf(key, sizeof(key), "<key>%s</key>", name);
+        const char *at = strstr(xml + 8, key);
+        enum entitlement_state state = ENTITLEMENT_NO;
+        if (at != NULL) {
+            at += strlen(key);
+            while (*at == ' ' || *at == '\t' || *at == '\n' || *at == '\r')
+                at++;
+            if (strncmp(at, "<true/>", 7) == 0)
+                state = ENTITLEMENT_YES;
+        }
+        free(xml);
+        return state;
+    }
+    if (why[0] != '\0')
+        return ENTITLEMENT_UNKNOWN;
+    // No XML: a signature with DER entitlements only. The name is a
+    // UTF8String's bytes, and true after it the BOOLEAN 01 01 ff.
+    char *der = entitlements_blob(CS_OPS_DER_ENTITLEMENTS_BLOB, CSMAGIC_EMBEDDED_DER_ENTITLEMENTS, &len, why, why_size);
+    if (der != NULL) {
+        size_t name_len = strlen(name);
+        const unsigned char *at = memmem(der + 8, len - 8, name, name_len);
+        enum entitlement_state state = ENTITLEMENT_NO;
+        if (at != NULL && (size_t) ((const char *) at - der) + name_len + 3 <= len &&
+                at[name_len] == 0x01 && at[name_len + 1] == 0x01 && at[name_len + 2] == 0xff)
+            state = ENTITLEMENT_YES;
+        free(der);
+        return state;
+    }
+    if (why[0] != '\0')
+        return ENTITLEMENT_UNKNOWN;
+    return ENTITLEMENT_NO; // no entitlements at all
 }

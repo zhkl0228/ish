@@ -71,6 +71,7 @@ struct mem_usage get_mem_usage() {
 
 struct host_memory get_host_memory(void) {
     struct host_memory m = {};
+    m.physical = (uint64_t) sysconf(_SC_PHYS_PAGES) * (uint64_t) sysconf(_SC_PAGESIZE);
     char buf[4096];
     // the resident set, statm's second field, in pages
     int fd = open("/proc/self/statm", O_RDONLY);
@@ -182,4 +183,9 @@ struct uptime_info get_uptime() {
         .load_15m = info.loads[2],
     };
     return uptime;
+}
+
+enum entitlement_state host_entitlement(const char *UNUSED(name), char *why, size_t why_size) {
+    snprintf(why, why_size, "a Linux host has no code signature");
+    return ENTITLEMENT_UNKNOWN;
 }

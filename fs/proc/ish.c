@@ -188,6 +188,25 @@ static int proc_ish_show_host(struct proc_entry *UNUSED(entry), struct proc_data
     proc_printf(buf, "available: %.1f MB (what the OS still lets the app take: 0 is its limit met, or a host "
                 "with none)\n", m.available / 1048576.0);
     proc_printf(buf, "footprint: %.1f MB\n", m.footprint / 1048576.0);
+    // The app's limit, past which the OS ends it (iOS's jetsam): what it
+    // takes and what it may still take. Not the device's memory, which it
+    // shares; and the entitlements that raise it, if the signature that
+    // installed the app has them (an entitlements file asking is not enough)
+    if (m.available != 0)
+        proc_printf(buf, "limit: %.1f MB (footprint and available: past it the OS ends the app)\n",
+                    (m.footprint + m.available) / 1048576.0);
+    proc_printf(buf, "device memory: %.1f MB\n", m.physical / 1048576.0);
+    static const char *const entitlements[] = {
+        "com.apple.developer.kernel.increased-memory-limit",
+        "com.apple.developer.kernel.extended-virtual-addressing",
+    };
+    for (size_t i = 0; i < sizeof(entitlements) / sizeof(entitlements[0]); i++) {
+        char why[160];
+        enum entitlement_state state = host_entitlement(entitlements[i], why, sizeof(why));
+        proc_printf(buf, "entitlement %s: %s%s%s\n", entitlements[i],
+                    state == ENTITLEMENT_YES ? "yes" : state == ENTITLEMENT_NO ? "no" : "unknown",
+                    why[0] != '\0' ? ", " : "", why);
+    }
     proc_printf(buf, "mappings: %llu\n", (unsigned long long) m.mappings);
     proc_printf(buf, "malloc in use: %.1f MB\n", m.malloc_in_use / 1048576.0);
     proc_printf(buf, "address space: %.1f MB in the mappings, %.1f MB the largest range none takes\n",

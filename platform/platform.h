@@ -30,8 +30,16 @@ struct host_memory {
     uint64_t malloc_in_use; // malloc's bytes in use
     uint64_t address_space; // the address space its mappings take
     uint64_t largest_free;  // its largest range of address space that no mapping takes
+    uint64_t physical;      // the device's memory (Darwin: hw.memsize; Linux: its pages)
 };
 struct host_memory get_host_memory(void);
+
+// Whether the app's code signature, as the kernel keeps it, grants it an
+// entitlement: an entitlements file asks for one, and a signature made
+// without it (a re-signing that drops what its profile has not) does not
+// have it. Unknown, with why, where it cannot be read.
+enum entitlement_state { ENTITLEMENT_NO, ENTITLEMENT_YES, ENTITLEMENT_UNKNOWN };
+enum entitlement_state host_entitlement(const char *name, char *why, size_t why_size);
 
 // A range of the host's address space: a mapping, or one no mapping takes
 struct host_range {
