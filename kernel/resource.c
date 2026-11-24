@@ -193,8 +193,9 @@ __attribute__((weak)) void minis_diag_note_thread_port_released(void) {}
 #endif
 
 struct rusage_ rusage_get_current(void) {
-    // only the time fields are currently implemented
-    struct rusage_ rusage;
+    // only the time fields are currently implemented; the rest 0, as Linux's
+    // that it does not keep (they were what the stack had)
+    struct rusage_ rusage = {};
 #if __linux__
     struct rusage usage;
     int err = getrusage(RUSAGE_THREAD, &usage);

@@ -1096,6 +1096,17 @@ EOF
         status=1
     fi
     echo
+    echo "########## struct rusage as arm64 has it, written whole (getrusage, wait4) ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_rusage" tests/regress/regress_rusage.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_rusage 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_rusage"
+    else
+        echo "failed to build regress_rusage" >&2
+        status=1
+    fi
+    echo
     echo "########## calls CPython's test_os found wrong (EFD_SEMAPHORE, memfd_create, priorities) ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_os_calls" tests/regress/regress_os_calls.c; then
         out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_os_calls 2>&1)
