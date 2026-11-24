@@ -76,9 +76,12 @@ recorded on (`app/RootfsPatch.bundle/files/usr/local/share/ish-install/versions`
 makes their images serve the phone's: a new version comes with an app whose set was recorded on it.
 
 CI keeps the set current (`.github/workflows/aot-images.yml`, `ci_app_images.sh`): on a push that
-changes ish's abi, and every day for new versions of Claude Code, Kimi Code and Alpine's nodejs,
-openjdk25-jdk, maven and python3, it records on the lock's root, publishes, and opens a pull
-request with the new lock, xcconfig and versions. The server keeps the set master's lock names and
+changes ish's abi or what the images are recorded from (a workload, `images-app.json`, the
+recording scripts or `gen.py`: `recording_inputs.py`'s hash, kept in the lock), and every day for
+new versions of Claude Code, Kimi Code and Alpine's nodejs, openjdk25-jdk, maven, python3 and ssh,
+it records on the lock's root, publishes, commits the new lock, xcconfig and versions to master and
+runs the app's build (`ci.yml`) on it; a pull request instead when that commit cannot go onto
+master as it is then. The server keeps the set master's lock names and
 the newest one; a publish removes the rest. Uploads go as user `ish-aot`, whose key (the secret
 `AOT_SSH_KEY`) can only rsync into that directory (`rrsync`).
 

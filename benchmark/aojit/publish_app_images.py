@@ -38,6 +38,9 @@ import shutil
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from recording_inputs import recording_inputs  # noqa: E402
+
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 LIST = os.path.join(REPO, 'benchmark', 'aojit', 'images-app.json')
 LOCK = os.path.join(REPO, 'benchmark', 'aojit', 'app-images.lock.json')
@@ -175,7 +178,7 @@ def main():
         'base_url': BASE_URL,
         'set': set_name,
         'abi': abi,
-        'recorded': {'apk': apk, 'npm': npm},
+        'recorded': {'apk': apk, 'npm': npm, 'inputs': recording_inputs()},
         'rootfs': files['rootfs'],
         'images': images,
     }

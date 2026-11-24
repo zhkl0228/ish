@@ -11,6 +11,9 @@
 #   - Alpine has another build of nodejs, openjdk25-jdk, maven, python3 or
 #     openssh-client-default (ssh), which ish-install and apk install from the
 #     repositories as they are that day
+#   - what they are recorded from changed: a workload, the list of images,
+#     the recording scripts or gen.py (recording_inputs.py), as when Claude
+#     Code's workload came to run it with JavaScriptCore's JIT off
 #
 # The root is the one the lock's set ships (its musl is the app's), fetched
 # from the server. A new root comes in by hand: put it at
@@ -68,9 +71,10 @@ for line in sys.stdin:
         found[m.group(1)] = m.group(2)
 assert set(found) == want, found
 print(' '.join('%s=%s' % i for i in sorted(found.items())))")
-now="abi=$abi @anthropic-ai/claude-code=$claude @moonshot-ai/kimi-code=$kimi $apk"
-# a package a lock of before it had no image of is "none": recorded again,
-# with its image
+inputs=$(python3 benchmark/aojit/recording_inputs.py)
+now="abi=$abi @anthropic-ai/claude-code=$claude @moonshot-ai/kimi-code=$kimi $apk inputs=$inputs"
+# a package a lock of before it had no image of is "none", and so are the
+# inputs of a lock from before they were kept: recorded again
 recorded=$(python3 -c "
 import json
 d = json.load(open('$lock'))
@@ -78,7 +82,8 @@ r = d['recorded']
 print(' '.join(['abi=' + d['abi'], '@anthropic-ai/claude-code=' + r['npm']['@anthropic-ai/claude-code'],
                 '@moonshot-ai/kimi-code=' + r['npm']['@moonshot-ai/kimi-code']] +
                ['%s=%s' % (p, r['apk'].get(p, 'none'))
-                for p in sorted(['nodejs', 'openjdk25-jdk', 'maven', 'python3', 'openssh-client-default'])]))")
+                for p in sorted(['nodejs', 'openjdk25-jdk', 'maven', 'python3', 'openssh-client-default'])] +
+               ['inputs=' + r.get('inputs', 'none')]))")
 echo "now:      $now"
 echo "recorded: $recorded"
 if [ "$now" = "$recorded" ] && [ -z "$force" ]; then
