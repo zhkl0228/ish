@@ -10,7 +10,10 @@
 // page stays); an anonymous one of two pages shrunk to a page and a byte
 // keeps both; a new length of 0 is EINVAL; a range with an unmapped page
 // is EFAULT; an anonymous one grows in place where there is room, the new
-// page zeros and writable. Natively passes.
+// page zeros and writable; with no room it is ENOMEM, and with
+// MREMAP_MAYMOVE it moves (iSH said ENOMEM: CPython's
+// test_resize_up_private_anonymous_mapping), its bytes with it, the new
+// pages zeros, the old page gone. Natively passes.
 //
 // Build: aarch64-linux-musl-gcc -static -O0 -o regress_mremap regress_mremap.c
 
@@ -110,6 +113,26 @@ int main(void) {
     snprintf(detail, sizeof(detail), "mremap %p -> %p, new page %s %d", (void *) room, (void *) grown,
              ok ? "reads" : "does not read", c);
     check("an anonymous mapping grows in place where there is room", ok && c == 0 && room[0] == 'y', detail);
+
+    // no room where it is: the next page mapped
+    char *blocked = mmap(NULL, 2 * page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    blocked[0] = 'w';
+    r = mremap(blocked, page, 4 * page, 0);
+    e = errno;
+    snprintf(detail, sizeof(detail), "%p (%s)", (void *) r, r == MAP_FAILED ? strerror(e) : "ok");
+    check("no room and no MREMAP_MAYMOVE", r == MAP_FAILED && e == ENOMEM, detail);
+    char *moved = mremap(blocked, page, 4 * page, MREMAP_MAYMOVE);
+    e = errno;
+    c = 1;
+    char first = 0;
+    ok = moved != MAP_FAILED && moved != blocked && readable(moved, &first) && readable(moved + 3 * page, &c);
+    if (ok)
+        moved[3 * page] = 'v';
+    char old_c;
+    int old_gone = !readable(blocked, &old_c);
+    snprintf(detail, sizeof(detail), "%p -> %p (%s), first byte '%c', new page %d, old page %s", (void *) blocked,
+             (void *) moved, moved == MAP_FAILED ? strerror(e) : "ok", first, c, old_gone ? "gone" : "still there");
+    check("no room: MREMAP_MAYMOVE moves it, its bytes with it", ok && first == 'w' && c == 0 && old_gone, detail);
 
     printf("%d passed, %d failed\n", passed, failed);
     return failed != 0;

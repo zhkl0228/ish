@@ -57,7 +57,7 @@ addr_t sys_mmap2(addr_t addr, dword_t len, dword_t prot, dword_t flags, fd_t fd_
 addr_t sys_mmap64(addr_t addr, addr_t len, dword_t prot, dword_t flags, fd_t fd_no, qword_t offset);
 int_t sys_munmap(addr_t addr, addr_t len);
 int_t sys_mprotect(addr_t addr, addr_t len, int_t prot);
-addr_t sys_mremap(addr_t addr, dword_t old_len, dword_t new_len, dword_t flags);
+addr_t sys_mremap(addr_t addr, addr_t old_len, addr_t new_len, dword_t flags);
 dword_t sys_madvise(addr_t addr, dword_t len, dword_t advice);
 dword_t sys_mbind(addr_t addr, dword_t len, int_t mode, addr_t nodemask, dword_t maxnode, uint_t flags);
 int_t sys_mlock(addr_t addr, dword_t len);

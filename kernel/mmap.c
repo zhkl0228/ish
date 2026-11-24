@@ -566,8 +566,21 @@ int_t sys_munmap(addr_t addr, addr_t len) {
 #define MREMAP_MAYMOVE_ 1
 #define MREMAP_FIXED_ 2
 
-addr_t sys_mremap(addr_t addr, dword_t old_len, dword_t new_len, dword_t flags) {
-    STRACE("mremap(%#x, %#x, %#x, %d)", addr, old_len, new_len, flags);
+static addr_t mremap_locked(addr_t addr, addr_t old_len, addr_t new_len, dword_t flags);
+
+// Under the mem's lock, as every other change of its page table: it was
+// taken without, another thread faulting or mapping meanwhile. Lengths are
+// 64-bit, as arm64's registers give them.
+addr_t sys_mremap(addr_t addr, addr_t old_len, addr_t new_len, dword_t flags) {
+    write_wrlock(&current->mem->lock);
+    addr_t res = mremap_locked(addr, old_len, new_len, flags);
+    write_wrunlock(&current->mem->lock);
+    return res;
+}
+
+static addr_t mremap_locked(addr_t addr, addr_t old_len, addr_t new_len, dword_t flags) {
+    STRACE("mremap(%#llx, %#llx, %#llx, %d)", (unsigned long long) addr, (unsigned long long) old_len,
+           (unsigned long long) new_len, flags);
     if (PGOFFSET(addr) != 0)
         return _EINVAL;
     if (flags & ~(MREMAP_MAYMOVE_ | MREMAP_FIXED_))
@@ -610,12 +623,37 @@ addr_t sys_mremap(addr_t addr, dword_t old_len, dword_t new_len, dword_t flags) 
     }
     page_t extra_start = PAGE(addr) + old_pages;
     pages_t extra_pages = new_pages - old_pages;
-    if (!pt_is_hole(current->mem, extra_start, extra_pages))
+    if (pt_is_hole(current->mem, extra_start, extra_pages)) {
+        int err = pt_map_nothing(current->mem, extra_start, extra_pages, pt_flags);
+        if (err < 0)
+            return err;
+        return addr;
+    }
+
+    // No room where it is: with MREMAP_MAYMOVE it moves, as Linux's
+    // move_vma, where it was ENOMEM (CPython's mmap.resize of an anonymous
+    // mapping, test_resize_up_private_anonymous_mapping; musl's realloc of
+    // a large block copies instead). The growth is mapped first, where it
+    // can fail; then each old page's data at the new place, as it was (its
+    // flags, a fork's copy-on-write and a shared mapping's sharing with it),
+    // and the old range unmapped.
+    if (!(flags & MREMAP_MAYMOVE_))
         return _ENOMEM;
-    int err = pt_map_nothing(current->mem, extra_start, extra_pages, pt_flags);
+    page_t dest = pt_find_hole(current->mem, new_pages);
+    if (dest == BAD_PAGE)
+        return _ENOMEM;
+    int err = pt_map_nothing(current->mem, dest + old_pages, extra_pages, pt_flags);
     if (err < 0)
         return err;
-    return addr;
+    for (pages_t i = 0; i < old_pages; i++) {
+        struct pt_entry *pt = mem_pt(current->mem, PAGE(addr) + i);
+        struct data *data = pt->data;
+        size_t offset = pt->offset;
+        unsigned page_flags = pt->flags;
+        pt_map_data(current->mem, dest + i, 1, data, offset, page_flags);
+    }
+    pt_unmap(current->mem, PAGE(addr), old_pages);
+    return (addr_t) dest << PAGE_BITS;
 }
 
 int_t sys_mprotect(addr_t addr, addr_t len, int_t prot) {
