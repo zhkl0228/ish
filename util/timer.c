@@ -47,6 +47,8 @@ static void *timer_thread(void *param) {
             timer->start = timer->end;
             timer->end = timespec_add(timer->start, timer->interval);
         } else {
+            // a one-shot timer that fired is disarmed, and says so (timer_get)
+            timer->active = false;
             break;
         }
     }
@@ -58,13 +60,38 @@ static void *timer_thread(void *param) {
     return NULL;
 }
 
+// What is left of it, as Linux says: 0 if it is disarmed, which a one-shot
+// timer is once it fired (its end, in the past, said a time below 0: what
+// setitimer, timer_settime and alarm said of one); 1ns if it is due and its
+// callback has yet to run, as an armed timer never says 0.
+static struct timer_spec timer_get_locked(struct timer *timer, struct timespec now) {
+    struct timer_spec spec = {.interval = timer->interval};
+    if (timer->active) {
+        spec.value = timespec_subtract(timer->end, now);
+        if (!timespec_positive(spec.value))
+            spec.value = (struct timespec) {.tv_sec = 0, .tv_nsec = 1};
+    }
+    return spec;
+}
+
+void timer_get(struct timer *timer, struct timer_spec *spec) {
+    lock(&timer->lock);
+    *spec = timer_get_locked(timer, timespec_now(timer->clockid));
+    unlock(&timer->lock);
+}
+
 int timer_set(struct timer *timer, struct timer_spec spec, struct timer_spec *oldspec) {
+    return timer_set_with(timer, spec, oldspec, NULL);
+}
+
+int timer_set_with(struct timer *timer, struct timer_spec spec, struct timer_spec *oldspec,
+                   timer_callback_t reset) {
     lock(&timer->lock);
     struct timespec now = timespec_now(timer->clockid);
-    if (oldspec != NULL) {
-        oldspec->value = timespec_subtract(timer->end, now);
-        oldspec->interval = timer->interval;
-    }
+    if (oldspec != NULL)
+        *oldspec = timer_get_locked(timer, now);
+    if (reset != NULL)
+        reset(timer->data);
 
     timer->start = now;
     timer->end = timespec_add(timer->start, spec.value);

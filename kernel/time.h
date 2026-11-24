@@ -81,6 +81,7 @@ struct tms_ {
     clock_t_ tms_cstime; /* system time of children */
 };
 
+int_t sys_getitimer(int_t which, addr_t val);
 int_t sys_setitimer(int_t which, addr_t new_val, addr_t old_val);
 uint_t sys_alarm(uint_t seconds);
 int_t sys_timer_create(dword_t clock, addr_t sigevent_addr, addr_t timer_addr);

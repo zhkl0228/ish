@@ -229,6 +229,41 @@ static int itimer_set(struct tgroup *group, int which, struct timer_spec spec, s
     return timer_set(group->itimer, spec, old_spec);
 }
 
+// An itimerval in microseconds: an armed timer's under 1us says 1us, as Linux
+// says (itimer_get_remtime), not 0, which is a disarmed one's.
+static struct itimerval_ itimerval_from_real(struct timer_spec spec) {
+    struct itimerval_ val = {
+        .interval.sec = spec.interval.tv_sec,
+        .interval.usec = spec.interval.tv_nsec / 1000,
+        .value.sec = spec.value.tv_sec,
+        .value.usec = spec.value.tv_nsec / 1000,
+    };
+    if (val.value.sec == 0 && val.value.usec == 0 && timespec_positive(spec.value))
+        val.value.usec = 1;
+    return val;
+}
+
+// It was ENOSYS: Python's signal.getitimer, and so its test_signal's
+// ItimerTest. ITIMER_VIRTUAL's and ITIMER_PROF's are never armed, as
+// setitimer refuses them: 0.
+int_t sys_getitimer(int_t which, addr_t val_addr) {
+    STRACE("getitimer(%d, %#x)", which, val_addr);
+    if (which != ITIMER_REAL_ && which != ITIMER_VIRTUAL_ && which != ITIMER_PROF_)
+        return _EINVAL;
+    struct timer_spec spec = {};
+    if (which == ITIMER_REAL_) {
+        struct tgroup *group = current->group;
+        lock(&group->lock);
+        if (group->itimer != NULL)
+            timer_get(group->itimer, &spec);
+        unlock(&group->lock);
+    }
+    struct itimerval_ val = itimerval_from_real(spec);
+    if (user_put(val_addr, val))
+        return _EFAULT;
+    return 0;
+}
+
 int_t sys_setitimer(int_t which, addr_t new_val_addr, addr_t old_val_addr) {
     struct itimerval_ val;
     if (user_get(new_val_addr, val))
@@ -255,11 +290,7 @@ int_t sys_setitimer(int_t which, addr_t new_val_addr, addr_t old_val_addr) {
         return err;
 
     if (old_val_addr != 0) {
-        struct itimerval_ old_val;
-        old_val.interval.sec = old_spec.interval.tv_sec;
-        old_val.interval.usec = old_spec.interval.tv_nsec / 1000;
-        old_val.value.sec = old_spec.value.tv_sec;
-        old_val.value.usec = old_spec.value.tv_nsec / 1000;
+        struct itimerval_ old_val = itimerval_from_real(old_spec);
         if (user_put(old_val_addr, old_val))
             return _EFAULT;
     }
@@ -619,14 +650,22 @@ int_t sys_timer_settime(dword_t timer_id, int_t flags, addr_t new_value_addr, ad
     struct itimerspec_ value;
     if (user_get(new_value_addr, value))
         return _EFAULT;
-    if (timer_id > TIMERS_MAX)
+    // A timer that is not, deleted or never made, is EINVAL, as Linux says.
+    // Its NULL timer was set (and TIMERS_MAX's past the array): iSH crashed.
+    if (timer_id >= TIMERS_MAX)
         return _EINVAL;
 
     lock(&current->group->lock);
     struct posix_timer *timer = &current->group->posix_timers[timer_id];
+    if (timer->timer == NULL) {
+        unlock(&current->group->lock);
+        return _EINVAL;
+    }
     struct timer_spec spec = timer_spec_to_real(value);
     struct timer_spec old_spec;
-    if (flags & TIMER_ABSTIME_) {
+    // a time of 0 disarms it, absolute or not, as on Linux: it was one long
+    // past, and it fired at once
+    if (flags & TIMER_ABSTIME_ && !timespec_is_zero(spec.value)) {
         struct timespec now = timespec_now(timer->timer->clockid);
         spec.value = timespec_subtract(spec.value, now);
     }
@@ -656,16 +695,7 @@ int_t sys_timer_gettime(dword_t timer_id, addr_t curr_value_addr) {
     }
 
     struct timer_spec spec;
-    spec.interval = pt->timer->interval;
-    if (pt->timer->active) {
-        struct timespec now = timespec_now(pt->timer->clockid);
-        if (timespec_positive(timespec_subtract(pt->timer->end, now)))
-            spec.value = timespec_subtract(pt->timer->end, now);
-        else
-            spec.value = (struct timespec) {0, 0};
-    } else {
-        spec.value = (struct timespec) {0, 0};
-    }
+    timer_get(pt->timer, &spec);
     unlock(&current->group->lock);
 
     struct itimerspec_ value = timer_spec_from_real(spec);
@@ -709,6 +739,9 @@ void posix_timers_delete(struct tgroup *group) {
 
 int_t sys_timer_delete(dword_t timer_id) {
     STRACE("timer_delete(%d)\n", timer_id);
+    // read past the array, as timer_settime did
+    if (timer_id >= TIMERS_MAX)
+        return _EINVAL;
     lock(&current->group->lock);
     struct posix_timer *timer = &current->group->posix_timers[timer_id];
     if (timer->timer == NULL) {
@@ -722,6 +755,12 @@ int_t sys_timer_delete(dword_t timer_id) {
 }
 
 static struct fd_ops timerfd_ops;
+
+static void timerfd_reset(struct fd *fd) {
+    lock(&fd->lock);
+    fd->timerfd.expirations = 0;
+    unlock(&fd->lock);
+}
 
 static void timerfd_callback(struct fd *fd) {
     lock(&fd->lock);
@@ -758,14 +797,16 @@ int_t sys_timerfd_settime(fd_t f, int_t flags, addr_t new_value_addr, addr_t old
         return _EFAULT;
     struct timer_spec spec = timer_spec_to_real(value);
     struct timer_spec old_spec;
-    if (flags & TIMER_ABSTIME_) {
+    if (flags & TIMER_ABSTIME_ && !timespec_is_zero(spec.value)) {
         struct timespec now = timespec_now(fd->timerfd.timer->clockid);
         spec.value = timespec_subtract(spec.value, now);
     }
 
-    lock(&fd->lock);
-    int err = timer_set(fd->timerfd.timer, spec, &old_spec);
-    unlock(&fd->lock);
+    // As Linux's timerfd_settime: the expirations of the old setting are
+    // gone (read said them after it); none of it comes after. Not under
+    // fd->lock, which the timer's callback takes under the timer's lock:
+    // setting it as it fired was a deadlock.
+    int err = timer_set_with(fd->timerfd.timer, spec, &old_spec, (timer_callback_t) timerfd_reset);
     if (err < 0)
         return err;
 
@@ -787,19 +828,7 @@ int_t sys_timerfd_gettime(fd_t f, addr_t curr_value_addr) {
         return _EINVAL;
 
     struct timer_spec spec;
-    lock(&fd->lock);
-    spec.interval = fd->timerfd.timer->interval;
-    if (fd->timerfd.timer->active) {
-        struct timespec now = timespec_now(fd->timerfd.timer->clockid);
-        struct timespec remaining = timespec_subtract(fd->timerfd.timer->end, now);
-        if (timespec_positive(remaining))
-            spec.value = remaining;
-        else
-            spec.value = (struct timespec) {0, 0};
-    } else {
-        spec.value = (struct timespec) {0, 0};
-    }
-    unlock(&fd->lock);
+    timer_get(fd->timerfd.timer, &spec);
 
     struct itimerspec_ value = timer_spec_from_real(spec);
     if (user_put(curr_value_addr, value))

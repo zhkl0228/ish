@@ -881,6 +881,17 @@ EOF
         status=1
     fi
     echo
+    echo "########## interval timers: getitimer, fired one-shots, bad ids, TIMER_ABSTIME 0, timerfd set again ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_timer_values" tests/regress/regress_timer_values.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_timer_values 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_timer_values"
+    else
+        echo "failed to build regress_timer_values" >&2
+        status=1
+    fi
+    echo
     echo "########## getsockopt(SO_ACCEPTCONN) ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_so_acceptconn" tests/regress/regress_so_acceptconn.c; then
         out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_so_acceptconn 2>&1)
