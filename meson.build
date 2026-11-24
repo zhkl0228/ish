@@ -1784,7 +1784,13 @@ if not meson.is_cross_build()
             cli_aot_src += f
         endif
     endforeach
-    executable('ish', ['main.c'] + files(cli_aot_src), objects: files(cli_aot_obj), dependencies: ish)
+    cli_dependencies = [ish]
+    if host_machine.system() == 'darwin'
+        # platform/darwin.c reads the process's entitlements with Security's
+        # SecTask (the app links it in app/AppARM64.xcconfig)
+        cli_dependencies += dependency('appleframeworks', modules: ['CoreFoundation', 'Security'])
+    endif
+    executable('ish', ['main.c'] + files(cli_aot_src), objects: files(cli_aot_obj), dependencies: cli_dependencies)
 endif
 
 subdir('tools')

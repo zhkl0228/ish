@@ -5,13 +5,9 @@
 #if TARGET_OS_IPHONE
 #include <os/proc.h>
 #endif
+#include <CoreFoundation/CoreFoundation.h>
 #include <sys/time.h>
-#include <arpa/inet.h>
-#include <errno.h>
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
 #include "platform/platform.h"
 #include "debug.h"
 
@@ -239,84 +235,54 @@ struct uptime_info get_uptime(void) {
     return uptime;
 }
 
-// libSystem's csops, as <sys/codesign.h> declares it (not in iOS's SDK): the
-// code signature the kernel keeps of the process. Its entitlements blob is an
-// 8-byte header, magic and length big-endian, then the entitlements: an XML
-// plist, or DER where the signature has those only.
-extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
-#define CS_OPS_ENTITLEMENTS_BLOB 7
-#define CS_OPS_DER_ENTITLEMENTS_BLOB 16
-#define CSMAGIC_EMBEDDED_ENTITLEMENTS 0xfade7171
-#define CSMAGIC_EMBEDDED_DER_ENTITLEMENTS 0xfade7172
+// Security's SecTask, as <Security/SecTask.h> declares it (macOS's SDK; not
+// iOS's, though its Security has them): the process's entitlements as its
+// code signature has them, XML or DER, read by the system. Linked by the
+// app (app/AppARM64.xcconfig) and by meson's CLI.
+typedef struct __SecTask *SecTaskRef;
+extern SecTaskRef SecTaskCreateFromSelf(CFAllocatorRef allocator);
+extern CFTypeRef SecTaskCopyValueForEntitlement(SecTaskRef task, CFStringRef entitlement, CFErrorRef *error);
 
-// The blob, NUL after it; NULL for none (only its header), or with why set
-// for what csops said otherwise. A header too small for it is filled with
-// its length only, magic 0, and csops says ERANGE: the magic is the whole
-// blob's, read after (taken from that header, it was 0, and every
-// entitlement unknown on the device).
-static char *entitlements_blob(unsigned ops, uint32_t magic, size_t *len, char *why, size_t why_size) {
-    uint32_t header[2] = {0, 0};
-    if (csops(getpid(), ops, header, sizeof(header)) < 0 && errno != ERANGE) {
-        snprintf(why, why_size, "csops(%u): %s", ops, strerror(errno));
-        return NULL;
-    }
-    uint32_t total = ntohl(header[1]);
-    if (total <= sizeof(header))
-        return NULL;
-    char *blob = malloc(total + 1);
-    if (csops(getpid(), ops, blob, total) < 0) {
-        snprintf(why, why_size, "csops(%u) of %u bytes: %s", ops, total, strerror(errno));
-        free(blob);
-        return NULL;
-    }
-    uint32_t blob_magic;
-    memcpy(&blob_magic, blob, sizeof(blob_magic));
-    if (ntohl(blob_magic) != magic) {
-        snprintf(why, why_size, "csops(%u): magic %#x, length %u", ops, ntohl(blob_magic), total);
-        free(blob);
-        return NULL;
-    }
-    blob[total] = '\0';
-    *len = total;
-    return blob;
+// A CFString's UTF-8 into text, cut where it would not fit
+static void cf_string_text(CFStringRef string, char *text, size_t size) {
+    CFIndex used = 0;
+    CFStringGetBytes(string, CFRangeMake(0, CFStringGetLength(string)), kCFStringEncodingUTF8, '?', false,
+                     (UInt8 *) text, size - 1, &used);
+    text[used] = '\0';
 }
 
 enum entitlement_state host_entitlement(const char *name, char *why, size_t why_size) {
     why[0] = '\0';
-    size_t len = 0;
-    char *xml = entitlements_blob(CS_OPS_ENTITLEMENTS_BLOB, CSMAGIC_EMBEDDED_ENTITLEMENTS, &len, why, why_size);
-    if (xml != NULL) {
-        // <key>name</key>, then <true/>, whitespace between
-        char key[256];
-        snprintf(key, sizeof(key), "<key>%s</key>", name);
-        const char *at = strstr(xml + 8, key);
-        enum entitlement_state state = ENTITLEMENT_NO;
-        if (at != NULL) {
-            at += strlen(key);
-            while (*at == ' ' || *at == '\t' || *at == '\n' || *at == '\r')
-                at++;
-            if (strncmp(at, "<true/>", 7) == 0)
-                state = ENTITLEMENT_YES;
-        }
-        free(xml);
-        return state;
-    }
-    if (why[0] != '\0')
+    SecTaskRef task = SecTaskCreateFromSelf(kCFAllocatorDefault);
+    if (task == NULL) {
+        snprintf(why, why_size, "SecTaskCreateFromSelf failed");
         return ENTITLEMENT_UNKNOWN;
-    // No XML: a signature with DER entitlements only. The name is a
-    // UTF8String's bytes, and true after it the BOOLEAN 01 01 ff.
-    char *der = entitlements_blob(CS_OPS_DER_ENTITLEMENTS_BLOB, CSMAGIC_EMBEDDED_DER_ENTITLEMENTS, &len, why, why_size);
-    if (der != NULL) {
-        size_t name_len = strlen(name);
-        const unsigned char *at = memmem(der + 8, len - 8, name, name_len);
-        enum entitlement_state state = ENTITLEMENT_NO;
-        if (at != NULL && (size_t) ((const char *) at - der) + name_len + 3 <= len &&
-                at[name_len] == 0x01 && at[name_len + 1] == 0x01 && at[name_len + 2] == 0xff)
-            state = ENTITLEMENT_YES;
-        free(der);
-        return state;
     }
-    if (why[0] != '\0')
+    CFStringRef key = CFStringCreateWithCString(kCFAllocatorDefault, name, kCFStringEncodingUTF8);
+    CFErrorRef error = NULL;
+    CFTypeRef value = SecTaskCopyValueForEntitlement(task, key, &error);
+    CFRelease(key);
+    CFRelease(task);
+    if (error != NULL) {
+        CFStringRef description = CFErrorCopyDescription(error);
+        cf_string_text(description, why, why_size);
+        CFRelease(description);
+        CFRelease(error);
         return ENTITLEMENT_UNKNOWN;
-    return ENTITLEMENT_NO; // no entitlements at all
+    }
+    if (value == NULL)
+        return ENTITLEMENT_NO; // the signature has no such key
+    // A boolean, as these entitlements are; another value is one not seen,
+    // shown as it is
+    enum entitlement_state state = ENTITLEMENT_UNKNOWN;
+    if (CFGetTypeID(value) == CFBooleanGetTypeID()) {
+        state = CFBooleanGetValue(value) ? ENTITLEMENT_YES : ENTITLEMENT_NO;
+    } else {
+        int prefix = snprintf(why, why_size, "not a boolean: ");
+        CFStringRef description = CFCopyDescription(value);
+        cf_string_text(description, why + prefix, why_size - prefix);
+        CFRelease(description);
+    }
+    CFRelease(value);
+    return state;
 }
