@@ -881,6 +881,17 @@ EOF
         status=1
     fi
     echo
+    echo "########## a name ending in a slash: O_CREAT EISDIR, unlink ENOTDIR ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_trailing_slash" tests/regress/regress_trailing_slash.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_trailing_slash 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_trailing_slash"
+    else
+        echo "failed to build regress_trailing_slash" >&2
+        status=1
+    fi
+    echo
     echo "########## tcdrain, tcsendbreak, tcflow on a pseudo-terminal (ENOTTY) ##########"
     if "$CC_GUEST" -static -O0 -Wall -pthread -o "$GUEST_ROOT/tmp/regress_tty_flow" tests/regress/regress_tty_flow.c; then
         out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_tty_flow 2>&1)

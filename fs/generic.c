@@ -36,6 +36,12 @@ bool contains_mount_point(const char *path) {
 
 static struct fd *generic_openat_path(struct fd *at, const char *path_raw, int flags, int mode, bool *via_procfs);
 
+// "name/": the name of a directory, as Linux takes it
+static bool path_ends_in_slash(const char *path) {
+    size_t len = strlen(path);
+    return len > 0 && path[len - 1] == '/';
+}
+
 // Linux's MAXSYMLINKS
 #define FD_LINK_MAX_LINKS 40
 
@@ -109,6 +115,30 @@ static struct fd *generic_openat_path(struct fd *at, const char *path_raw, int f
             (flags & O_CREAT_ ? N_PARENT_DIR_WRITE : 0), via_procfs);
     if (err < 0)
         return ERR_PTR(err);
+    // O_CREAT of a directory's name ("new/") is EISDIR, as Linux's
+    // open_last_lookups says before it looks the name up. It made a file of
+    // the name: CPython's shutil.copyfile to a directory that is not, which
+    // it takes EISDIR from (test_copyfile_nonexistent_dir).
+    // Its directories first, as Linux walks them (path_normalize does not
+    // look them up for O_CREAT): one missing is ENOENT, one no directory
+    // ENOTDIR.
+    if (flags & O_CREAT_ && path_ends_in_slash(path_raw)) {
+        char parent[MAX_PATH];
+        strcpy(parent, path);
+        size_t len = strlen(parent);
+        while (len > 1 && parent[len - 1] == '/')
+            parent[--len] = '\0';
+        char *last = strrchr(parent, '/');
+        if (last == parent)
+            last[1] = '\0';
+        else
+            *last = '\0';
+        struct statbuf stat;
+        err = generic_statat(AT_PWD, parent, &stat, true);
+        if (err < 0)
+            return ERR_PTR(err);
+        return ERR_PTR(S_ISDIR(stat.mode) ? _EISDIR : _ENOTDIR);
+    }
     struct mount *mount = find_mount_and_trim_path(path);
     // For inotify: whether the open makes the file (IN_CREATE) or empties
     // one that was there (IN_MODIFY)
@@ -283,6 +313,16 @@ int generic_unlinkat(struct fd *at, const char *path_raw) {
     int err = path_normalize(at, path_raw, path, N_SYMLINK_NOFOLLOW | N_PARENT_DIR_WRITE);
     if (err < 0)
         return err;
+    // "name/" names a directory, which unlink does not remove: as Linux's
+    // do_unlinkat, ENOENT if there is none, EISDIR for a directory, ENOTDIR
+    // for the rest. It unlinked a file so named.
+    if (path_ends_in_slash(path_raw)) {
+        struct statbuf stat;
+        err = generic_statat(AT_PWD, path, &stat, false);
+        if (err < 0)
+            return err;
+        return S_ISDIR(stat.mode) ? _EISDIR : _ENOTDIR;
+    }
     struct mount *mount = find_mount_and_trim_path(path);
     // For inotify, what goes: watches on it end with its last link
     struct statbuf gone;
