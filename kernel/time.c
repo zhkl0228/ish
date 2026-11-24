@@ -199,6 +199,11 @@ dword_t sys_clock_getres(dword_t clock, addr_t res_addr) {
         if (err < 0)
             return errno_map();
     }
+    // No place for it is no error, as on Linux: the clock is checked and that
+    // is all. glibc's clock_getcpuclockid asks so (clock_getres(clock, NULL)),
+    // and with EFAULT here no process's CPU-time clock could be had.
+    if (res_addr == 0)
+        return 0;
     struct timespec_ t;
     t.sec = res.tv_sec;
     t.nsec = res.tv_nsec;
