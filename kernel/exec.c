@@ -19,6 +19,7 @@
 #include "kernel/vdso.h"
 #include "kernel/mm.h"
 #include "kernel/native_offload.h"
+#include "platform/platform.h"
 #ifdef ISH_JIT
 #include "asbestos/guest-arm64/jit.h"
 #endif
@@ -141,6 +142,13 @@ static int load_entry(exec_prg_header ph, addr_t bias, struct fd *fd) {
     return 0;
 }
 
+// A segment exec could not map, for the report beyond the point of no return
+static void describe_segment(char *buf, size_t size, const char *whose, exec_prg_header ph, addr_t bias) {
+    snprintf(buf, size, "%s at %#llx (%#llx bytes of the file at %#llx, %#llx in memory, flags %#x)", whose,
+             (unsigned long long) (ph.vaddr + bias), (unsigned long long) ph.filesize,
+             (unsigned long long) ph.offset, (unsigned long long) ph.memsize, (unsigned) ph.flags);
+}
+
 static addr_t find_hole_for_elf(exec_elf_header *header, exec_prg_header *ph) {
     exec_prg_header *first = NULL, *last = NULL;
     for (int i = 0; i < header->phent_count; i++) {
@@ -161,6 +169,9 @@ static addr_t find_hole_for_elf(exec_elf_header *header, exec_prg_header *ph) {
 
 static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, struct exec_args envp) {
     int err = 0;
+    // what failed past the point of no return, for beyond_hope to say
+    const char *lost = NULL;
+    char lost_segment[160];
 
     // read the headers
     exec_elf_header header;
@@ -256,8 +267,11 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
 #endif
         }
 
-        if ((err = load_entry(ph[i], bias, fd)) < 0)
+        if ((err = load_entry(ph[i], bias, fd)) < 0) {
+            describe_segment(lost_segment, sizeof(lost_segment), "the segment", ph[i], bias);
+            lost = lost_segment;
             goto beyond_hope;
+        }
 
         // load_addr is used to get a value for AX_PHDR et al
         if (!load_addr_set) {
@@ -284,8 +298,12 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
         for (int i = interp_header.phent_count - 1; i >= 0; i--) {
             if (interp_ph[i].type != PT_LOAD)
                 continue;
-            if ((err = load_entry(interp_ph[i], interp_base, interp_fd)) < 0)
+            if ((err = load_entry(interp_ph[i], interp_base, interp_fd)) < 0) {
+                describe_segment(lost_segment, sizeof(lost_segment), "the interpreter's segment", interp_ph[i],
+                                 interp_base);
+                lost = lost_segment;
                 goto beyond_hope;
+            }
         }
         entry = interp_base + interp_header.entry_point;
     }
@@ -293,6 +311,7 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
 
     // map vdso
     err = _ENOMEM;
+    lost = "the vdso";
     pages_t vdso_pages = sizeof(vdso_data) >> PAGE_BITS;
     // FIXME disgusting hack: musl's dynamic linker has a one-page hole, and
     // I'd rather not put the vdso in that hole. so find a two-page hole and
@@ -312,6 +331,7 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
 #endif
 
     // map 3 empty "vvar" pages to satisfy ptraceomatic
+    lost = "the vvar pages";
     page_t vvar_page = pt_find_hole(current->mem, VVAR_PAGES);
     if (vvar_page == BAD_PAGE)
         goto beyond_hope;
@@ -320,6 +340,7 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
     mem_pt(current->mem, vvar_page)->data->name = "[vvar]";
 
     // STACK TIME!
+    lost = "the stack";
 
 #ifdef GUEST_ARM64
     // ARM64: stack near top of 48-bit address space. Linux maps 128 KB of
@@ -460,6 +481,7 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
 
     // copy auxv
     current->mm->auxv_start = p;
+    lost = "the auxv";
     if (user_put(p, aux))
         goto beyond_hope;
     p += sizeof(aux);
@@ -512,8 +534,19 @@ out_free_ph:
     return err;
 
 beyond_hope:
-    // TODO force sigsegv
+    // The old memory is gone, so the process has nothing to go back to: it
+    // dies of SIGSEGV, as Linux's does (force_fatal_sig). It died so before,
+    // but of a fault at its old pc and without a word: when claude.exe, as
+    // the shell's grep, died of SIGSEGV every time with two Gradle daemons
+    // running, nothing told whether this was why. What failed is said now,
+    // with the host's memory (as /proc/ish/host has it).
     write_wrunlock(&current->mem->lock);
+    struct host_memory host = get_host_memory();
+    printk("exec %s: %s failed after the point of no return (%d), SIGSEGV; the OS lets the app take %llu MB "
+           "more, footprint %llu MB, %llu mappings, malloc in use %llu MB\n", file, lost, err,
+           (unsigned long long) host.available >> 20, (unsigned long long) host.footprint >> 20,
+           (unsigned long long) host.mappings, (unsigned long long) host.malloc_in_use >> 20);
+    force_signal(current, SIGSEGV_, SIGINFO_NIL, true);
     goto out_free_interp;
 }
 
