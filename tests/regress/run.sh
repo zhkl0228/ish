@@ -881,6 +881,17 @@ EOF
         status=1
     fi
     echo
+    echo "########## truncate(2) of a path (iSH aborted) ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_truncate_path" tests/regress/regress_truncate_path.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_truncate_path 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_truncate_path"
+    else
+        echo "failed to build regress_truncate_path" >&2
+        status=1
+    fi
+    echo
     echo "########## open with O_DIRECTORY of no directory: ENOTDIR at once (a FIFO's open waited) ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_open_directory" tests/regress/regress_open_directory.c; then
         out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_open_directory 2>&1)
