@@ -31,16 +31,24 @@
 #include "fs/tty.h"
 #include "util/fchdir.h"
 
+// The host's path of fd, or the host's error: it was its -1, which is
+// -EPERM, and a directory whose host path F_GETPATH cannot say (past
+// MAXPATHLEN, 1024 bytes with the app's container's) could be read none of:
+// fakefs_readdir asks it, and every listdir in it said EPERM (CPython's
+// test_os, test_getcwd_long_path, and its cleanup's rmtree)
 static int getpath(int fd, char *buf) {
 #if defined(__linux__)
     char proc_fd[20];
     sprintf(proc_fd, "/proc/self/fd/%d", fd);
     ssize_t size = readlink(proc_fd, buf, MAX_PATH - 1);
-    if (size >= 0)
-        buf[size] = '\0';
-    return size;
+    if (size < 0)
+        return errno_map();
+    buf[size] = '\0';
+    return 0;
 #elif defined(__APPLE__)
-    return fcntl(fd, F_GETPATH, buf);
+    if (fcntl(fd, F_GETPATH, buf) < 0)
+        return errno_map();
+    return 0;
 #endif
 }
 
