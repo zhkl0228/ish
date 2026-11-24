@@ -1,3 +1,4 @@
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -122,10 +123,17 @@ static int proc_refresh_data(struct fd *fd) {
     if (fd->proc.data.data == NULL) {
         fd->proc.data.capacity = 4096;
         fd->proc.data.data = malloc(fd->proc.data.capacity); // default size
+        if (fd->proc.data.data == NULL)
+            return _ENOMEM;
     }
     fd->proc.data.size = 0;
+    fd->proc.data.failed = false;
     struct proc_entry *entry = &fd->proc.entry;
     int err = entry->meta->show(entry, &fd->proc.data);
+    // A part show() could not have the memory for leaves the content short:
+    // not to be read as the whole (proc_buf_write, proc_printf)
+    if (err >= 0 && fd->proc.data.failed)
+        err = _ENOMEM;
     if (err < 0) {
         // no snapshot: the next read makes one
         free(fd->proc.data.data);
@@ -159,9 +167,10 @@ static off_t_ proc_seek(struct fd *fd, off_t_ off, int whence) {
         return fd->offset;
     }
 
-    // Only the end needs the content's size, and a seek elsewhere leaves the
-    // snapshot to the read from there (proc_pread)
-    if (whence == LSEEK_END || fd->proc.data.data == NULL) {
+    // Only the end needs the content's size: a seek elsewhere leaves the
+    // content to the read from there (proc_pread), which makes it if there
+    // is none yet
+    if (whence == LSEEK_END) {
         int err = proc_refresh_data(fd);
         if (err < 0)
             return err;
@@ -211,7 +220,7 @@ static void proc_buf_write(struct proc_data *buf, const void *data, size_t size,
             new_capacity *= 2;
         char *new_data = realloc(buf->data, new_capacity);
         if (new_data == NULL) {
-            // just give up, error reporting is a pain
+            buf->failed = true;
             return;
         }
         buf->data = new_data;
@@ -325,7 +334,7 @@ void proc_printf(struct proc_data *buf, const char *format, ...) {
             proc_buf_append(buf, big, (size_t) size);
             free(big);
         } else {
-            proc_buf_append(buf, data, sizeof(data) - 1);
+            buf->failed = true;
         }
     } else if (size > 0) {
         proc_buf_append(buf, data, (size_t) size);
