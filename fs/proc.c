@@ -185,7 +185,7 @@ static off_t_ proc_seek(struct fd *fd, off_t_ off, int whence) {
 
 static ssize_t proc_pread(struct fd *fd, void *buf, size_t bufsize, off_t off) {
     if (fd->proc.entry.meta->pread) {
-        struct proc_data data = {buf, bufsize, bufsize};
+        struct proc_data data = {.data = buf, .size = bufsize, .capacity = bufsize, .failed = false};
         return fd->proc.entry.meta->pread(&fd->proc.entry, &data, off);
     }
     
@@ -240,7 +240,7 @@ static ssize_t proc_pwrite(struct fd *fd, const void *buf, size_t bufsize, off_t
     assert(S_ISREG(mode));
     
     if (fd->proc.entry.meta->pwrite) {
-        struct proc_data data = {(char *) buf, bufsize, bufsize};
+        struct proc_data data = {.data = (char *) buf, .size = bufsize, .capacity = bufsize, .failed = false};
         return fd->proc.entry.meta->pwrite(&fd->proc.entry, &data, off);
     }
     
@@ -248,7 +248,7 @@ static ssize_t proc_pwrite(struct fd *fd, const void *buf, size_t bufsize, off_t
         return _EPERM;
     }
     
-    struct proc_data data = {(char *)buf, bufsize, bufsize};
+    struct proc_data data = {.data = (char *) buf, .size = bufsize, .capacity = bufsize, .failed = false};
     fd->proc.entry.meta->update(&fd->proc.entry, &data);
     
     return bufsize;

@@ -10,10 +10,18 @@
 // /proc/self/maps is read in two parts, and between them a mapping is made
 // below every other one, so its line comes first, and the offset is asked for
 // (lseek SEEK_CUR, as ftell does): the parts are the content of before, whole.
-// Read from the start again, it has the new mapping first. Natively passes.
+// Read from the start again, it has the new mapping first.
+//
+// Also a /proc directory sought to its start, as rewinddir does: the seek made
+// the content of what is no file, said EISDIR and stayed where it was, so
+// rewinddir read nothing more (18e0d354 made a seek but to the end make no
+// content). The seek is to its start, and it is read whole again. Natively
+// passes.
 //
 // Build: aarch64-linux-musl-gcc -static -O0 -o regress_proc_snapshot regress_proc_snapshot.c
 
+#include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -81,6 +89,23 @@ int main(void) {
     close(fd);
     snprintf(detail, sizeof(detail), "first line %.40s, the new mapping at %#lx", again, below);
     check("read from the start again, the new mapping comes first", strtoul(again, NULL, 16) == below, detail);
+
+    DIR *dir = opendir("/proc");
+    int entries = 0;
+    while (readdir(dir) != NULL)
+        entries++;
+    errno = 0;
+    off_t start = lseek(dirfd(dir), 0, SEEK_SET);
+    int error = errno;
+    rewinddir(dir);
+    int again_entries = 0;
+    while (readdir(dir) != NULL)
+        again_entries++;
+    closedir(dir);
+    snprintf(detail, sizeof(detail), "lseek to the start %lld (%s); %d entries, then %d", (long long) start,
+             strerror(error), entries, again_entries);
+    check("a /proc directory sought to its start is read whole again",
+          start == 0 && entries > 0 && again_entries == entries, detail);
 
     printf("%d passed, %d failed\n", passed, failed);
     return failed != 0;
