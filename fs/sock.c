@@ -1808,12 +1808,16 @@ int_t sys_sendmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
         for (cmsg = (void *) msg_control; cmsg != NULL; cmsg = CMSG_NXTHDR_(cmsg, mhdr_end)) {
             if (cmsg->level != SOL_SOCKET_)
                 continue;
+            // EINVAL by way of the cleanup: returned at once, the iovec's
+            // buffers were never freed
+            err = _EINVAL;
             if (cmsg->type != SCM_RIGHTS_)
-                return _EINVAL;
+                goto out_free_iov;
             num_fds += (cmsg->len - sizeof(struct cmsghdr_)) / sizeof(fd_t);
         }
+        err = _EINVAL;
         if (num_fds > 253) // *magic*
-            return _EINVAL;
+            goto out_free_iov;
 
         if (num_fds > 0) {
             // send one (1) real fd and put the rest in a struct scm
@@ -1841,7 +1845,18 @@ int_t sys_sendmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
                 fd_t *fds = (void *) cmsg->data;
                 for (unsigned i = 0; i < (cmsg->len - sizeof(struct cmsghdr_)) / sizeof(fd_t); i++) {
                     STRACE(" sending fd %d", fds[i]);
-                    scm->fds[fd_i++] = fd_retain(f_get(fds[i]));
+                    // An fd that is not is EBADF, nothing sent, as Linux's
+                    // scm_fp_copy. It was retained through NULL, and iSH
+                    // crashed (CPython's test_socket,
+                    // test_sendmsg_reentrant_ancillary_mutation).
+                    struct fd *passed = f_get(fds[i]);
+                    if (passed == NULL) {
+                        scm->num_fds = fd_i;
+                        scm_free(scm);
+                        err = _EBADF;
+                        goto out_free_iov;
+                    }
+                    scm->fds[fd_i++] = fd_retain(passed);
                 }
             }
             lock(&peer_lock);
