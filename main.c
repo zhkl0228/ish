@@ -44,14 +44,6 @@
 #endif
 #endif
 
-#if defined(__has_feature)
-#if __has_feature(address_sanitizer)
-#define ISH_ASAN 1
-#endif
-#endif
-#if defined(__SANITIZE_ADDRESS__)
-#define ISH_ASAN 1
-#endif
 #ifdef ISH_ASAN
 // The options an AddressSanitizer build of iSH needs (tools/build-asan.sh);
 // ASAN_OPTIONS is read after them and can override them.

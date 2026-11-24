@@ -301,10 +301,23 @@ static void *task_thread(void *vtask) {
     die("task_thread returned"); // above function call should never return
 }
 
+// A guest thread's host stack: 512KB, what iOS and macOS give a thread, set
+// so that every host gives the same (musl's default is 128KB, glibc's 8MB),
+// and a frame too large for the app fails on any host, not on the phone alone.
+// AddressSanitizer's redzones make frames some times larger.
+#ifdef ISH_ASAN
+#define TASK_STACK_SIZE ((size_t) 4 << 20)
+#else
+#define TASK_STACK_SIZE ((size_t) 512 << 10)
+#endif
+
 static pthread_attr_t task_thread_attr;
 __attribute__((constructor)) static void create_attr(void) {
     pthread_attr_init(&task_thread_attr);
     pthread_attr_setdetachstate(&task_thread_attr, PTHREAD_CREATE_DETACHED);
+    int err = pthread_attr_setstacksize(&task_thread_attr, TASK_STACK_SIZE);
+    if (err != 0)
+        die("pthread_attr_setstacksize(%zu): %s", TASK_STACK_SIZE, strerror(err));
 }
 
 int task_start(struct task *task) {

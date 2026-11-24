@@ -51,6 +51,12 @@ static inline bool ish_exec_trace(void) {
 #define has_feature __has_feature
 #endif
 
+// An AddressSanitizer build (tools/build-asan.sh): clang says so by
+// __has_feature, gcc by __SANITIZE_ADDRESS__
+#if has_feature(address_sanitizer) || defined(__SANITIZE_ADDRESS__)
+#define ISH_ASAN 1
+#endif
+
 // keywords
 #define bitfield unsigned int
 #define forceinline inline __attribute__((always_inline))
