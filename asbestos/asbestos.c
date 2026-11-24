@@ -541,15 +541,21 @@ static void fiber_resize_hash(struct asbestos *asbestos, size_t new_size) {
     asbestos->hash_size = new_size;
 }
 
-// Every address space's translated blocks, as their mem_used and num_blocks
-// count them, for /proc/ish/host: what of the app's malloc they hold
+// Every address space's translated blocks, counted where their mem_used and
+// num_blocks are, for /proc/ish/host: what of the app's malloc they hold
 _Atomic uint64_t st_fiber_blocks, st_fiber_bytes;
+
+// A block is one malloc, its gadgets after it. used counts the gadgets'
+// unsigned longs (gen_start's capacity), not bytes.
+static size_t fiber_block_bytes(struct fiber_block *block) {
+    return sizeof(*block) + block->used * sizeof(block->code[0]);
+}
 
 static void fiber_insert(struct asbestos *asbestos, struct fiber_block *block) {
     asbestos->mem_used += block->used;
     asbestos->num_blocks++;
     atomic_fetch_add_explicit(&st_fiber_blocks, 1, memory_order_relaxed);
-    atomic_fetch_add_explicit(&st_fiber_bytes, block->used, memory_order_relaxed);
+    atomic_fetch_add_explicit(&st_fiber_bytes, fiber_block_bytes(block), memory_order_relaxed);
     // target an average hash chain length of 1-2
     if (asbestos->num_blocks >= asbestos->hash_size * 2)
         fiber_resize_hash(asbestos, asbestos->hash_size * 2);
@@ -761,7 +767,7 @@ static void fiber_block_disconnect(struct asbestos *asbestos, struct fiber_block
         asbestos->mem_used -= block->used;
         asbestos->num_blocks--;
         atomic_fetch_sub_explicit(&st_fiber_blocks, 1, memory_order_relaxed);
-        atomic_fetch_sub_explicit(&st_fiber_bytes, block->used, memory_order_relaxed);
+        atomic_fetch_sub_explicit(&st_fiber_bytes, fiber_block_bytes(block), memory_order_relaxed);
     }
     list_remove(&block->chain);
     for (int i = 0; i <= 1; i++) {
