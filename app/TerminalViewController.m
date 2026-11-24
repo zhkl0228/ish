@@ -51,8 +51,9 @@
 @property (weak, nonatomic) IBOutlet NSLayoutConstraint *barButtonWidth;
 @property (weak, nonatomic) IBOutlet NSLayoutConstraint *barHeight;
 
-// The paste key's place in the row: iOS's paste button lies over it
-// (updatePasteControl), in the key appearance its colors are for.
+// The paste key: iOS's paste button lies over it (updatePasteControl), in the
+// key appearance its colors are for, but while the Paste Stack is open, when
+// the key pastes the stack's next item itself (pasteKey:).
 @property (weak, nonatomic) IBOutlet BarButton *pasteButton;
 @property (nonatomic, nullable) UIPasteControl *pasteControl;
 @property (nonatomic) UIKeyboardAppearance pasteControlAppearance;
@@ -202,6 +203,7 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
         [UIImageSymbolConfiguration configurationWithPointSize:keyFontSize weight:UIImageSymbolWeightLight];
     NSDictionary<NSString *, UIButton *> *symbolKeys = @{
         @"arrow.right.to.line": self.tabKey,
+        @"doc.on.clipboard": self.pasteButton,
     };
     [symbolKeys enumerateKeysAndObjectsUsingBlock:^(NSString *symbol, UIButton *key, BOOL *_) {
         [key setTitle:nil forState:UIControlStateNormal];
@@ -234,9 +236,13 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
         return [weakSelf pasteFromStack];
     };
     // The paste key is iOS's paste button laid over it (updatePasteControl),
-    // which pastes through pasteItemProviders:; the key only holds its place.
+    // which pastes through pasteItemProviders:. While the Paste Stack is open
+    // the button is hidden and the key pastes the stack's next item itself:
+    // the stack is iSH's own, and iOS's button is enabled only while the
+    // clipboard has text, which it need not have then (pasteStackDidChange:).
     self.pasteConfiguration = [[UIPasteConfiguration alloc] initWithTypeIdentifiersForAcceptingClass:NSString.class];
-    self.pasteButton.isAccessibilityElement = NO;
+    self.pasteButton.accessibilityLabel = @"Paste";
+    [self.pasteButton addTarget:self action:@selector(pasteKey:) forControlEvents:UIControlEventPrimaryActionTriggered];
     [center addObserver:self selector:@selector(pasteStackDidChange:) name:ClipboardStackDidChangeNotification object:nil];
     [self pasteStackDidChange:nil];
 }
@@ -1116,6 +1122,7 @@ static NSString *ShellQuoted(NSString *string) {
     config.baseForegroundColor = key.tintColor;
     UIPasteControl *control = [[UIPasteControl alloc] initWithConfiguration:config];
     control.target = self;
+    control.hidden = ClipboardStore.shared.stackActive; // as pasteStackDidChange: has it
     control.translatesAutoresizingMaskIntoConstraints = NO;
     [key addSubview:control];
     [NSLayoutConstraint activateConstraints:@[
@@ -1129,11 +1136,9 @@ static NSString *ShellQuoted(NSString *string) {
 }
 
 // What iOS's paste button pastes (updatePasteControl): the first item's text,
-// as paste: pastes the clipboard's string; the Paste Stack's next item instead
-// while it is open.
+// as paste: pastes the clipboard's string. The button is hidden while the
+// Paste Stack is open (pasteKey:).
 - (void)pasteItemProviders:(NSArray<NSItemProvider *> *)itemProviders {
-    if ([self pasteFromStack])
-        return;
     __weak typeof(self) weakSelf = self;
     [itemProviders.firstObject loadObjectOfClass:NSString.class
                                completionHandler:^(id<NSItemProviderReading> object, NSError *error) {
@@ -1448,6 +1453,14 @@ static NSString *ShellQuoted(NSString *string) {
     [self.termView becomeFirstResponder];
 }
 
+// The paste key itself, while the Paste Stack is open and iOS's paste button
+// hidden (pasteStackDidChange:): the stack's next item, or with none left the
+// clipboard, as paste: has it.
+- (void)pasteKey:(id)sender {
+    if (![self pasteFromStack])
+        [self.termView paste:sender];
+}
+
 - (void)togglePasteStack:(id)sender {
     ClipboardStore.shared.stackActive = !ClipboardStore.shared.stackActive;
 }
@@ -1481,6 +1494,9 @@ static NSString *ShellQuoted(NSString *string) {
 // The stack panel follows the store, so every window shows it while it is open.
 - (void)pasteStackDidChange:(NSNotification *)notif {
     BOOL active = ClipboardStore.shared.stackActive;
+    // The key pastes the stack, iOS's paste button the clipboard
+    self.pasteControl.hidden = active;
+    self.pasteButton.isAccessibilityElement = active;
     if (active && self.stackView == nil) {
         ClipboardStackView *stack = [ClipboardStackView new];
         stack.translatesAutoresizingMaskIntoConstraints = NO;
