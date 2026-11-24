@@ -946,9 +946,13 @@ int realfs_fsetattr(struct fd *fd, struct attr attr) {
     return err;
 }
 
+// The path is the file's: generic_utime followed its symlinks, or not, as
+// asked. The host following it again, utimensat with AT_SYMLINK_NOFOLLOW set
+// the times of what a symlink points to (a dangling one's ENOENT: CPython's
+// shutil.copytree(symlinks=True), whose copystat sets a copied link's).
 int realfs_utime(struct mount *mount, const char *path, struct timespec atime, struct timespec mtime) {
     struct timespec times[2] = {atime, mtime};
-    int err = utimensat(mount->root_fd, fix_path(path), times, 0);
+    int err = utimensat(mount->root_fd, fix_path(path), times, AT_SYMLINK_NOFOLLOW);
     if (err < 0)
         return errno_map();
     return 0;
