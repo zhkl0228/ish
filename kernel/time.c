@@ -30,6 +30,15 @@ static int clockid_to_real(uint_t clock, clockid_t *real) {
     return 0;
 }
 
+// A time and interval Linux takes (itimerspec64_valid): seconds not below 0,
+// nanoseconds in [0, 1e9). timer_settime and timerfd_settime took any, a
+// negative one for a time long past (CPython's test_os,
+// test_timerfd_negative).
+static bool itimerspec_valid(struct itimerspec_ itspec) {
+    return itspec.value.sec >= 0 && itspec.value.nsec >= 0 && itspec.value.nsec < 1000000000 &&
+        itspec.interval.sec >= 0 && itspec.interval.nsec >= 0 && itspec.interval.nsec < 1000000000;
+}
+
 static struct timer_spec timer_spec_to_real(struct itimerspec_ itspec) {
     struct timer_spec spec = {
         .value.tv_sec = itspec.value.sec,
@@ -781,6 +790,8 @@ int_t sys_timer_settime(dword_t timer_id, int_t flags, addr_t new_value_addr, ad
     struct itimerspec_ value;
     if (user_get(new_value_addr, value))
         return _EFAULT;
+    if (!itimerspec_valid(value))
+        return _EINVAL;
     // A timer that is not, deleted or never made, is EINVAL, as Linux says.
     // Its NULL timer was set (and TIMERS_MAX's past the array): iSH crashed.
     if (timer_id >= TIMERS_MAX)
@@ -926,6 +937,8 @@ int_t sys_timerfd_settime(fd_t f, int_t flags, addr_t new_value_addr, addr_t old
     struct itimerspec_ value;
     if (user_get(new_value_addr, value))
         return _EFAULT;
+    if (!itimerspec_valid(value))
+        return _EINVAL;
     struct timer_spec spec = timer_spec_to_real(value);
     struct timer_spec old_spec;
     if (flags & TIMER_ABSTIME_ && !timespec_is_zero(spec.value)) {
