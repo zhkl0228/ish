@@ -185,6 +185,16 @@ void pt_map_data(struct mem *mem, page_t start, pages_t pages, struct data *data
 void data_unref(struct data *data);
 // Map empty space into fake memory
 int pt_map_nothing(struct mem *mem, page_t page, pages_t pages, unsigned flags);
+// Map pages from start, the first offset bytes of whose host memory precede
+// start, as host mappings of 16MB each, a data object apiece, as adjacent
+// mmaps would be: for a mapping one host mmap failed for, when the host has no
+// free range that large. map_chunk gives the host memory for size bytes from
+// byte from of it, or MAP_FAILED. Returns 0, or _ENOMEM with nothing mapped.
+int pt_map_chunked(struct mem *mem, page_t start, pages_t pages, size_t offset, unsigned flags,
+                   void *(*map_chunk)(size_t from, size_t size, void *ctx), void *ctx);
+// Give the data objects of a mapping of fd from file_offset, at pages from
+// start, the file: one object, or one per chunk of pt_map_chunked
+void pt_set_file(struct mem *mem, page_t start, pages_t pages, struct fd *fd, size_t file_offset);
 // Unmap fake memory, return -1 if any part of the range isn't mapped and 0 otherwise
 int pt_unmap(struct mem *mem, page_t start, pages_t pages);
 // like pt_unmap but doesn't care if part of the range isn't mapped

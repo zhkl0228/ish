@@ -367,6 +367,19 @@ int realfs_poll(struct fd *fd) {
     return p.revents;
 }
 
+// What pt_map_chunked maps a file's chunks with
+struct file_chunks {
+    int fd;
+    int prot;
+    int flags;
+    off_t offset;
+};
+
+static void *map_file_chunk(size_t from, size_t size, void *ctx) {
+    struct file_chunks *chunks = ctx;
+    return mmap(NULL, size, chunks->prot, chunks->flags, chunks->fd, chunks->offset + (off_t) from);
+}
+
 int realfs_mmap(struct fd *fd, struct mem *mem, page_t start, pages_t pages, off_t offset, int prot, int flags) {
     int mmap_flags = 0;
     if (flags & MMAP_PRIVATE) mmap_flags |= MAP_PRIVATE;
@@ -435,8 +448,10 @@ int realfs_mmap(struct fd *fd, struct mem *mem, page_t start, pages_t pages, off
 
     char *memory = mmap(NULL, map_size,
             mmap_prot, mmap_flags, fd->real_fd, real_offset);
-    if (memory == MAP_FAILED)
-        return _ENOMEM;
+    if (memory == MAP_FAILED) {
+        struct file_chunks chunks = {fd->real_fd, mmap_prot, mmap_flags, real_offset};
+        return pt_map_chunked(mem, start, pages, correction, prot, map_file_chunk, &chunks);
+    }
 
     return pt_map(mem, start, pages, memory, correction, prot);
 }

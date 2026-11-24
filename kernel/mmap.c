@@ -477,8 +477,7 @@ static addr_t do_mmap(addr_t addr, uint64_t len, dword_t prot, dword_t flags, fd
             return _ENODEV;
         if ((err = fd->ops->mmap(fd, current->mem, page, pages, offset, prot, flags)) < 0)
             return err;
-        mem_pt(current->mem, page)->data->fd = fd_retain(fd);
-        mem_pt(current->mem, page)->data->file_offset = offset;
+        pt_set_file(current->mem, page, pages, fd, offset);
     }
     return page << PAGE_BITS;
 }

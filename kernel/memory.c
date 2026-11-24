@@ -624,6 +624,24 @@ bool pt_is_hole(struct mem *mem, page_t start, pages_t pages) {
     return true;
 }
 
+// The data object of a host mapping of size bytes, for guest pages from start
+static struct data *data_new(void *memory, size_t size, page_t start) {
+    struct data *data = malloc(sizeof(struct data));
+    if (data == NULL)
+        return NULL;
+    *data = (struct data) {
+        .data = memory,
+        .size = size,
+
+#if LEAK_DEBUG
+        .pid = current ? current->pid : 0,
+        .dest = start << PAGE_BITS,
+#endif
+    };
+    (void) start;
+    return data;
+}
+
 int pt_map(struct mem *mem, page_t start, pages_t pages, void *memory, size_t offset, unsigned flags) {
     if (memory == MAP_FAILED)
         return errno_map();
@@ -631,18 +649,9 @@ int pt_map(struct mem *mem, page_t start, pages_t pages, void *memory, size_t of
     // If this fails, the munmap in pt_unmap would probably fail.
     assert((uintptr_t) memory % real_page_size == 0 || memory == vdso_data);
 
-    struct data *data = malloc(sizeof(struct data));
+    struct data *data = data_new(memory, pages * PAGE_SIZE + offset, start);
     if (data == NULL)
         return _ENOMEM;
-    *data = (struct data) {
-        .data = memory,
-        .size = pages * PAGE_SIZE + offset,
-
-#if LEAK_DEBUG
-        .pid = current ? current->pid : 0,
-        .dest = start << PAGE_BITS,
-#endif
-    };
     pt_map_data(mem, start, pages, data, offset, flags);
     return 0;
 }
@@ -723,6 +732,83 @@ int pt_unmap_always(struct mem *mem, page_t start, pages_t pages) {
 _Atomic uint64_t st_anon_mmaps;        // host mmap calls for anonymous memory
 _Atomic uint64_t st_anon_pages_mapped; // guest pages they backed
 
+// A chunk of a mapping the host has no free range for: 16MB, a multiple of
+// every host page size
+#define MAP_CHUNK_BYTES ((size_t) 16 << 20)
+
+// The app's address space is the host's, shared by every guest process and
+// capped by iOS; once it is fragmented its largest free range can be smaller
+// than one mapping. V8's code range, 256MB made RWX at once, failed to commit
+// with 212MB the most the host had in one piece, and node died at its start
+// ("Failed to reserve virtual memory for CodeRange"); a thread's stack, 128MB
+// by RLIMIT_STACK, failed the same way, and node waited forever for the
+// platform worker it was for; claude.exe's 230MB writable segment failed to
+// load, and every exec of it (Claude Code, and the ugrep it runs as grep) died
+// of SIGSEGV. The app asks for extended virtual addressing (iSH.entitlements)
+// to raise the cap; this is for when the free ranges are still too small, as
+// they are without it.
+//
+// All or nothing: every chunk's memory and data object first, the pages
+// mapped only when all are there. A mapping of one chunk is not tried again.
+int pt_map_chunked(struct mem *mem, page_t start, pages_t pages, size_t offset, unsigned flags,
+                   void *(*map_chunk)(size_t from, size_t size, void *ctx), void *ctx) {
+    size_t total = (size_t) pages * PAGE_SIZE + offset;
+    size_t n = (total + MAP_CHUNK_BYTES - 1) / MAP_CHUNK_BYTES;
+    if (n < 2)
+        return _ENOMEM;
+    struct data **chunks = calloc(n, sizeof(*chunks));
+    if (chunks == NULL)
+        return _ENOMEM;
+    size_t i;
+    for (i = 0; i < n; i++) {
+        size_t from = i * MAP_CHUNK_BYTES;
+        size_t size = total - from < MAP_CHUNK_BYTES ? total - from : MAP_CHUNK_BYTES;
+        void *memory = map_chunk(from, size, ctx);
+        if (memory == MAP_FAILED)
+            break;
+        page_t first = i == 0 ? start : start + (from - offset) / PAGE_SIZE;
+        chunks[i] = data_new(memory, size, first);
+        if (chunks[i] == NULL) {
+            munmap(memory, size);
+            break;
+        }
+    }
+    if (i < n) {
+        while (i-- > 0) {
+            munmap(chunks[i]->data, chunks[i]->size);
+            free(chunks[i]);
+        }
+        free(chunks);
+        return _ENOMEM;
+    }
+    page_t page = start;
+    for (i = 0; i < n; i++) {
+        size_t skip = i == 0 ? offset : 0;
+        pages_t count = (chunks[i]->size - skip) / PAGE_SIZE;
+        pt_map_data(mem, page, count, chunks[i], skip, flags);
+        page += count;
+    }
+    free(chunks);
+    return 0;
+}
+
+void pt_set_file(struct mem *mem, page_t start, pages_t pages, struct fd *fd, size_t file_offset) {
+    struct data *last = NULL;
+    for (page_t page = start; page < start + pages; page++) {
+        struct data *data = mem_pt(mem, page)->data;
+        if (data == last)
+            continue;
+        last = data;
+        data->fd = fd_retain(fd);
+        data->file_offset = file_offset + (size_t) (page - start) * PAGE_SIZE;
+    }
+}
+
+static void *map_anonymous_chunk(size_t from, size_t size, void *ctx) {
+    (void) from;
+    return mmap(NULL, size, *(int *) ctx, MAP_PRIVATE | MAP_ANONYMOUS, 0, 0);
+}
+
 int pt_map_nothing(struct mem *mem, page_t start, pages_t pages, unsigned flags) {
     if (pages == 0) return 0;
     // Use host PROT_NONE for guest PROT_NONE mappings. Go runtime reserves
@@ -733,8 +819,14 @@ int pt_map_nothing(struct mem *mem, page_t start, pages_t pages, unsigned flags)
         host_prot = PROT_NONE;
     size_t map_size = (size_t)pages * PAGE_SIZE;
     void *memory = mmap(NULL, map_size, host_prot, MAP_PRIVATE | MAP_ANONYMOUS, 0, 0);
-    if (memory == MAP_FAILED)
-        return _ENOMEM;
+    int err;
+    if (memory != MAP_FAILED) {
+        err = pt_map(mem, start, pages, memory, 0, flags | P_ANONYMOUS);
+    } else {
+        err = pt_map_chunked(mem, start, pages, 0, flags | P_ANONYMOUS, map_anonymous_chunk, &host_prot);
+        if (err < 0)
+            return err;
+    }
     if (host_prot != PROT_NONE) {
         // PROT_NONE reservations cost no physical memory, so they would only
         // dilute the ratio we are trying to measure.
@@ -742,7 +834,6 @@ int pt_map_nothing(struct mem *mem, page_t start, pages_t pages, unsigned flags)
         atomic_fetch_add_explicit(&st_anon_pages_mapped, (uint64_t)pages,
                                   memory_order_relaxed);
     }
-    int err = pt_map(mem, start, pages, memory, 0, flags | P_ANONYMOUS);
 #if ANON_MMAP_LIMIT_PAGES > 0
     // [T-ish-anon-count-negative] Charge HERE, not at the call sites.
     //
