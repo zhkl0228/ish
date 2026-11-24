@@ -34,6 +34,7 @@ dword_t sys_clone3(addr_t args_addr, dword_t size);
 dword_t sys_fork(void);
 dword_t sys_vfork(void);
 dword_t sys_execve(addr_t file, addr_t argv, addr_t envp);
+dword_t sys_execveat(fd_t dirfd, addr_t path, addr_t argv, addr_t envp, dword_t flags);
 int do_execve(const char *file, size_t argc, const char *argv, const char *envp);
 dword_t sys_exit(dword_t status);
 noreturn void do_exit(int status);
@@ -53,27 +54,19 @@ addr_t sys_brk(addr_t new_brk);
 #define MMAP_NORESERVE 0x4000
 addr_t sys_mmap(addr_t args_addr);
 addr_t sys_mmap2(addr_t addr, dword_t len, dword_t prot, dword_t flags, fd_t fd_no, dword_t offset);
-#if defined(GUEST_ARM64)
 addr_t sys_mmap64(addr_t addr, addr_t len, dword_t prot, dword_t flags, fd_t fd_no, qword_t offset);
-#endif
 int_t sys_munmap(addr_t addr, addr_t len);
 int_t sys_mprotect(addr_t addr, addr_t len, int_t prot);
-addr_t sys_mremap(addr_t addr, dword_t old_len, dword_t new_len, dword_t flags);
+addr_t sys_mremap(addr_t addr, addr_t old_len, addr_t new_len, dword_t flags);
 dword_t sys_madvise(addr_t addr, dword_t len, dword_t advice);
 dword_t sys_mbind(addr_t addr, dword_t len, int_t mode, addr_t nodemask, dword_t maxnode, uint_t flags);
 int_t sys_mlock(addr_t addr, dword_t len);
-int_t sys_msync(addr_t addr, dword_t len, int_t flags);
+int_t sys_msync(addr_t addr, addr_t len, int_t flags);
 int_t sys_membarrier(int_t cmd, uint_t flags, int_t cpu_id);
 
-#ifdef GUEST_ARM64
 // ARM64-specific memory management syscalls
 dword_t sys_fadvise64(fd_t f, uint64_t offset, uint64_t len, dword_t advice);
 dword_t sys_mincore(addr_t addr, dword_t length, addr_t vec_addr);
-#else
-// x86 versions with different signatures
-dword_t sys_fadvise64(fd_t f, dword_t offset_low, dword_t offset_high,
-                      dword_t len_low, dword_t len_high, dword_t advice);
-#endif
 
 // file descriptor things
 #define LOCK_SH_ 1
@@ -85,13 +78,11 @@ struct iovec_ {
     uint_t len;
 };
 
-#ifdef GUEST_ARM64
 // ARM64 uses 64-bit pointers and size_t in iovec
 struct iovec64_ {
     uint64_t base;
     uint64_t len;
 };
-#endif
 dword_t sys_read(fd_t fd_no, addr_t buf_addr, dword_t size);
 dword_t sys_readv(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count);
 dword_t sys_write(fd_t fd_no, addr_t buf_addr, dword_t size);
@@ -103,11 +94,7 @@ dword_t sys_pread(fd_t f, addr_t buf_addr, dword_t buf_size, off_t_ off);
 dword_t sys_pwrite(fd_t f, addr_t buf_addr, dword_t size, off_t_ off);
 // The offset argument of preadv/pwritev(2): i386 splits it into two 32-bit
 // registers; a 64-bit guest passes all of it in pos_l and pos_h is ignored.
-#ifdef GUEST_ARM64
 typedef qword_t pos_arg_t;
-#else
-typedef dword_t pos_arg_t;
-#endif
 dword_t sys_preadv(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count,
                    pos_arg_t pos_l, pos_arg_t pos_h);
 dword_t sys_pwritev(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count,
@@ -177,7 +164,7 @@ fd_t sys_open(addr_t path_addr, dword_t flags, mode_t_ mode);
 fd_t sys_openat(fd_t at, addr_t path_addr, dword_t flags, mode_t_ mode);
 dword_t sys_close(fd_t fd);
 dword_t sys_link(addr_t src_addr, addr_t dst_addr);
-dword_t sys_linkat(fd_t src_at_f, addr_t src_addr, fd_t dst_at_f, addr_t dst_addr);
+dword_t sys_linkat(fd_t src_at_f, addr_t src_addr, fd_t dst_at_f, addr_t dst_addr, int_t flags);
 dword_t sys_unlink(addr_t path_addr);
 dword_t sys_unlinkat(fd_t at_f, addr_t path_addr, int_t flags);
 dword_t sys_rmdir(addr_t path_addr);
@@ -206,15 +193,9 @@ dword_t sys_fchown32(fd_t f, dword_t owner, dword_t group);
 dword_t sys_fchownat(fd_t at_f, addr_t path_addr, dword_t owner, dword_t group, int flags);
 dword_t sys_chown32(addr_t path_addr, uid_t_ owner, uid_t_ group);
 dword_t sys_lchown(addr_t path_addr, uid_t_ owner, uid_t_ group);
-#ifdef GUEST_ARM64
 dword_t sys_truncate64(addr_t path_addr, off_t_ size);
 dword_t sys_ftruncate64(fd_t f, off_t_ size);
 dword_t sys_fallocate(fd_t f, dword_t mode, off_t_ offset, off_t_ len);
-#else
-dword_t sys_truncate64(addr_t path_addr, dword_t size_low, dword_t size_high);
-dword_t sys_ftruncate64(fd_t f, dword_t size_low, dword_t size_high);
-dword_t sys_fallocate(fd_t f, dword_t mode, dword_t offset_low, dword_t offset_high, dword_t len_low, dword_t len_high);
-#endif
 dword_t sys_mkdir(addr_t path_addr, mode_t_ mode);
 dword_t sys_mkdirat(fd_t at_f, addr_t path_addr, mode_t_ mode);
 dword_t sys_utimensat(fd_t at_f, addr_t path_addr, addr_t times_addr, dword_t flags);
@@ -232,10 +213,8 @@ dword_t sys_statfs(addr_t path_addr, addr_t buf_addr);
 dword_t sys_statfs64(addr_t path_addr, dword_t buf_size, addr_t buf_addr);
 dword_t sys_fstatfs(fd_t f, addr_t buf_addr);
 dword_t sys_fstatfs64(fd_t f, addr_t buf_addr);
-#if defined(GUEST_ARM64)
 dword_t sys_statfs_arm64(addr_t path_addr, addr_t buf_addr);
 dword_t sys_fstatfs_arm64(fd_t f, addr_t buf_addr);
-#endif
 dword_t sys_statx(fd_t at_f, addr_t path_addr, int_t flags, uint_t mask, addr_t statx_addr);
 
 #define MS_READONLY_ (1 << 0)
@@ -305,11 +284,12 @@ struct uname {
     char domain[UNAME_LENGTH];   // lol
 };
 void do_uname(struct uname *uts);
+// The app's name and version, "iSH cli" in the command line tool (kernel/uname.c)
+const char *ish_build_name(void);
 dword_t sys_uname(addr_t uts_addr);
 dword_t sys_sethostname(addr_t hostname_addr, dword_t hostname_len);
 
 // sysinfo struct - architecture specific sizes
-#if defined(GUEST_ARM64)
 // ARM64: uses 64-bit long types (112 bytes total with padding)
 struct sys_info {
     uint64_t uptime;
@@ -328,24 +308,6 @@ struct sys_info {
     uint32_t mem_unit;
     uint32_t _pad3;          // padding for alignment
 };
-#else
-// x86: uses 32-bit types
-struct sys_info {
-    dword_t uptime;
-    dword_t loads[3];
-    dword_t totalram;
-    dword_t freeram;
-    dword_t sharedram;
-    dword_t bufferram;
-    dword_t totalswap;
-    dword_t freeswap;
-    word_t procs;
-    dword_t totalhigh;
-    dword_t freehigh;
-    dword_t mem_unit;
-    char pad;
-};
-#endif
 dword_t sys_sysinfo(addr_t info_addr);
 
 // futexes
@@ -358,21 +320,13 @@ dword_t sys_getrandom(addr_t buf_addr, dword_t len, dword_t flags);
 int_t sys_syslog(int_t type, addr_t buf_addr, int_t len);
 int_t sys_ipc(uint_t call, int_t first, int_t second, int_t third, addr_t ptr, int_t fifth);
 
-#ifdef GUEST_ARM64
 // ARM64 syscalls pass 64-bit register values; functions taking dword_t
 // will implicitly truncate, while those taking off_t_/qword_t get full values.
 // Returns int64_t so addr_t-returning syscalls (mmap, brk) can pass 48-bit values.
 typedef int64_t (*syscall_t)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
-#else
-typedef int (*syscall_t)(dword_t, dword_t, dword_t, dword_t, dword_t, dword_t);
-#endif
 
 // Stub for unimplemented syscalls: a syscall_t, as the table holds it
-#ifdef GUEST_ARM64
 int64_t syscall_stub(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
-#else
-int syscall_stub(dword_t, dword_t, dword_t, dword_t, dword_t, dword_t);
-#endif
 dword_t syscall_silent_stub(void);
 dword_t syscall_success_stub(void);
 

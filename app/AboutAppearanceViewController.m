@@ -78,7 +78,6 @@ char *previewString = "# cat /proc/ish/colors\r\n"
     }];
     [self updateOtherControls];
     
-#if !ISH_LINUX
     if (![NSUserDefaults.standardUserDefaults boolForKey:@"recovery"]) {
         // pty_open_fake makes current the owner of the pty, and the main thread has
         // no current task once the shells run on their own threads. Make the
@@ -91,7 +90,6 @@ char *previewString = "# cat /proc/ish/colors\r\n"
         current = saved_current;
         [_terminal sendOutput:previewString length:(int)strlen(previewString)];
     }
-#endif
 }
 
 - (void)viewDidAppear:(BOOL)animated {

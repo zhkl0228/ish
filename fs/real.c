@@ -57,11 +57,17 @@ static int open_flags_real_from_fake(int flags) {
     if (flags & O_APPEND_) real_flags |= O_APPEND;
     if (flags & O_NONBLOCK_) real_flags |= O_NONBLOCK;
     if (flags & O_NOFOLLOW_) real_flags |= O_NOFOLLOW;
-    /* O_DIRECTORY is deliberately not forwarded: generic_openat() already
-     * enforces ENOTDIR against the guest's view of the type, and Darwin's
-     * open() has no O_DIRECTORY. O_PATH/O_DIRECT have no Darwin equivalent
-     * either (F_NOCACHE is the closest to O_DIRECT and is advisory), so they
-     * stay guest-side only. */
+#ifdef O_DIRECTORY
+    // generic_openat says ENOTDIR of what the guest takes for no directory,
+    // after this open; the host's says it before it opens the file, as
+    // Linux's does. A FIFO's open waits for its other end: os.walk (scandir)
+    // of one waited for good, where Linux says ENOTDIR at once (CPython's
+    // test_walk_named_pipe). A guest's directory is the host's, in fakefs
+    // too, and what is none is none on the host either.
+    if (flags & O_DIRECTORY_) real_flags |= O_DIRECTORY;
+#endif
+    /* O_PATH/O_DIRECT have no Darwin equivalent (F_NOCACHE is the closest to
+     * O_DIRECT and is advisory), so they stay guest-side only. */
     return real_flags;
 }
 
@@ -104,9 +110,31 @@ static dev_t_ realfs_devnum_for_path(const char *path) {
     return 0;
 }
 
+// What realfs makes has the mode asked for, which has the guest's umask
+// applied already (sys_openat, sys_mkdirat, sys_mknodat): the host's umask,
+// applied again, took bits from it (group write under an umask of 022:
+// CPython's test_subprocess test_umask, through iSH's Linux CLI). fakefs,
+// which makes its files through realfs with modes of its own (0666, 0777)
+// and keeps the guest's in its database, keeps the host's umask on them.
+static bool realfs_exact_mode(struct mount *mount) {
+    return mount->fs == &realfs;
+}
+
 struct fd *realfs_open(struct mount *mount, const char *path, int flags, int mode) {
     int real_flags = open_flags_real_from_fake(flags);
-    int fd_no = openat(mount->root_fd, fix_path(path), real_flags, mode);
+    int fd_no;
+    if (flags & O_CREAT_ && realfs_exact_mode(mount)) {
+        // made with O_EXCL to know it is made here, then given its mode; one
+        // there already is opened as asked (made meanwhile by another, it
+        // has the host's umask, as before)
+        fd_no = openat(mount->root_fd, fix_path(path), real_flags | O_EXCL, mode);
+        if (fd_no >= 0)
+            fchmod(fd_no, mode & 07777);
+        else if (errno == EEXIST && !(flags & O_EXCL_))
+            fd_no = openat(mount->root_fd, fix_path(path), real_flags, mode);
+    } else {
+        fd_no = openat(mount->root_fd, fix_path(path), real_flags, mode);
+    }
     if (fd_no < 0)
         return ERR_PTR(errno_map());
     struct fd *fd = fd_create(&realfs_fdops);
@@ -190,9 +218,20 @@ int realfs_fstat(struct fd *fd, struct statbuf *fake_stat) {
 // host call it is already in. The call used to be retried on every EINTR, so
 // no signal could end its wait: not SIGINT's handler (Python's Ctrl-C while
 // reading a child's output), not SIGSTOP (Ctrl-Z). 0 when ready.
+//
+// An end not open the way it is used is EBADF, as Linux says of it before
+// anything else: it would never be ready, and on a Linux host (iSH's Linux
+// CLI) poll never says a pipe's read end writable, so a write to it waited
+// for good (CPython's test_signal, test_wakeup_write_error). Asked only when
+// it is not ready at once, not on the way of every read and write.
 static int realfs_wait_ready(struct fd *fd, short events) {
     if (!S_ISFIFO(fd->type) || (fd->flags & O_NONBLOCK_) || current == NULL)
         return 0;
+    struct pollfd ready = {.fd = fd->real_fd, .events = events};
+    if (poll(&ready, 1, 0) > 0)
+        return 0;
+    if ((fcntl(fd->real_fd, F_GETFL) & O_ACCMODE) == (events & POLLOUT ? O_RDONLY : O_WRONLY))
+        return _EBADF;
     for (;;) {
         if (task_signal_pending(current))
             return _EINTR;
@@ -324,6 +363,12 @@ off_t realfs_lseek(struct fd *fd, off_t offset, int whence) {
 }
 
 int realfs_poll(struct fd *fd) {
+    // A regular file or a directory is always ready, as Linux has it
+    // (DEFAULT_POLLMASK, whatever it was opened for). Darwin's poll of a
+    // directory says nothing, and a poll of one waited out its timeout.
+    // POLLIN and POLLOUT are the same bits on both.
+    if (S_ISREG(fd->type) || S_ISDIR(fd->type))
+        return POLLIN | POLLOUT;
     struct pollfd p = {.fd = fd->real_fd, .events = POLLPRI};
     // prevent POLLNVAL
     int flags = fcntl(fd->real_fd, F_GETFL, 0);
@@ -389,8 +434,10 @@ static off_t file_pages_end(off_t file_size) {
 
 // size bytes of a file from offset, of which the file has file_bytes: an
 // anonymous mapping (zeros past the file's end, as for BSS), the file mapped
-// over it as far as whole host pages go, the rest read in
-static void *map_past_end(int fd, size_t size, off_t offset, size_t file_bytes, int prot, int flags) {
+// over it as far as whole host pages go, the rest read in. *anonymous is how
+// much the file is not mapped over, for anon_mmap_count once it is mapped.
+static void *map_past_end(int fd, size_t size, off_t offset, size_t file_bytes, int prot, int flags,
+                          size_t *anonymous) {
     char *memory = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (memory == MAP_FAILED)
         return MAP_FAILED;
@@ -400,6 +447,7 @@ static void *map_past_end(int fd, size_t size, off_t offset, size_t file_bytes, 
         if (file_map == MAP_FAILED)
             file_map_size = 0;
     }
+    *anonymous = size - file_map_size;
     if (file_map_size < file_bytes) {
         size_t remaining = file_bytes - file_map_size;
         size_t total_read = 0;
@@ -424,6 +472,10 @@ struct past_end_chunks {
     int flags;
     off_t offset;
     off_t file_size;
+    // map_past_end's: its anonymous host mmaps, and how much of them the file
+    // is not mapped over, counted once all the chunks are mapped
+    uint64_t anonymous_mmaps;
+    size_t anonymous;
 };
 
 static void *map_past_end_chunk(size_t from, size_t size, void *ctx) {
@@ -432,7 +484,13 @@ static void *map_past_end_chunk(size_t from, size_t size, void *ctx) {
     if (at + (off_t) size <= file_pages_end(chunks->file_size))
         return mmap(NULL, size, chunks->prot, chunks->flags, chunks->fd, at);
     size_t file_bytes = chunks->file_size > at ? (size_t) (chunks->file_size - at) : 0;
-    return map_past_end(chunks->fd, size, at, file_bytes, chunks->prot, chunks->flags);
+    size_t anonymous;
+    void *memory = map_past_end(chunks->fd, size, at, file_bytes, chunks->prot, chunks->flags, &anonymous);
+    if (memory != MAP_FAILED) {
+        chunks->anonymous_mmaps++;
+        chunks->anonymous += anonymous;
+    }
+    return memory;
 }
 
 #if defined(__APPLE__)
@@ -631,20 +689,36 @@ int realfs_mmap(struct fd *fd, struct mem *mem, page_t start, pages_t pages, off
             file_bytes = st.st_size - real_offset;
         if (file_bytes > map_size)
             file_bytes = map_size;
-        char *memory = map_past_end(fd->real_fd, map_size, real_offset, file_bytes, mmap_prot, mmap_flags);
+        size_t anonymous;
+        char *memory = map_past_end(fd->real_fd, map_size, real_offset, file_bytes, mmap_prot, mmap_flags,
+                                    &anonymous);
         // In chunks when the host has no free range of the whole, as a mapping
         // within the file is below: a file whose length is not whole pages,
         // mapped whole, comes here, as each JVM maps the JDK's 140MB
         // lib/modules at its start. With no 140MB free that was ENOMEM, and
         // the JVM died of SIGSEGV before saying a word.
         if (memory == MAP_FAILED) {
-            struct past_end_chunks chunks = {fd->real_fd, mmap_prot, mmap_flags, real_offset, st.st_size};
-            return pt_map_chunked(mem, start, pages, correction, prot, map_past_end_chunk, &chunks);
+            struct past_end_chunks chunks = {
+                .fd = fd->real_fd,
+                .prot = mmap_prot,
+                .flags = mmap_flags,
+                .offset = real_offset,
+                .file_size = st.st_size,
+                .anonymous_mmaps = 0,
+                .anonymous = 0,
+            };
+            int err = pt_map_chunked(mem, start, pages, correction, prot, map_past_end_chunk, &chunks);
+            if (err >= 0)
+                anon_mmap_count(chunks.anonymous_mmaps, chunks.anonymous / PAGE_SIZE);
+            return err;
         }
-        if (shareable)
-            return shared_map_add(mem, start, pages, memory, correction, shared_flags, fd, offset, &st, real_offset,
-                                  map_size, mmap_flags);
-        return pt_map(mem, start, pages, memory, correction, prot);
+        int err = shareable
+            ? shared_map_add(mem, start, pages, memory, correction, shared_flags, fd, offset, &st, real_offset,
+                             map_size, mmap_flags)
+            : pt_map(mem, start, pages, memory, correction, prot);
+        if (err >= 0)
+            anon_mmap_count(1, anonymous / PAGE_SIZE);
+        return err;
     }
 
     char *memory = mmap(NULL, map_size,
@@ -665,6 +739,12 @@ ssize_t realfs_readlink(struct mount *mount, const char *path, char *buf, size_t
     if (size < 0)
         return errno_map();
     return size;
+}
+
+// Whether path is prefix, of length len, or a path under it: "/a/data2" is not
+// under "/a/data"
+static bool path_under(const char *path, const char *prefix, size_t len) {
+    return strncmp(path, prefix, len) == 0 && (path[len] == '\0' || path[len] == '/');
 }
 
 int realfs_getpath(struct fd *fd, char *buf) {
@@ -693,18 +773,26 @@ int realfs_getpath(struct fd *fd, char *buf) {
          * F_GETPATH resolves symlinks, so bind-mounted paths may point outside
          * mount->source when the bind mount table has been cleared (e.g. after
          * app restart before mountMinis re-registers the mounts). */
-        if (strncmp(buf, fd->mount->source, source_len) == 0) {
+        if (path_under(buf, fd->mount->source, source_len)) {
             memmove(buf, buf + source_len, MAX_PATH - source_len);
         } else if (strncmp(fd->mount->source, "/var/", 5) == 0 &&
                    strncmp(buf, "/private", 8) == 0 &&
-                   strncmp(buf + 8, fd->mount->source, source_len) == 0) {
+                   path_under(buf + 8, fd->mount->source, source_len)) {
             /* F_GETPATH returns /private/var/... but mount->source is /var/...
              * Strip /private prefix + mount->source from buf. */
             memmove(buf, buf + 8 + source_len, MAX_PATH - 8 - source_len);
         } else {
-            /* Path is outside mount source (stale bind mount symlink resolved
-             * by F_GETPATH). Return root as a safe fallback. */
-            strcpy(buf, "/");
+            // Outside the mount, and no bind mount's (a bind mount's link
+            // whose table was cleared: the app restarted, mountMinis yet to
+            // register it again): the file has no path in the guest. ENOENT,
+            // as Linux's getcwd of a directory out of the root's reach. It
+            // was "/", and every call by the fd's path acted on the root
+            // instead, saying nothing: futimens set the root's times, a file
+            // made by openat from it as a dirfd was made in /. Logged, with
+            // what it takes to see why.
+            printk("realfs_getpath: fd %d's host path \"%s\" is not under its mount's source \"%s\" (at \"%s\"), nor a bind mount's\n",
+                    fd->real_fd, buf, fd->mount->source, fd->mount->point);
+            return _ENOENT;
         }
     }
     return 0;
@@ -818,6 +906,9 @@ int realfs_mknod(struct mount *mount, const char *path, mode_t_ mode, dev_t_ UNU
     }
     if (err < 0)
         return errno_map();
+    // the mode asked for, not less the host's umask (realfs_exact_mode)
+    if (realfs_exact_mode(mount) && fchmodat(mount->root_fd, fix_path(path), mode & 07777, 0) < 0)
+        return errno_map();
     return err;
 }
 
@@ -839,13 +930,17 @@ int realfs_setattr(struct mount *mount, const char *path, struct attr attr) {
     int root = mount->root_fd;
     int err;
     switch (attr.type) {
+        // The path is the file's: generic_setattrat followed its symlinks, or
+        // not, as asked. The host following it again, lchown of a symlink
+        // chowned what it points to (a dangling one's ENOENT: CPython's
+        // test_lchown). A gid was set as the owner.
         case attr_uid:
-            err = fchownat(root, path, attr.uid, -1, 0);
+            err = fchownat(root, path, attr.uid, -1, AT_SYMLINK_NOFOLLOW);
             if (err < 0 && errno == EPERM)
                 return 0; // silently ignore, we're not root on host
             break;
         case attr_gid:
-            err = fchownat(root, path, attr.gid, -1, 0);
+            err = fchownat(root, path, -1, attr.gid, AT_SYMLINK_NOFOLLOW);
             if (err < 0 && errno == EPERM)
                 return 0;
             break;
@@ -872,7 +967,8 @@ int realfs_fsetattr(struct fd *fd, struct attr attr) {
                 return 0;
             break;
         case attr_gid:
-            err = fchown(real_fd, attr.gid, -1);
+            // the group, not the owner (it set the owner to the gid)
+            err = fchown(real_fd, -1, attr.gid);
             if (err < 0 && errno == EPERM)
                 return 0;
             break;
@@ -889,9 +985,13 @@ int realfs_fsetattr(struct fd *fd, struct attr attr) {
     return err;
 }
 
+// The path is the file's: generic_utime followed its symlinks, or not, as
+// asked. The host following it again, utimensat with AT_SYMLINK_NOFOLLOW set
+// the times of what a symlink points to (a dangling one's ENOENT: CPython's
+// shutil.copytree(symlinks=True), whose copystat sets a copied link's).
 int realfs_utime(struct mount *mount, const char *path, struct timespec atime, struct timespec mtime) {
     struct timespec times[2] = {atime, mtime};
-    int err = utimensat(mount->root_fd, fix_path(path), times, 0);
+    int err = utimensat(mount->root_fd, fix_path(path), times, AT_SYMLINK_NOFOLLOW);
     if (err < 0)
         return errno_map();
     return 0;
@@ -900,6 +1000,10 @@ int realfs_utime(struct mount *mount, const char *path, struct timespec atime, s
 int realfs_mkdir(struct mount *mount, const char *path, mode_t_ mode) {
     int err = mkdirat(mount->root_fd, fix_path(path), mode);
     if (err < 0)
+        return errno_map();
+    // the mode asked for, not less the host's umask (realfs_exact_mode); a
+    // directory's mode bits and its sticky bit, as Linux's mkdir takes
+    if (realfs_exact_mode(mount) && fchmodat(mount->root_fd, fix_path(path), mode & 01777, 0) < 0)
         return errno_map();
     return 0;
 }
@@ -987,6 +1091,14 @@ int realfs_mount(struct mount *mount) {
     char *source_realpath = realpath(mount->source, NULL);
     if (source_realpath == NULL)
         return errno_map();
+    // musl's realpath keeps a leading "//", whose meaning POSIX leaves to the
+    // system; Linux and Darwin take it for "/", and the path of an fd they
+    // give (getpath), which realfs_getpath strips this from, never has it. A
+    // root of "//dir" (a musl host's ish -f //dir) matched no fd's path, and
+    // every fd's path came out "/": futimens set the root's times, fexecve
+    // ran the root
+    if (source_realpath[0] == '/' && source_realpath[1] == '/')
+        memmove(source_realpath, source_realpath + 1, strlen(source_realpath));
     free((void *) mount->source);
     mount->source = source_realpath;
 

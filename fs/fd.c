@@ -306,9 +306,6 @@ dword_t sys_fcntl(fd_t f, dword_t cmd, addr_t arg) {
     struct fd *fd = f_get(f);
     if (fd == NULL)
         return _EBADF;
-#ifndef GUEST_ARM64
-    struct flock32_ flock32;
-#endif
     struct flock_ flock;
     fd_t new_f;
     int err;
@@ -343,7 +340,6 @@ dword_t sys_fcntl(fd_t f, dword_t cmd, addr_t arg) {
             STRACE("fcntl(%d, F_SETFL, %#x)", f, arg);
             return fd_setflags(fd, arg);
 
-#ifdef GUEST_ARM64
         // A 64-bit guest's struct flock, arm64's. F_GETLK64 and the others
         // are a 32-bit kernel's: EINVAL (default). The 32-bit layout read
         // here before put the offsets in the wrong places: a lock of a range
@@ -377,62 +373,6 @@ dword_t sys_fcntl(fd_t f, dword_t cmd, addr_t arg) {
             flock = (struct flock_) {flock64.type, flock64.whence, flock64.start, flock64.len, flock64.pid};
             return fcntl_setlk(fd, &flock, cmd == F_SETLKW_);
         }
-#else
-        case F_GETLK_:
-            STRACE("fcntl(%d, F_GETLK, %#x)", f, arg);
-            if (user_read(arg, &flock32, sizeof(flock32)))
-                return _EFAULT;
-            flock.type = flock32.type;
-            flock.whence = flock32.whence;
-            flock.start = flock32.start;
-            flock.len = flock32.len;
-            flock.pid = flock32.pid;
-            err = fcntl_getlk(fd, &flock);
-            if (err >= 0) {
-                flock32.type = flock.type;
-                flock32.whence = flock.whence;
-                flock32.start = flock.start;
-                flock32.len = flock.len;
-                flock32.pid = flock.pid;
-                if (user_write(arg, &flock32, sizeof(flock32)))
-                    return _EFAULT;
-            }
-            return err;
-
-        case F_GETLK64_:
-            STRACE("fcntl(%d, F_GETLK64, %#x)", f, arg);
-            if (user_read(arg, &flock, sizeof(flock)))
-                return _EFAULT;
-            err = fcntl_getlk(fd, &flock);
-            if (err >= 0)
-                if (user_write(arg, &flock, sizeof(flock)))
-                    return _EFAULT;
-            return err;
-
-        case F_SETLK_:
-        case F_SETLKW_:
-            STRACE("fcntl(%d, F_SETLK%*s, %#x)", f, cmd == F_SETLKW_, "W", arg);
-            if (user_read(arg, &flock32, sizeof(flock32)))
-                return _EFAULT;
-            flock.type = flock32.type;
-            flock.whence = flock32.whence;
-            flock.start = flock32.start;
-            flock.len = flock32.len;
-            flock.pid = flock32.pid;
-            // F_SETLKW waits for a lock another holds: each case asked the
-            // other's command, so neither ever waited. utmps's utmpd, finding
-            // the lock taken (the logins and gettys of a boot at once), took
-            // its EAGAIN for a failure, removed utmp and died: the first
-            // login after the app started went unrecorded.
-            return fcntl_setlk(fd, &flock, cmd == F_SETLKW_);
-
-        case F_SETLK64_:
-        case F_SETLKW64_:
-            STRACE("fcntl(%d, F_SETLK%*s64, %#x)", f, cmd == F_SETLKW64_, "W", arg);
-            if (user_read(arg, &flock, sizeof(flock)))
-                return _EFAULT;
-            return fcntl_setlk(fd, &flock, cmd == F_SETLKW64_);
-#endif
 
         default:
             STRACE("fcntl(%d, %d)", f, cmd);

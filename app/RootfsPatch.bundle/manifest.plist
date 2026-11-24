@@ -113,6 +113,14 @@
             <key>mode</key>
             <integer>493</integer>
         </dict>
+        <!-- the npm tools' versions ish-install installs: those the app's AOT images serve
+             (benchmark/aojit/publish_app_images.py writes it, and raises the version above) -->
+        <dict>
+            <key>src</key>
+            <string>files/usr/local/share/ish-install/versions</string>
+            <key>dst</key>
+            <string>/usr/local/share/ish-install/versions</string>
+        </dict>
         <!-- the boot OpenRC would do, which init runs (user accounting:
              utmpd and the rest, for w and who) -->
         <dict>

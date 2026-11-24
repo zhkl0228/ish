@@ -37,20 +37,49 @@ Inputs (JSON, logs, images, certificates, the 10 MB scp file) are generated in t
 ## The app's tools: `images-app.json`
 
 What the app's users run most has a list of its own: Java and Maven (`libjvm.so`), Kimi Code
-(`/usr/bin/node`), Claude Code (`claude.exe`, a Bun executable) and musl under all of them. Their
-workloads are `guest/java`, `guest/kimi`, `guest/claude` and `guest/app/musl_train.sh`; the agent
-CLIs answer through a model API of their own in the guest (`guest/llm/mock_llm.py`, OpenAI's chat
-completions and Anthropic's messages), so no account or network is needed for them.
+(`/usr/bin/node`), Claude Code (`claude.exe`, a Bun executable) and musl under all of them, and
+what their sessions run most, bash and python3 (`libpython3`). Their workloads are `guest/java`,
+`guest/kimi`, `guest/claude` and `guest/app` (musl, bash, python3); the agent CLIs answer through a
+model API of their own in the guest (`guest/llm/mock_llm.py`, OpenAI's chat completions and
+Anthropic's messages), so no account or network is needed for them. A `[session]` prompt has it
+call tools, as a coding session does (`guest/claude/claude_session.sh`: git, grep, find, sed and
+unittest through Bash, and Claude Code's own Glob and Grep). What a session starts besides
+claude.exe chose the extra images: by translations (ISH_JIT_MAP), python3, git and bash; recorded
+and timed, bash's and python3's workloads were 2.3 and 4.2 times faster with their images and git's
+no faster (its time is its processes' start and the file system), so git has none. The session is
+not in Claude Code's workload: recorded with it, claude.exe's image was 41 MB larger and the session
+no faster (10.8 s either way).
 
-On a Mac (Apple silicon) or a Linux arm64 host, from the repository:
+### Published sets: what a clone of the repository builds with
+
+The app links a published set of them, with nothing to do but build: `app-images.lock.json` names
+the set (the root the app ships, `deps/rootfs/arm64-root.tar.gz`, and the images recorded on it,
+with each file's sha256, the abi and the versions they were recorded on), `app/AOTImages.xcconfig`
+links its objects, and `app/fetch-aot.py`, in the app's Build Meson (ARM64) phase, fetches them
+from `https://hk.gzmtx.cn/ish-aot/<set>/` into `build/aot/<set>/` (and the root, if there is none),
+checking every sha256. `ish-install` installs Claude Code and Kimi Code at the versions the set was
+recorded on (`app/RootfsPatch.bundle/files/usr/local/share/ish-install/versions`), which is what
+makes their images serve the phone's: a new version comes with an app whose set was recorded on it.
+
+CI keeps the set current (`.github/workflows/aot-images.yml`, `ci_app_images.sh`): on a push that
+changes ish's abi, and every day for new versions of Claude Code, Kimi Code and Alpine's nodejs,
+openjdk25-jdk, maven and python3, it records on the lock's root, publishes, and opens a pull
+request with the new lock, xcconfig and versions. The server keeps the set master's lock names and
+the newest one; a publish removes the rest. Uploads go as user `ish-aot`, whose key (the secret
+`AOT_SSH_KEY`) can only rsync into that directory (`rrsync`).
+
+By hand, for a new root or a set of one's own, on a Mac (Apple silicon) or a Linux arm64 host:
 
 ```sh
 benchmark/aojit/record_app_images.sh        # build-arm64-jit, build-aot-root, the images, app/AOTImages.local.xcconfig
 benchmark/aojit/measure_app_images.sh       # optional: each workload with and without its image, on the CLI
+AOT_NO_LOCAL_XCCONFIG=1 benchmark/aojit/record_app_images.sh   # or, to publish: then
+python3 benchmark/aojit/publish_app_images.py benchmark/aojit/images/<abi>/app build-arm64-jit/ish build-aot-root --upload
 ```
 
-then build the app in Xcode, which links what `app/AOTImages.local.xcconfig` lists (`$(SRCROOT)`
-paths, so a Linux host that shares the repository with the Mac can write it). The root is the one
+`record_app_images.sh` alone writes `app/AOTImages.local.xcconfig` (not committed), which overrides
+the published set in the next build in Xcode (`$(SRCROOT)` paths, so a Linux host that shares the
+repository with the Mac can write it); remove it to go back to the set. The root is the one
 the app ships (`deps/rootfs/arm64-root.tar.gz`), made a fakefs as the app's (`fakefsify`, which
 needs libarchive: `brew install libarchive`), with the packages at the versions apk and npm give
 that day, as `ish-install` installs them on the phone: an image serves the module it was recorded
@@ -80,6 +109,15 @@ Measured on Linux (18 cores; CLI built as the app, `-Djit_emit=false`), the work
 | Claude Code (`-p` three times, stream-json) | 13 s | 23 s |
 | Kimi Code, node in the interpreter | 38 s | 96 s |
 | Kimi Code, node with V8's tiers | 46 s | 94 s |
+
+And on Linux (abi `bd14aa62`, Claude Code 2.1.331), the Claude Code session that runs tools
+(`claude_session.sh`, the model API outside ish), three runs each, the median:
+
+| images | session |
+|---|---|
+| none (`ISH_JIT=0`) | 19.7 s |
+| musl, node, jvm, claude | 11.3 s |
+| and git, bash, python3 | 10.8 s |
 
 ## Images
 
@@ -216,7 +254,7 @@ is the abi of the recording build.
 ### 1. Recording build: JIT with run-time translation
 
 ```sh
-meson setup build-arm64-jit -Dguest_arch=arm64 -Djit=true -Djit_emit=true -Dbuildtype=release
+meson setup build-arm64-jit -Djit=true -Djit_emit=true -Dbuildtype=release
 ninja -C build-arm64-jit
 ISH_JIT_PIC=1 build-arm64-jit/ish -r $R /bin/cat /proc/ish/jit | grep -o 'abi [0-9a-f]*'   # -> ABI
 ```
@@ -263,7 +301,7 @@ Rebuild only the `.S` from a kept recording (for example after a `gen.py` change
 
 ```sh
 python3 tools/jit_aot/gen.py $O/rec/<name>.jsonl build-arm64-jit/ish $R $O/S/aot_<name>.S --name <name>
-xcrun -sdk iphoneos clang -target arm64-apple-ios15.0 -c -o $O/ios/aot_<name>_ios.o $O/S/aot_<name>.S
+xcrun -sdk iphoneos clang -target arm64-apple-ios16.0 -c -o $O/ios/aot_<name>_ios.o $O/S/aot_<name>.S
 ```
 
 `gen.py` options: `--family '<fnmatch>'` overrides the family pattern (derived from the soname by
@@ -275,7 +313,7 @@ Mac CLI (pure AOT, no executable memory at run time, as on iOS):
 
 ```sh
 S=$PWD/benchmark/aojit/images/$ABI/latest/S
-meson setup build-arm64-aot -Dguest_arch=arm64 -Djit=true -Djit_emit=false -Dbuildtype=release \
+meson setup build-arm64-aot -Djit=true -Djit_emit=false -Dbuildtype=release \
     -Dcli_aot=$(ls $S/aot_*.S | paste -sd, -)
 ninja -C build-arm64-aot
 ```

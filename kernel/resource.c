@@ -87,11 +87,16 @@ dword_t sys_old_getrlimit32(dword_t resource, addr_t rlim_addr) {
     return 0;
 }
 
-static int check_setrlimit(int resource, struct rlimit_ new_limit) {
+// A limit the task's process may be given, as Linux's do_prlimit: a soft one
+// above the hard one is EINVAL (it was taken), and raising the hard one
+// needs privilege.
+static int check_setrlimit(struct task *task, int resource, struct rlimit_ new_limit) {
+    if (new_limit.cur > new_limit.max)
+        return _EINVAL;
     if (superuser())
         return 0;
     struct rlimit_ old_limit;
-    int err = rlimit_get(current, resource, &old_limit);
+    int err = rlimit_get(task, resource, &old_limit);
     if (err < 0)
         return err;
     if (new_limit.max > old_limit.max)
@@ -104,7 +109,7 @@ dword_t sys_setrlimit32(dword_t resource, addr_t rlim_addr) {
     if (user_get(rlim_addr, rlimit))
         return _EFAULT;
     STRACE("setrlimit(%d, {cur=%#x, max=%#x})", resource, rlimit.cur, rlimit.max);
-    int err = check_setrlimit(resource, rlimit);
+    int err = check_setrlimit(current, resource, rlimit);
     if (err < 0)
         return err;
     return rlimit_set(current, resource, rlimit);
@@ -128,36 +133,47 @@ dword_t sys_setrlimit64(dword_t resource, addr_t rlim_addr) {
     if (user_get(rlim_addr, rlimit))
         return _EFAULT;
     STRACE("setrlimit64(%d, {cur=%#llx, max=%#llx})", resource, (unsigned long long)rlimit.cur, (unsigned long long)rlimit.max);
-    int err = check_setrlimit(resource, rlimit);
+    int err = check_setrlimit(current, resource, rlimit);
     if (err < 0)
         return err;
     return rlimit_set(current, resource, rlimit);
 }
 
+// Any process's limits, by its pid (a thread's tid names its process's), 0
+// the caller's, as Linux's. It was EINVAL for any pid but 0, the caller's own
+// too: util-linux's prlimit --pid, CPython's resource.prlimit(pid), and for a
+// process that is not, EINVAL where Linux says ESRCH (CPython's test_prlimit,
+// which takes EINVAL from it for a soft limit above the hard one).
 dword_t sys_prlimit64(pid_t_ pid, dword_t resource, addr_t new_limit_addr, addr_t old_limit_addr) {
     STRACE("prlimit64(%d, %d)", pid, resource);
-    if (pid != 0)
-        return _EINVAL;
-
-    if (old_limit_addr != 0) {
-        struct rlimit_ rlimit;
-        int err = rlimit_get(current, resource, &rlimit);
-        if (err < 0)
-            return err;
-        STRACE(" old={cur=%#x, max=%#x}", rlimit.cur, rlimit.max);
-        if (user_put(old_limit_addr, rlimit))
+    struct rlimit_ new_limit;
+    if (new_limit_addr != 0) {
+        if (user_get(new_limit_addr, new_limit))
             return _EFAULT;
+        STRACE(" new={cur=%#x, max=%#x}", new_limit.cur, new_limit.max);
     }
 
-    if (new_limit_addr != 0) {
-        struct rlimit_ rlimit;
-        if (user_get(new_limit_addr, rlimit))
+    lock(&pids_lock);
+    struct task *task = pid == 0 ? current : pid_get_task(pid);
+    if (task == NULL) {
+        unlock(&pids_lock);
+        return _ESRCH;
+    }
+    struct rlimit_ old_limit;
+    int err = rlimit_get(task, resource, &old_limit);
+    if (err == 0 && new_limit_addr != 0) {
+        err = check_setrlimit(task, resource, new_limit);
+        if (err == 0)
+            err = rlimit_set(task, resource, new_limit);
+    }
+    unlock(&pids_lock);
+    if (err < 0)
+        return err;
+
+    if (old_limit_addr != 0) {
+        STRACE(" old={cur=%#x, max=%#x}", old_limit.cur, old_limit.max);
+        if (user_put(old_limit_addr, old_limit))
             return _EFAULT;
-        STRACE(" new={cur=%#x, max=%#x}", rlimit.cur, rlimit.max);
-        int err = check_setrlimit(resource, rlimit);
-        if (err < 0)
-            return err;
-        return rlimit_set(current, resource, rlimit);
     }
     return 0;
 }
@@ -240,6 +256,10 @@ static struct rusage_ rusage_of_task(struct task *task) {
     return rusage;
 }
 
+struct rusage_ rusage_of_thread(struct task *task) {
+    return task == current ? rusage_get_current() : rusage_of_task(task);
+}
+
 static void timeval_add(struct timeval_ *dst, struct timeval_ *src);
 
 struct rusage_ rusage_of_group(struct tgroup *group) {
@@ -250,7 +270,7 @@ struct rusage_ rusage_of_group(struct tgroup *group) {
     list_for_each_entry(&group->threads, thread, group_links) {
         if (thread->exiting)
             continue;
-        struct rusage_ thread_rusage = thread == current ? rusage_get_current() : rusage_of_task(thread);
+        struct rusage_ thread_rusage = rusage_of_thread(thread);
         rusage_add(&rusage, &thread_rusage);
     }
     return rusage;
@@ -295,24 +315,44 @@ dword_t sys_getrusage(dword_t who, addr_t rusage_addr) {
     return 0;
 }
 
-int_t sys_sched_getaffinity(pid_t_ pid, dword_t cpusetsize, addr_t cpuset_addr) {
-    STRACE("sched_getaffinity(%d, %d, %#x)", pid, cpusetsize, cpuset_addr);
-    if (pid != 0) {
-        lock(&pids_lock);
-        struct task *task = pid_get_task(pid);
-        unlock(&pids_lock);
-        if (task == NULL)
-            return _ESRCH;
-    }
-
+static unsigned online_cpus(void) {
     unsigned cpus = sysconf(_SC_NPROCESSORS_ONLN);
     { const char *e = getenv("ISH_FAKE_NCPU"); if (e) { int n = atoi(e); if (n > 0) cpus = n; } }
+    return cpus;
+}
+
+static uint64_t all_cpus(unsigned cpus) {
+    return cpus >= 64 ? ~(uint64_t) 0 : ((uint64_t) 1 << cpus) - 1;
+}
+
+// A task's CPUs are those sched_setaffinity gave it (task->cpu_affinity),
+// as Linux says them. iSH cannot pin a host thread, so it runs where iOS
+// puts it; what is kept is what the task is to run on, which is what is
+// read of it: nproc (taskset -c 0 make -j$(nproc)), HotSpot's
+// availableProcessors, CPython's os.sched_getaffinity. setaffinity said
+// success and forgot it, and every task had all CPUs.
+int_t sys_sched_getaffinity(pid_t_ pid, dword_t cpusetsize, addr_t cpuset_addr) {
+    STRACE("sched_getaffinity(%d, %d, %#x)", pid, cpusetsize, cpuset_addr);
+    lock(&pids_lock);
+    struct task *task = pid == 0 ? current : pid_get_task(pid);
+    if (task == NULL) {
+        unlock(&pids_lock);
+        return _ESRCH;
+    }
+    uint64_t mask = task->cpu_affinity;
+    unlock(&pids_lock);
+
+    unsigned cpus = online_cpus();
+    if (mask == 0)
+        mask = all_cpus(cpus);
     char cpuset[cpus / 8 + 1];
     if (cpusetsize < sizeof(cpuset))
         return _EINVAL;
     memset(cpuset, 0, sizeof(cpuset));
-    for (unsigned i = 0; i < cpus; i++)
-        bit_set(i, cpuset);
+    for (unsigned i = 0; i < cpus && i < 64; i++) {
+        if (mask >> i & 1)
+            bit_set(i, cpuset);
+    }
     if (user_write(cpuset_addr, cpuset, sizeof(cpuset)))
         return _EFAULT;
     // return the number of bytes written
@@ -331,8 +371,26 @@ int_t sys_getcpu(addr_t cpu_addr, addr_t node_addr, addr_t UNUSED(tcache_addr)) 
     return 0;
 }
 
-int_t sys_sched_setaffinity(pid_t_ UNUSED(pid), dword_t UNUSED(cpusetsize), addr_t UNUSED(cpuset_addr)) {
-    // meh
+// As Linux: a shorter mask has no CPUs after it, a longer one's bits past
+// the last CPU are not looked at, and one with no CPU there is is EINVAL.
+// cpu_set_t's bit i is byte i/8's bit i%8, a little-endian uint64_t's.
+int_t sys_sched_setaffinity(pid_t_ pid, dword_t cpusetsize, addr_t cpuset_addr) {
+    STRACE("sched_setaffinity(%d, %d, %#x)", pid, cpusetsize, cpuset_addr);
+    uint64_t mask = 0;
+    if (user_read(cpuset_addr, &mask, cpusetsize < sizeof(mask) ? cpusetsize : sizeof(mask)))
+        return _EFAULT;
+    uint64_t all = all_cpus(online_cpus());
+    mask &= all;
+    if (mask == 0)
+        return _EINVAL;
+    lock(&pids_lock);
+    struct task *task = pid == 0 ? current : pid_get_task(pid);
+    if (task == NULL) {
+        unlock(&pids_lock);
+        return _ESRCH;
+    }
+    task->cpu_affinity = mask == all ? 0 : mask;
+    unlock(&pids_lock);
     return 0;
 }
 
@@ -367,11 +425,37 @@ int_t sys_sched_setscheduler(pid_t_ UNUSED(pid), int_t policy, addr_t param_addr
     return 0;
 }
 
+// The priorities of a policy, as Linux says them: 1 to 99 for the realtime
+// ones, SCHED_FIFO and SCHED_RR, and 0 for the rest. The realtime ones were
+// EINVAL (and min was max): CPython's test_sched_priority. Setting one stays
+// refused (sched_setscheduler).
+#define SCHED_FIFO_ 1
+#define SCHED_RR_ 2
+#define SCHED_BATCH_ 3
+#define SCHED_IDLE_ 5
+#define SCHED_DEADLINE_ 6
+static int_t sched_priority_range(int_t policy, bool max) {
+    switch (policy) {
+        case SCHED_FIFO_:
+        case SCHED_RR_:
+            return max ? 99 : 1;
+        case SCHED_OTHER_:
+        case SCHED_BATCH_:
+        case SCHED_IDLE_:
+        case SCHED_DEADLINE_:
+            return 0;
+    }
+    return _EINVAL;
+}
+
 int_t sys_sched_get_priority_max(int_t policy) {
     STRACE("sched_get_priority_max(%d)", policy);
-    if (policy == 0)
-        return 0;
-    return _EINVAL;
+    return sched_priority_range(policy, true);
+}
+
+int_t sys_sched_get_priority_min(int_t policy) {
+    STRACE("sched_get_priority_min(%d)", policy);
+    return sched_priority_range(policy, false);
 }
 
 int_t sys_ioprio_get(int_t UNUSED(which), int_t UNUSED(who), int_t UNUSED(ioprio)) {

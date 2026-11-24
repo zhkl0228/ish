@@ -2,7 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
-#include <execinfo.h>
+#if defined(__GLIBC__) || defined(__APPLE__)
+#include <execinfo.h> // musl (an Alpine host) has no backtrace
+#endif
 #include "util/signpost.h"
 #include <termios.h>
 #include <unistd.h>
@@ -22,9 +24,7 @@
 
 #include <stddef.h>
 #include <sys/resource.h>
-#ifdef GUEST_ARM64
 #include "asbestos/guest-arm64/host_fault.h"
-#endif
 
 #ifdef __aarch64__
 // Host register access in a signal ucontext: Darwin keeps a pointer to the
@@ -42,14 +42,6 @@
 #endif
 #endif
 
-#if defined(__has_feature)
-#if __has_feature(address_sanitizer)
-#define ISH_ASAN 1
-#endif
-#endif
-#if defined(__SANITIZE_ADDRESS__)
-#define ISH_ASAN 1
-#endif
 #ifdef ISH_ASAN
 // The options an AddressSanitizer build of iSH needs (tools/build-asan.sh);
 // ASAN_OPTIONS is read after them and can override them.
@@ -67,7 +59,7 @@ const char *__asan_default_options(void) {
 #endif
 
 static void crash_handler(int sig, siginfo_t *info, void *ctx) {
-#if defined(__aarch64__) && defined(GUEST_ARM64)
+#if defined(__aarch64__)
     // A fault in translated guest code goes on (asbestos/guest-arm64/host_fault.c)
     if (asbestos_host_fault(sig, info, ctx))
         return;
@@ -84,16 +76,20 @@ static void crash_handler(int sig, siginfo_t *info, void *ctx) {
         "pc:  0x%llx\nlr:  0x%llx\nsp:  0x%llx\n"
         "x0:  0x%llx\nx1:  0x%llx\nx2:  0x%llx\n"
         "x7:  0x%llx\nx28: 0x%llx\n",
-        UC_PC(uc), UC_LR(uc),
-        UC_SP(uc),
-        UC_X(uc, 0), UC_X(uc, 1),
-        UC_X(uc, 2),
-        UC_X(uc, 7), UC_X(uc, 28));
+        // unsigned long long in glibc's and Darwin's registers, unsigned
+        // long in musl's
+        (unsigned long long) UC_PC(uc), (unsigned long long) UC_LR(uc),
+        (unsigned long long) UC_SP(uc),
+        (unsigned long long) UC_X(uc, 0), (unsigned long long) UC_X(uc, 1),
+        (unsigned long long) UC_X(uc, 2),
+        (unsigned long long) UC_X(uc, 7), (unsigned long long) UC_X(uc, 28));
     write(STDERR_FILENO, buf, len);
 #endif
+#if defined(__GLIBC__) || defined(__APPLE__)
     void *bt[20];
     int n = backtrace(bt, 20);
     backtrace_symbols_fd(bt, n, STDERR_FILENO);
+#endif
     // as a shell reports a death by the signal: abort's is 134
     _exit(128 + sig);
 }
@@ -228,7 +224,6 @@ static void microbench_signal_dump(int sig) {
     (void)sig;
     dump_pc_hist();
     dump_pc_trace();
-#ifdef GUEST_ARM64
     // Walk all tasks, dump guest x21 if available (microbench counter reg).
     extern struct pid pids[];
     for (int i = 1; i < 8; i++) {
@@ -237,7 +232,6 @@ static void microbench_signal_dump(int sig) {
             fprintf(stderr, "guest_pid=%d  x21=%llu\n", i, (unsigned long long)t->cpu.x21);
         }
     }
-#endif
     _exit(0);
 }
 
@@ -352,9 +346,7 @@ static void ish_cli_memory_governor_start(void) {
 int main(int argc, char *const argv[]) {
     ish_signpost_init();
     atexit(dump_pc_hist);
-#ifdef GUEST_ARM64
     { extern void dump_wx_stats(void); atexit(dump_wx_stats); }
-#endif
     // Write watchpoint (diagnostic): ISH_WATCH_PAGE=<hex page addr> arms the
     // per-store page check in the write gadgets; ISH_WATCH_LO/HI narrow which
     // hits get recorded.

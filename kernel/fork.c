@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h>
+#include <string.h>
 #include <stdatomic.h>
 #include "debug.h"
 #include "kernel/task.h"
@@ -12,13 +13,8 @@
 #include "kernel/ptrace.h"
 
 // Architecture-specific register access for fork/clone
-#if defined(GUEST_ARM64)
 #define CPU_SP(cpu) ((cpu).sp)
 #define CPU_RETVAL(cpu) ((cpu).regs[0])
-#else
-#define CPU_SP(cpu) ((cpu).esp)
-#define CPU_RETVAL(cpu) ((cpu).eax)
-#endif
 
 static _Atomic(ish_fork_guard_t) g_fork_guard = NULL;
 
@@ -183,11 +179,21 @@ static struct tgroup *tgroup_copy(struct tgroup *old_group) {
         unlock(&group->tty->lock);
     }
     group->itimer = NULL;
+    // nor are the CPU-time ones, nor the thread sampling for them
+    memset(group->cpu_itimer_expires, 0, sizeof(group->cpu_itimer_expires));
+    memset(group->cpu_itimer_interval, 0, sizeof(group->cpu_itimer_interval));
+    group->cpu_itimer_running = false;
+    group->cpu_itimer_stop = false;
     // POSIX timers are not inherited across fork
     for (int i = 0; i < TIMERS_MAX; i++) {
         group->posix_timers[i] = (struct posix_timer) {};
     }
     group->doing_group_exit = false;
+    // A new process has used no CPU time yet, as on Linux: rusage was the old
+    // group's, its exited threads' time, and every process forked from it
+    // started with all its ancestors' (Claude Code's 312s: /proc/<pid>/stat,
+    // getrusage, and the time bash said of an instant's command)
+    group->rusage = (struct rusage_) {};
     group->children_rusage = (struct rusage_) {};
     {
         struct timespec _ts;
@@ -198,6 +204,7 @@ static struct tgroup *tgroup_copy(struct tgroup *old_group) {
     }
     cond_init(&group->child_exit);
     cond_init(&group->stopped_cond);
+    cond_init(&group->cpu_itimer_armed);
     lock_init(&group->lock);
     return group;
 }
@@ -262,15 +269,9 @@ static int copy_task(struct task *task, dword_t flags, addr_t stack, addr_t ptid
     unlock(&pids_lock);
 
     if (flags & CLONE_SETTLS_) {
-#if defined(GUEST_ARM64)
         // On ARM64, the TLS argument is the actual TLS pointer value (for TPIDR_EL0),
         // not a pointer to a descriptor structure like x86.
         task->cpu.tls_ptr = tls_addr;
-#else
-        err = task_set_thread_area(task, tls_addr);
-        if (err < 0)
-            goto fail_free_sighand;
-#endif
     }
 
     err = _EFAULT;

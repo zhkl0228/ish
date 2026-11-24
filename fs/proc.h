@@ -17,6 +17,9 @@ struct proc_data {
     char *data;
     size_t size;
     size_t capacity;
+    // What was to go in could not have the memory it needed: the content is
+    // not whole, and proc_refresh_data gives ENOMEM, not the rest of it
+    bool failed;
 };
 
 struct proc_dir_entry {

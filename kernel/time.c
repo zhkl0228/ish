@@ -62,6 +62,13 @@ dword_t sys_stime(addr_t UNUSED(time)) {
     return _EPERM;
 }
 
+static struct timespec cpu_time(struct rusage_ rusage, bool user_only) {
+    uint64_t usec = (uint64_t) rusage.utime.sec * 1000000 + rusage.utime.usec;
+    if (!user_only)
+        usec += (uint64_t) rusage.stime.sec * 1000000 + rusage.stime.usec;
+    return (struct timespec) {.tv_sec = usec / 1000000, .tv_nsec = usec % 1000000 * 1000};
+}
+
 // A CPU-time clock, user and system time together as Linux's: the process's
 // (all its threads, those that exited too; it was the calling thread's user
 // time) or the calling thread's (CLOCK_THREAD_CPUTIME_ID was EINVAL: Python's
@@ -75,8 +82,65 @@ static struct timespec cpu_clock(uint_t clock) {
     } else {
         rusage = rusage_get_current();
     }
-    uint64_t usec = ((uint64_t) rusage.utime.sec + rusage.stime.sec) * 1000000 + rusage.utime.usec + rusage.stime.usec;
-    return (struct timespec) {.tv_sec = usec / 1000000, .tv_nsec = usec % 1000000 * 1000};
+    return cpu_time(rusage, false);
+}
+
+// A CPU-time clock as Linux encodes one: ~pid << 3, 4 if it is a thread's
+// (CPUCLOCK_PERTHREAD), and in the low 2 bits what it counts: user and
+// system time (CPUCLOCK_PROF, 0), user time (CPUCLOCK_VIRT, 1), scheduler
+// time (CPUCLOCK_SCHED, 2), here user and system time as there is nothing
+// else (and on a Linux host another thread's user time is all of its time:
+// rusage_of_task). pid 0 is the caller, or its process. All were EINVAL:
+// pthread_getcpuclockid gives a thread's, HotSpot times its threads so (and
+// takes clock_getres's word that it can) and iSH's own Linux CLI its other
+// threads (rusage_of_task); clock_getcpuclockid a process's, after
+// clock_getres takes it, and said ESRCH of every process, its caller too.
+//
+// Which clocks there are is Linux's pid_for_clock's: a thread's of a thread
+// of the caller's process, that has not exited; a process's of any process,
+// named by its pid, a zombie's too (until it is reaped, the leader's task and
+// its group stay), or for clock_gettime by the caller's own tid. A thread's
+// pid is no process: a leaked thread's (do_exit_group's safety valve) group
+// may be freed, so its tgid says so before its group is looked at.
+#define CPUCLOCK_PERTHREAD_MASK_ 4
+#define CPUCLOCK_WHICH_MASK_ 3
+#define CPUCLOCK_VIRT_ 1
+#define CPUCLOCK_SCHED_ 2
+#define CPUCLOCK_MAX_ 3
+static int cpu_clock_of(int_t clock, bool gettime, struct timespec *ts) {
+    int which = clock & CPUCLOCK_WHICH_MASK_;
+    if (which >= CPUCLOCK_MAX_)
+        return _EINVAL;
+    pid_t_ pid = ~(clock >> 3);
+    struct rusage_ rusage;
+    lock(&pids_lock);
+    if (clock & CPUCLOCK_PERTHREAD_MASK_) {
+        struct task *thread = pid == 0 ? current : pid_get_task(pid);
+        if (thread == NULL || thread->exiting || thread->group != current->group) {
+            unlock(&pids_lock);
+            return _EINVAL;
+        }
+        rusage = rusage_of_thread(thread);
+    } else {
+        struct tgroup *group = NULL;
+        if (pid == 0) {
+            group = current->group;
+        } else {
+            struct task *task = pid_get_task_zombie(pid);
+            if (task != NULL && task->tgid == task->pid)
+                group = task->group;
+            else if (gettime && task == current)
+                group = current->group;
+        }
+        if (group == NULL) {
+            unlock(&pids_lock);
+            return _EINVAL;
+        }
+        rusage = rusage_of_group(group);
+    }
+    unlock(&pids_lock);
+    *ts = cpu_time(rusage, which == CPUCLOCK_VIRT_);
+    return 0;
 }
 
 dword_t sys_clock_gettime(dword_t clock, addr_t tp) {
@@ -85,6 +149,10 @@ dword_t sys_clock_gettime(dword_t clock, addr_t tp) {
     struct timespec ts;
     if (clock == CLOCK_PROCESS_CPUTIME_ID_ || clock == CLOCK_THREAD_CPUTIME_ID_) {
         ts = cpu_clock(clock);
+    } else if ((int_t) clock < 0) {
+        int err = cpu_clock_of((int_t) clock, true, &ts);
+        if (err < 0)
+            return err;
     } else {
         clockid_t clock_id;
         if (clockid_to_real(clock, &clock_id)) return _EINVAL;
@@ -106,6 +174,15 @@ dword_t sys_clock_getres(dword_t clock, addr_t res_addr) {
     struct timespec res;
     if (clock == CLOCK_PROCESS_CPUTIME_ID_ || clock == CLOCK_THREAD_CPUTIME_ID_) {
         res = (struct timespec) {.tv_sec = 0, .tv_nsec = 1}; // as Linux says
+    } else if ((int_t) clock < 0) {
+        // a CPU-time clock, if it is one: 1ns for scheduler time, as Linux
+        // says; user and system time is counted in what Linux counts it in,
+        // its tick, and here in what rusage counts it in, microseconds
+        int err = cpu_clock_of((int_t) clock, false, &res);
+        if (err < 0)
+            return err;
+        bool sched = ((int_t) clock & CPUCLOCK_WHICH_MASK_) == CPUCLOCK_SCHED_;
+        res = (struct timespec) {.tv_sec = 0, .tv_nsec = sched ? 1 : 1000};
     } else {
         clockid_t clock_id;
         if (clockid_to_real(clock, &clock_id)) return _EINVAL;
@@ -137,10 +214,8 @@ static void itimer_notify(struct tgroup *group) {
 }
 
 static int itimer_set(struct tgroup *group, int which, struct timer_spec spec, struct timer_spec *old_spec) {
-    if (which != ITIMER_REAL_) {
-        FIXME("unimplemented setitimer %d", which);
+    if (which != ITIMER_REAL_)
         return _EINVAL;
-    }
 
     if (!group->itimer) {
         struct timer *timer = timer_new(CLOCK_REALTIME, (timer_callback_t) itimer_notify, group);
@@ -150,6 +225,169 @@ static int itimer_set(struct tgroup *group, int which, struct timer_spec spec, s
     }
 
     return timer_set(group->itimer, spec, old_spec);
+}
+
+// ITIMER_VIRTUAL and ITIMER_PROF fire as the process's user time, or user and
+// system time, all its threads' and its exited ones', passes theirs. They
+// were EINVAL: profilers set them (Go's pprof, where timer_create of a CPU
+// clock is not, gperftools, Python's statistical ones), and CPython's
+// test_signal ItimerTest. A thread samples the time (rusage_of_group) every
+// 10ms while one is armed, as Linux checks them at its tick (and while none
+// is, waits to be notified, not woken and not taking pids_lock: a process
+// that profiled a while would have it so for good), and sends
+// SIGVTALRM or SIGPROF to the process, SI_KERNEL as Linux's; a periodic one
+// is due again an interval after it was due, as Linux's check_cpu_itimer, so
+// one behind fires at the next samples until it is not. Locks as everything
+// else takes them: pids_lock (the threads, and to send), then the group's.
+#define CPU_ITIMER_SAMPLE_NS 10000000
+
+static uint64_t usec_of_timeval(struct timeval_ t) {
+    return (uint64_t) t.sec * 1000000 + t.usec;
+}
+
+static uint64_t usec_of_timespec(struct timespec t) {
+    return (uint64_t) t.tv_sec * 1000000 + t.tv_nsec / 1000;
+}
+
+static struct timespec timespec_of_usec(uint64_t usec) {
+    return (struct timespec) {.tv_sec = usec / 1000000, .tv_nsec = usec % 1000000 * 1000};
+}
+
+static uint64_t cpu_itimer_now(struct rusage_ rusage, int i) {
+    uint64_t usec = usec_of_timeval(rusage.utime);
+    if (i == 1)
+        usec += usec_of_timeval(rusage.stime);
+    return usec;
+}
+
+// What is left of it, as Linux's get_cpu_itimer: 0 if it is disarmed, 1us if
+// it is due and yet to fire. The group's lock held.
+static struct timer_spec cpu_itimer_get_locked(struct tgroup *group, int i, uint64_t now) {
+    uint64_t expires = group->cpu_itimer_expires[i];
+    uint64_t left = expires == 0 ? 0 : expires > now ? expires - now : 1;
+    return (struct timer_spec) {
+        .value = timespec_of_usec(left),
+        .interval = timespec_of_usec(group->cpu_itimer_interval[i]),
+    };
+}
+
+static void *cpu_itimer_thread(void *arg) {
+    struct tgroup *group = arg;
+    static const int signals[2] = {SIGVTALRM_, SIGPROF_};
+    for (;;) {
+        lock(&group->lock);
+        while (!group->cpu_itimer_stop &&
+                group->cpu_itimer_expires[0] == 0 && group->cpu_itimer_expires[1] == 0)
+            wait_for_ignore_signals(&group->cpu_itimer_armed, &group->lock, NULL);
+        bool stop = group->cpu_itimer_stop;
+        unlock(&group->lock);
+        if (stop)
+            return NULL;
+        struct timespec period = {.tv_sec = 0, .tv_nsec = CPU_ITIMER_SAMPLE_NS};
+        nanosleep(&period, NULL);
+        // Stopped, or disarmed, while it slept: one disarmed does not fire
+        // (its expires is 0), and the next turn waits
+        lock(&pids_lock);
+        lock(&group->lock);
+        stop = group->cpu_itimer_stop;
+        unlock(&group->lock);
+        if (stop) {
+            unlock(&pids_lock);
+            return NULL;
+        }
+        struct rusage_ rusage = rusage_of_group(group);
+        bool fire[2] = {false, false};
+        lock(&group->lock);
+        for (int i = 0; i < 2; i++) {
+            uint64_t expires = group->cpu_itimer_expires[i];
+            if (expires != 0 && cpu_itimer_now(rusage, i) >= expires) {
+                fire[i] = true;
+                uint64_t interval = group->cpu_itimer_interval[i];
+                group->cpu_itimer_expires[i] = interval != 0 ? expires + interval : 0;
+            }
+        }
+        unlock(&group->lock);
+        for (int i = 0; i < 2; i++) {
+            if (fire[i]) {
+                struct siginfo_ info = {.code = SI_KERNEL_};
+                send_process_signal(group, signals[i], info);
+            }
+        }
+        unlock(&pids_lock);
+    }
+}
+
+static int cpu_itimer_set(struct tgroup *group, int which, struct timer_spec spec, struct timer_spec *old_spec) {
+    int i = which == ITIMER_PROF_;
+    lock(&pids_lock);
+    uint64_t now = cpu_itimer_now(rusage_of_group(group), i);
+    lock(&group->lock);
+    *old_spec = cpu_itimer_get_locked(group, i, now);
+    uint64_t value = usec_of_timespec(spec.value);
+    group->cpu_itimer_expires[i] = value == 0 ? 0 : now + value;
+    group->cpu_itimer_interval[i] = usec_of_timespec(spec.interval);
+    int err = 0;
+    if (value != 0 && group->cpu_itimer_running) {
+        notify(&group->cpu_itimer_armed);
+    } else if (value != 0) {
+        group->cpu_itimer_stop = false;
+        if (pthread_create(&group->cpu_itimer_thread, NULL, cpu_itimer_thread, group) == 0) {
+            group->cpu_itimer_running = true;
+        } else {
+            group->cpu_itimer_expires[i] = 0;
+            err = _EAGAIN;
+        }
+    }
+    unlock(&group->lock);
+    unlock(&pids_lock);
+    return err;
+}
+
+static struct timer_spec cpu_itimer_get(struct tgroup *group, int which) {
+    int i = which == ITIMER_PROF_;
+    lock(&pids_lock);
+    uint64_t now = cpu_itimer_now(rusage_of_group(group), i);
+    lock(&group->lock);
+    struct timer_spec spec = cpu_itimer_get_locked(group, i, now);
+    unlock(&group->lock);
+    unlock(&pids_lock);
+    return spec;
+}
+
+// An itimerval in microseconds: an armed timer's under 1us says 1us, as Linux
+// says (itimer_get_remtime), not 0, which is a disarmed one's.
+static struct itimerval_ itimerval_from_real(struct timer_spec spec) {
+    struct itimerval_ val = {
+        .interval.sec = spec.interval.tv_sec,
+        .interval.usec = spec.interval.tv_nsec / 1000,
+        .value.sec = spec.value.tv_sec,
+        .value.usec = spec.value.tv_nsec / 1000,
+    };
+    if (val.value.sec == 0 && val.value.usec == 0 && timespec_positive(spec.value))
+        val.value.usec = 1;
+    return val;
+}
+
+// It was ENOSYS: Python's signal.getitimer, and so its test_signal's
+// ItimerTest.
+int_t sys_getitimer(int_t which, addr_t val_addr) {
+    STRACE("getitimer(%d, %#x)", which, val_addr);
+    if (which != ITIMER_REAL_ && which != ITIMER_VIRTUAL_ && which != ITIMER_PROF_)
+        return _EINVAL;
+    struct timer_spec spec = {};
+    struct tgroup *group = current->group;
+    if (which == ITIMER_REAL_) {
+        lock(&group->lock);
+        if (group->itimer != NULL)
+            timer_get(group->itimer, &spec);
+        unlock(&group->lock);
+    } else {
+        spec = cpu_itimer_get(group, which);
+    }
+    struct itimerval_ val = itimerval_from_real(spec);
+    if (user_put(val_addr, val))
+        return _EFAULT;
+    return 0;
 }
 
 int_t sys_setitimer(int_t which, addr_t new_val_addr, addr_t old_val_addr) {
@@ -171,18 +409,19 @@ int_t sys_setitimer(int_t which, addr_t new_val_addr, addr_t old_val_addr) {
     struct timer_spec old_spec;
 
     struct tgroup *group = current->group;
-    lock(&group->lock);
-    int err = itimer_set(group, which, spec, &old_spec);
-    unlock(&group->lock);
+    int err;
+    if (which == ITIMER_VIRTUAL_ || which == ITIMER_PROF_) {
+        err = cpu_itimer_set(group, which, spec, &old_spec);
+    } else {
+        lock(&group->lock);
+        err = itimer_set(group, which, spec, &old_spec);
+        unlock(&group->lock);
+    }
     if (err < 0)
         return err;
 
     if (old_val_addr != 0) {
-        struct itimerval_ old_val;
-        old_val.interval.sec = old_spec.interval.tv_sec;
-        old_val.interval.usec = old_spec.interval.tv_nsec / 1000;
-        old_val.value.sec = old_spec.value.tv_sec;
-        old_val.value.usec = old_spec.value.tv_nsec / 1000;
+        struct itimerval_ old_val = itimerval_from_real(old_spec);
         if (user_put(old_val_addr, old_val))
             return _EFAULT;
     }
@@ -542,14 +781,22 @@ int_t sys_timer_settime(dword_t timer_id, int_t flags, addr_t new_value_addr, ad
     struct itimerspec_ value;
     if (user_get(new_value_addr, value))
         return _EFAULT;
-    if (timer_id > TIMERS_MAX)
+    // A timer that is not, deleted or never made, is EINVAL, as Linux says.
+    // Its NULL timer was set (and TIMERS_MAX's past the array): iSH crashed.
+    if (timer_id >= TIMERS_MAX)
         return _EINVAL;
 
     lock(&current->group->lock);
     struct posix_timer *timer = &current->group->posix_timers[timer_id];
+    if (timer->timer == NULL) {
+        unlock(&current->group->lock);
+        return _EINVAL;
+    }
     struct timer_spec spec = timer_spec_to_real(value);
     struct timer_spec old_spec;
-    if (flags & TIMER_ABSTIME_) {
+    // a time of 0 disarms it, absolute or not, as on Linux: it was one long
+    // past, and it fired at once
+    if (flags & TIMER_ABSTIME_ && !timespec_is_zero(spec.value)) {
         struct timespec now = timespec_now(timer->timer->clockid);
         spec.value = timespec_subtract(spec.value, now);
     }
@@ -579,16 +826,7 @@ int_t sys_timer_gettime(dword_t timer_id, addr_t curr_value_addr) {
     }
 
     struct timer_spec spec;
-    spec.interval = pt->timer->interval;
-    if (pt->timer->active) {
-        struct timespec now = timespec_now(pt->timer->clockid);
-        if (timespec_positive(timespec_subtract(pt->timer->end, now)))
-            spec.value = timespec_subtract(pt->timer->end, now);
-        else
-            spec.value = (struct timespec) {0, 0};
-    } else {
-        spec.value = (struct timespec) {0, 0};
-    }
+    timer_get(pt->timer, &spec);
     unlock(&current->group->lock);
 
     struct itimerspec_ value = timer_spec_from_real(spec);
@@ -632,6 +870,9 @@ void posix_timers_delete(struct tgroup *group) {
 
 int_t sys_timer_delete(dword_t timer_id) {
     STRACE("timer_delete(%d)\n", timer_id);
+    // read past the array, as timer_settime did
+    if (timer_id >= TIMERS_MAX)
+        return _EINVAL;
     lock(&current->group->lock);
     struct posix_timer *timer = &current->group->posix_timers[timer_id];
     if (timer->timer == NULL) {
@@ -645,6 +886,12 @@ int_t sys_timer_delete(dword_t timer_id) {
 }
 
 static struct fd_ops timerfd_ops;
+
+static void timerfd_reset(struct fd *fd) {
+    lock(&fd->lock);
+    fd->timerfd.expirations = 0;
+    unlock(&fd->lock);
+}
 
 static void timerfd_callback(struct fd *fd) {
     lock(&fd->lock);
@@ -681,14 +928,16 @@ int_t sys_timerfd_settime(fd_t f, int_t flags, addr_t new_value_addr, addr_t old
         return _EFAULT;
     struct timer_spec spec = timer_spec_to_real(value);
     struct timer_spec old_spec;
-    if (flags & TIMER_ABSTIME_) {
+    if (flags & TIMER_ABSTIME_ && !timespec_is_zero(spec.value)) {
         struct timespec now = timespec_now(fd->timerfd.timer->clockid);
         spec.value = timespec_subtract(spec.value, now);
     }
 
-    lock(&fd->lock);
-    int err = timer_set(fd->timerfd.timer, spec, &old_spec);
-    unlock(&fd->lock);
+    // As Linux's timerfd_settime: the expirations of the old setting are
+    // gone (read said them after it); none of it comes after. Not under
+    // fd->lock, which the timer's callback takes under the timer's lock:
+    // setting it as it fired was a deadlock.
+    int err = timer_set_with(fd->timerfd.timer, spec, &old_spec, (timer_callback_t) timerfd_reset);
     if (err < 0)
         return err;
 
@@ -710,19 +959,7 @@ int_t sys_timerfd_gettime(fd_t f, addr_t curr_value_addr) {
         return _EINVAL;
 
     struct timer_spec spec;
-    lock(&fd->lock);
-    spec.interval = fd->timerfd.timer->interval;
-    if (fd->timerfd.timer->active) {
-        struct timespec now = timespec_now(fd->timerfd.timer->clockid);
-        struct timespec remaining = timespec_subtract(fd->timerfd.timer->end, now);
-        if (timespec_positive(remaining))
-            spec.value = remaining;
-        else
-            spec.value = (struct timespec) {0, 0};
-    } else {
-        spec.value = (struct timespec) {0, 0};
-    }
-    unlock(&fd->lock);
+    timer_get(fd->timerfd.timer, &spec);
 
     struct itimerspec_ value = timer_spec_from_real(spec);
     if (user_put(curr_value_addr, value))

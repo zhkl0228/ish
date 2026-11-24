@@ -10,9 +10,7 @@
 #include "kernel/memory.h"
 #include "util/verbosetrace.h"
 #include "kernel/mm.h"
-#ifdef GUEST_ARM64
 #include "asbestos/guest-arm64/host_fault.h"
-#endif
 
 #if ANON_MMAP_LIMIT_PAGES > 0
 _Atomic long anon_page_count;
@@ -316,7 +314,7 @@ void mm_release(struct mm *mm) {
     mm_release_from(mm, "unknown");
 }
 
-static addr_t do_mmap(addr_t addr, uint64_t len, dword_t prot, dword_t flags, fd_t fd_no, dword_t offset) {
+static addr_t do_mmap(addr_t addr, uint64_t len, dword_t prot, dword_t flags, fd_t fd_no, uint64_t offset) {
     int err;
     pages_t pages = (len + PAGE_SIZE - 1) / PAGE_SIZE;
     if (!pages) return _EINVAL;
@@ -333,7 +331,6 @@ static addr_t do_mmap(addr_t addr, uint64_t len, dword_t prot, dword_t flags, fd
         if (PGOFFSET(addr) != 0)
             return _EINVAL;
         page = PAGE(addr);
-#ifdef GUEST_ARM64
         // Reject hints that would overlap the stack region in low 4GB
         // or exceed the 48-bit user address limit.
         // Hints within low 4GB (up to the stack) are unchanged — V8
@@ -357,12 +354,10 @@ static addr_t do_mmap(addr_t addr, uint64_t len, dword_t prot, dword_t flags, fd
                 page = 0;
             }
         }
-#endif
         if (addr != 0 && !(flags & MMAP_FIXED) && !pt_is_hole(current->mem, page, pages))
             addr = 0;
     }
     if (addr == 0) {
-#ifdef GUEST_ARM64
         // V8 reserves its heap cage with:
         //     mmap(NULL, chunk_size, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0)
         //     (typical chunk_size: 128MB, reserved before mprotect'ing
@@ -393,9 +388,6 @@ static addr_t do_mmap(addr_t addr, uint64_t len, dword_t prot, dword_t flags, fd
             page = pt_find_hole_for_reservation(current->mem, pages);
         else
             page = pt_find_hole(current->mem, pages);
-#else
-        page = pt_find_hole(current->mem, pages);
-#endif
         if (page == BAD_PAGE)
             return _ENOMEM;
     }
@@ -407,7 +399,6 @@ static addr_t do_mmap(addr_t addr, uint64_t len, dword_t prot, dword_t flags, fd
         // PROT_NONE mappings (guard regions) don't consume real memory,
         // so don't count them against the anonymous page limit.
         bool is_prot_none = !(prot & P_READ) && !(prot & P_WRITE) && !(prot & P_EXEC);
-#ifdef GUEST_ARM64
         // Three kinds of mapping are address space, not memory, and become a
         // lazy mem_reservation: no host memory until a page is mprotect'ed or
         // touched (mem_ptr's demand-map path, pt_set_flags' commit).
@@ -454,7 +445,6 @@ static addr_t do_mmap(addr_t addr, uint64_t len, dword_t prot, dword_t flags, fd
                 return err;
             return page << PAGE_BITS;
         }
-#endif
 #if ANON_MMAP_LIMIT_PAGES > 0
         if (!is_prot_none && !anon_pages_reserve((long)pages)) {
             anon_limit_report("mmap", (long)pages);
@@ -501,7 +491,6 @@ addr_t sys_mmap2(addr_t addr, dword_t len, dword_t prot, dword_t flags, fd_t fd_
     return mmap_common(addr, len, prot, flags, fd_no, offset << PAGE_BITS);
 }
 
-#if defined(GUEST_ARM64)
 // ARM64 mmap syscall: offset is passed directly (not shifted like mmap2)
 // and takes 6 direct arguments (not a pointer to a struct like x86 mmap)
 addr_t sys_mmap64(addr_t addr, addr_t len, dword_t prot, dword_t flags, fd_t fd_no, qword_t offset) {
@@ -514,11 +503,12 @@ addr_t sys_mmap64(addr_t addr, addr_t len, dword_t prot, dword_t flags, fd_t fd_
         return _EINVAL;
 
     write_wrlock(&current->mem->lock);
-    addr_t res = do_mmap(addr, len, prot, flags, fd_no, (dword_t)offset);
+    // all 64 bits of it: cut to 32, a file mapped at 5GB was mapped at 1GB
+    // (CPython's test_mmap test_large_offset)
+    addr_t res = do_mmap(addr, len, prot, flags, fd_no, offset);
     write_wrunlock(&current->mem->lock);
     return res;
 }
-#endif
 
 struct mmap_arg_struct {
     dword_t addr, len, prot, flags, fd, offset;
@@ -578,8 +568,21 @@ int_t sys_munmap(addr_t addr, addr_t len) {
 #define MREMAP_MAYMOVE_ 1
 #define MREMAP_FIXED_ 2
 
-addr_t sys_mremap(addr_t addr, dword_t old_len, dword_t new_len, dword_t flags) {
-    STRACE("mremap(%#x, %#x, %#x, %d)", addr, old_len, new_len, flags);
+static addr_t mremap_locked(addr_t addr, addr_t old_len, addr_t new_len, dword_t flags);
+
+// Under the mem's lock, as every other change of its page table: it was
+// taken without, another thread faulting or mapping meanwhile. Lengths are
+// 64-bit, as arm64's registers give them.
+addr_t sys_mremap(addr_t addr, addr_t old_len, addr_t new_len, dword_t flags) {
+    write_wrlock(&current->mem->lock);
+    addr_t res = mremap_locked(addr, old_len, new_len, flags);
+    write_wrunlock(&current->mem->lock);
+    return res;
+}
+
+static addr_t mremap_locked(addr_t addr, addr_t old_len, addr_t new_len, dword_t flags) {
+    STRACE("mremap(%#llx, %#llx, %#llx, %d)", (unsigned long long) addr, (unsigned long long) old_len,
+           (unsigned long long) new_len, flags);
     if (PGOFFSET(addr) != 0)
         return _EINVAL;
     if (flags & ~(MREMAP_MAYMOVE_ | MREMAP_FIXED_))
@@ -588,8 +591,14 @@ addr_t sys_mremap(addr_t addr, dword_t old_len, dword_t new_len, dword_t flags) 
         FIXME("missing MREMAP_FIXED");
         return _EINVAL;
     }
-    pages_t old_pages = PAGE(old_len);
-    pages_t new_pages = PAGE(new_len);
+    // Whole pages, as Linux's PAGE_ALIGN: rounded down, a mapping shrunk to
+    // less than a page was taken for none, and its last page unmapped (CPython's
+    // mmap.resize(512) of a page at an offset, test_mmap's test_offset: the
+    // read after was a SIGSEGV). A length of 0 is EINVAL.
+    if (new_len == 0)
+        return _EINVAL;
+    pages_t old_pages = PAGE_ROUND_UP(old_len);
+    pages_t new_pages = PAGE_ROUND_UP(new_len);
 
     // shrinking always works
     if (new_pages <= old_pages) {
@@ -603,9 +612,11 @@ addr_t sys_mremap(addr_t addr, dword_t old_len, dword_t new_len, dword_t flags) 
     if (entry == NULL)
         return _EFAULT;
     dword_t pt_flags = entry->flags;
+    // all of it one mapping, as Linux's vma_to_resize: a page not mapped was
+    // read through a NULL entry (&& for ||), and iSH crashed
     for (page_t page = PAGE(addr); page < PAGE(addr) + old_pages; page++) {
         entry = mem_pt(current->mem, page);
-        if (entry == NULL && entry->flags != pt_flags)
+        if (entry == NULL || entry->flags != pt_flags)
             return _EFAULT;
     }
     if (!(pt_flags & P_ANONYMOUS)) {
@@ -614,12 +625,37 @@ addr_t sys_mremap(addr_t addr, dword_t old_len, dword_t new_len, dword_t flags) 
     }
     page_t extra_start = PAGE(addr) + old_pages;
     pages_t extra_pages = new_pages - old_pages;
-    if (!pt_is_hole(current->mem, extra_start, extra_pages))
+    if (pt_is_hole(current->mem, extra_start, extra_pages)) {
+        int err = pt_map_nothing(current->mem, extra_start, extra_pages, pt_flags);
+        if (err < 0)
+            return err;
+        return addr;
+    }
+
+    // No room where it is: with MREMAP_MAYMOVE it moves, as Linux's
+    // move_vma, where it was ENOMEM (CPython's mmap.resize of an anonymous
+    // mapping, test_resize_up_private_anonymous_mapping; musl's realloc of
+    // a large block copies instead). The growth is mapped first, where it
+    // can fail; then each old page's data at the new place, as it was (its
+    // flags, a fork's copy-on-write and a shared mapping's sharing with it),
+    // and the old range unmapped.
+    if (!(flags & MREMAP_MAYMOVE_))
         return _ENOMEM;
-    int err = pt_map_nothing(current->mem, extra_start, extra_pages, pt_flags);
+    page_t dest = pt_find_hole(current->mem, new_pages);
+    if (dest == BAD_PAGE)
+        return _ENOMEM;
+    int err = pt_map_nothing(current->mem, dest + old_pages, extra_pages, pt_flags);
     if (err < 0)
         return err;
-    return addr;
+    for (pages_t i = 0; i < old_pages; i++) {
+        struct pt_entry *pt = mem_pt(current->mem, PAGE(addr) + i);
+        struct data *data = pt->data;
+        size_t offset = pt->offset;
+        unsigned page_flags = pt->flags;
+        pt_map_data(current->mem, dest + i, 1, data, offset, page_flags);
+    }
+    pt_unmap(current->mem, PAGE(addr), old_pages);
+    return (addr_t) dest << PAGE_BITS;
 }
 
 int_t sys_mprotect(addr_t addr, addr_t len, int_t prot) {
@@ -646,9 +682,12 @@ int_t sys_mprotect(addr_t addr, addr_t len, int_t prot) {
     return err;
 }
 
+// Pages MADV_DONTNEED zeroed in place, for /proc/ish/host: a guest gives them
+// back (JSC's scavenger), and they stay the app's, written with zeros
+_Atomic uint64_t st_dontneed_zeroed;
+
 dword_t sys_madvise(addr_t addr, dword_t len, dword_t advice) {
     STRACE("madvise(0x%llx, 0x%x, %d)", (unsigned long long)addr, len, advice);
-#ifdef GUEST_ARM64
     // tests/regress/regress_jit_fault.c, with ISH_JIT_FAULT_TEST set: the host
     // memory behind [addr, addr + len) goes away until an access faults on
     // it, the TLB left as it is. len is whole host pages.
@@ -660,7 +699,6 @@ dword_t sys_madvise(addr_t addr, dword_t len, dword_t advice) {
             return _EINVAL;
         return host_fault_test_arm(host, len) ? 0 : _EINVAL;
     }
-#endif
     if (advice == 4 && vma_trace_hits_file(addr, len))
         fprintf(stderr, "[vma] madvise(0x%llx, 0x%x, DONTNEED) [file-backed] pid=%d\n",
                 (unsigned long long)addr, len, current->pid);
@@ -757,6 +795,7 @@ dword_t sys_madvise(addr_t addr, dword_t len, dword_t advice) {
             void *ptr = mem_ptr(current->mem, p, MEM_WRITE);
             if (ptr != NULL) {
                 memset(ptr, 0, PAGE_SIZE);
+                atomic_fetch_add_explicit(&st_dontneed_zeroed, 1, memory_order_relaxed);
                 any = true;
             }
             read_wrunlock(&current->mem->lock);
@@ -776,8 +815,34 @@ int_t sys_mlock(addr_t UNUSED(addr), dword_t UNUSED(len)) {
     return 0;
 }
 
-int_t sys_msync(addr_t UNUSED(addr), dword_t UNUSED(len), int_t UNUSED(flags)) {
-    return 0;
+// A shared file mapping is the host's (MAP_SHARED), its writes the file's as
+// they are made, so there is nothing to write back. What Linux refuses is
+// refused: an address not page-aligned and flags it has not, or both
+// MS_ASYNC and MS_SYNC, are EINVAL (CPython's mmap.flush at an offset not
+// page-aligned, test_flush_return_value); a range with a page not mapped
+// ENOMEM, a page reserved and not yet touched being mapped. It said success
+// of anything.
+#define MS_ASYNC_ 1
+#define MS_INVALIDATE_ 2
+#define MS_SYNC_ 4
+int_t sys_msync(addr_t addr, addr_t len, int_t flags) {
+    STRACE("msync(%#llx, %#llx, %#x)", (unsigned long long) addr, (unsigned long long) len, flags);
+    if (PGOFFSET(addr) != 0)
+        return _EINVAL;
+    if (flags & ~(MS_ASYNC_ | MS_INVALIDATE_ | MS_SYNC_))
+        return _EINVAL;
+    if ((flags & MS_ASYNC_) && (flags & MS_SYNC_))
+        return _EINVAL;
+    int err = 0;
+    read_wrlock(&current->mem->lock);
+    for (page_t page = PAGE(addr); page < PAGE(addr) + PAGE_ROUND_UP(len); page++) {
+        if (mem_pt(current->mem, page) == NULL && mem_find_reservation(current->mem, page) == NULL) {
+            err = _ENOMEM;
+            break;
+        }
+    }
+    read_wrunlock(&current->mem->lock);
+    return err;
 }
 
 // membarrier(2). JSC's concurrent JIT and WTF's parking-lot use this to make

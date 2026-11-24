@@ -19,7 +19,6 @@ struct tgroup;
 // Delete the process's POSIX timers, as execve does.
 void posix_timers_delete(struct tgroup *group);
 
-#ifdef GUEST_ARM64
 struct timeval_ {
     time_t_ sec;
     sqword_t usec;
@@ -28,16 +27,6 @@ struct timespec_ {
     time_t_ sec;
     sqword_t nsec;
 };
-#else
-struct timeval_ {
-    dword_t sec;
-    dword_t usec;
-};
-struct timespec_ {
-    dword_t sec;
-    dword_t nsec;
-};
-#endif
 struct timezone_ {
     dword_t minuteswest;
     dword_t dsttime;
@@ -81,6 +70,7 @@ struct tms_ {
     clock_t_ tms_cstime; /* system time of children */
 };
 
+int_t sys_getitimer(int_t which, addr_t val);
 int_t sys_setitimer(int_t which, addr_t new_val, addr_t old_val);
 uint_t sys_alarm(uint_t seconds);
 int_t sys_timer_create(dword_t clock, addr_t sigevent_addr, addr_t timer_addr);

@@ -1,3 +1,4 @@
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -100,16 +101,17 @@ static int proc_fstat(struct fd *fd, struct statbuf *stat) {
     return proc_entry_stat(&fd->proc.entry, stat);
 }
 
+// The content as show() makes it: a snapshot, fd->proc.data, which reads go
+// on in until one reads from the start again (proc_pread), as Linux's
+// seq_file has it. Made again for every read, a reader that took it in
+// several reads, as musl's fread does, got the parts of different contents
+// whenever it changed between them: lines twice, or none.
 static int proc_refresh_data(struct fd *fd) {
     mode_t_ mode = proc_entry_mode(&fd->proc.entry);
     if (S_ISDIR(mode))
         return _EISDIR;
     assert(S_ISREG(mode));
 
-    if (fd->proc.data.data == NULL) {
-        fd->proc.data.capacity = 4096;
-        fd->proc.data.data = malloc(fd->proc.data.capacity); // default size
-    }
     // Not every regular proc entry has a show(): entries that serve their
     // content through pread/pwrite (e.g. /proc/<pid>/mem) leave it NULL, and
     // proc_entry_mode() defaults a typeless entry to S_IFREG, so the S_ISDIR
@@ -118,11 +120,26 @@ static int proc_refresh_data(struct fd *fd) {
     if (fd->proc.entry.meta->show == NULL)
         return _EINVAL;
 
+    if (fd->proc.data.data == NULL) {
+        fd->proc.data.capacity = 4096;
+        fd->proc.data.data = malloc(fd->proc.data.capacity); // default size
+        if (fd->proc.data.data == NULL)
+            return _ENOMEM;
+    }
     fd->proc.data.size = 0;
+    fd->proc.data.failed = false;
     struct proc_entry *entry = &fd->proc.entry;
     int err = entry->meta->show(entry, &fd->proc.data);
-    if (err < 0)
+    // A part show() could not have the memory for leaves the content short:
+    // not to be read as the whole (proc_buf_write, proc_printf)
+    if (err >= 0 && fd->proc.data.failed)
+        err = _ENOMEM;
+    if (err < 0) {
+        // no snapshot: the next read makes one
+        free(fd->proc.data.data);
+        fd->proc.data.data = NULL;
         return err;
+    }
     return 0;
 }
 
@@ -150,11 +167,16 @@ static off_t_ proc_seek(struct fd *fd, off_t_ off, int whence) {
         return fd->offset;
     }
 
-    int err = proc_refresh_data(fd);
-    if (err < 0)
-        return err;
+    // Only the end needs the content's size: a seek elsewhere leaves the
+    // content to the read from there (proc_pread), which makes it if there
+    // is none yet
+    if (whence == LSEEK_END) {
+        int err = proc_refresh_data(fd);
+        if (err < 0)
+            return err;
+    }
 
-    err = generic_seek(fd, off, whence, fd->proc.data.size);
+    int err = generic_seek(fd, off, whence, fd->proc.data.size);
     if (err < 0)
         return err;
 
@@ -163,13 +185,17 @@ static off_t_ proc_seek(struct fd *fd, off_t_ off, int whence) {
 
 static ssize_t proc_pread(struct fd *fd, void *buf, size_t bufsize, off_t off) {
     if (fd->proc.entry.meta->pread) {
-        struct proc_data data = {buf, bufsize, bufsize};
+        struct proc_data data = {.data = buf, .size = bufsize, .capacity = bufsize, .failed = false};
         return fd->proc.entry.meta->pread(&fd->proc.entry, &data, off);
     }
     
-    int err = proc_refresh_data(fd);
-    if (err < 0)
-        return err;
+    // From the start, the content as it is now; further on, the snapshot the
+    // reader is in
+    if (off == 0 || fd->proc.data.data == NULL) {
+        int err = proc_refresh_data(fd);
+        if (err < 0)
+            return err;
+    }
 
     const char *data = fd->proc.data.data;
     assert(data != NULL);
@@ -194,7 +220,7 @@ static void proc_buf_write(struct proc_data *buf, const void *data, size_t size,
             new_capacity *= 2;
         char *new_data = realloc(buf->data, new_capacity);
         if (new_data == NULL) {
-            // just give up, error reporting is a pain
+            buf->failed = true;
             return;
         }
         buf->data = new_data;
@@ -214,7 +240,7 @@ static ssize_t proc_pwrite(struct fd *fd, const void *buf, size_t bufsize, off_t
     assert(S_ISREG(mode));
     
     if (fd->proc.entry.meta->pwrite) {
-        struct proc_data data = {(char *) buf, bufsize, bufsize};
+        struct proc_data data = {.data = (char *) buf, .size = bufsize, .capacity = bufsize, .failed = false};
         return fd->proc.entry.meta->pwrite(&fd->proc.entry, &data, off);
     }
     
@@ -222,7 +248,7 @@ static ssize_t proc_pwrite(struct fd *fd, const void *buf, size_t bufsize, off_t
         return _EPERM;
     }
     
-    struct proc_data data = {(char *)buf, bufsize, bufsize};
+    struct proc_data data = {.data = (char *) buf, .size = bufsize, .capacity = bufsize, .failed = false};
     fd->proc.entry.meta->update(&fd->proc.entry, &data);
     
     return bufsize;
@@ -308,7 +334,7 @@ void proc_printf(struct proc_data *buf, const char *format, ...) {
             proc_buf_append(buf, big, (size_t) size);
             free(big);
         } else {
-            proc_buf_append(buf, data, sizeof(data) - 1);
+            buf->failed = true;
         }
     } else if (size > 0) {
         proc_buf_append(buf, data, (size_t) size);

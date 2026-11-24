@@ -7,7 +7,6 @@
 
 #import "ISHShellExecutor.h"
 #import "AppDelegate.h"
-#import "LinuxInterop.h"
 
 #include "kernel/init.h"
 #include "kernel/calls.h"
@@ -147,7 +146,6 @@ static dispatch_once_t _onceToken;
     fcntl([ctx stdoutPipe][0], F_SETFL, O_NONBLOCK);
     fcntl([ctx stderrPipe][0], F_SETFL, O_NONBLOCK);
 
-#if !ISH_LINUX
     struct task *saved_current = current;
 
     // Create new process
@@ -256,11 +254,6 @@ static dispatch_once_t _onceToken;
     [self startReaderForPipe:[ctx stderrPipe][0] context:ctx isStdErr:YES];
 
     return ctx.guestPid;
-#else
-    // TODO: Linux implementation using linux_start_session
-    [ctx cleanup];
-    return ISHShellExecutorErrorProcessCreationFailed;
-#endif
 }
 
 + (ISHShellExecutionResult *)executeCommandSync:(NSString *)command

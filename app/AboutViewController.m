@@ -139,9 +139,7 @@
                                               toURL:[documents URLByAppendingPathComponent:@"roots copy"]
                                               error:nil];
     } else if (cell == self.resetMountsCell) {
-#if !ISH_LINUX
         iosfs_clear_all_bookmarks();
-#endif
     } else if (cell == self.resetRootfsCell) {
         [self confirmResetRootfs];
     }

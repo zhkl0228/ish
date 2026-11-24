@@ -11,14 +11,7 @@
 #endif
 
 // Include architecture-specific CPU state definition
-#if defined(GUEST_X86)
-#include "emu/arch/x86/cpu.h"
-#elif defined(GUEST_ARM64)
 #include "emu/arch/arm64/cpu.h"
-#else
-// Default to x86 for backward compatibility
-#include "emu/arch/x86/cpu.h"
-#endif
 
 // Common CPU interface
 struct cpu_state;

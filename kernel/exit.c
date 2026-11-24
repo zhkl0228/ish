@@ -35,6 +35,10 @@ __attribute__((weak)) void restore_termios(void) {}
 static bool delete_timers_if_last(struct task *task) {
     struct timer *timers[1 + TIMERS_MAX];
     int count = 0;
+    // and the thread sampling for the CPU-time itimers, joined after: it uses
+    // the group, and takes pids_lock (kernel/time.c)
+    bool join_cpu_itimer = false;
+    pthread_t cpu_itimer_thread;
     lock(&pids_lock);
     struct tgroup *group = task->group;
     bool last = true;
@@ -56,10 +60,21 @@ static bool delete_timers_if_last(struct task *task) {
             timer->timer = NULL;
             timer->tgroup = NULL;
         }
+        lock(&group->lock);
+        if (group->cpu_itimer_running) {
+            group->cpu_itimer_stop = true;
+            group->cpu_itimer_running = false;
+            notify(&group->cpu_itimer_armed);
+            cpu_itimer_thread = group->cpu_itimer_thread;
+            join_cpu_itimer = true;
+        }
+        unlock(&group->lock);
     }
     unlock(&pids_lock);
     for (int i = 0; i < count; i++)
         timer_free(timers[i]);
+    if (join_cpu_itimer)
+        pthread_join(cpu_itimer_thread, NULL);
     return last;
 }
 
@@ -105,11 +120,9 @@ noreturn void do_exit(int status) {
         dump_pc_hist();
         if (current->pid == 1) dump_pc_trace();
     }
-#ifdef GUEST_ARM64
     { extern void dump_wx_stats(void);
       static int wx_dumped = 0;
       if (!wx_dumped && current && current->pid == 1) { wx_dumped = 1; dump_wx_stats(); } }
-#endif
     // If this thread was already marked as leaked by the safety valve,
     // the group leader has finished exiting and the group struct may be
     // freed. Don't touch any shared state — just kill the host thread.
@@ -122,14 +135,10 @@ noreturn void do_exit(int status) {
     // pids_lock below.
     atomic_store(&current->exit_started, true);
     bool last = delete_timers_if_last(current);
-#ifdef GUEST_ARM64
     // before the parent hears of it, as Linux's exit_sem: a semaphore the
     // process held with SEM_UNDO is free once wait returns
     if (last)
         sem_exit(current->group);
-#else
-    (void) last;
-#endif
     sockrestart_task_exit(current);
 
     // has to happen before mm_release
@@ -601,10 +610,8 @@ static void halt_system(void) {
     restore_termios();
     extern void dump_pc_hist(void);
     dump_pc_hist();
-#ifdef GUEST_ARM64
     extern void dump_wx_stats(void);
     dump_wx_stats();
-#endif
 
     // The caller exits the host process, which also ends any guest thread
     // still running (stuck in JIT loops after do_exit_group force cleanup).
@@ -687,6 +694,7 @@ static bool reap_if_zombie(struct task *task, struct siginfo_ *info_out, struct 
         sigqueue_free(sigqueue);
     }
     cond_destroy(&task->group->child_exit);
+    cond_destroy(&task->group->cpu_itimer_armed);
     task_leave_session(task);
     list_remove(&task->group->pgroup);
     free(task->group);

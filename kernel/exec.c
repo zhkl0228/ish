@@ -9,12 +9,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "misc.h"
 #include "kernel/calls.h"
 #include "kernel/random.h"
 #include "kernel/errno.h"
 #include "fs/fd.h"
+#include "fs/path.h"
 #include "kernel/elf.h"
 #include "kernel/vdso.h"
 #include "kernel/mm.h"
@@ -23,18 +25,12 @@
 #ifdef ISH_JIT
 #include "asbestos/guest-arm64/jit.h"
 #endif
-#include "tools/ptraceomatic-config.h"
 
 #define ARGV_MAX 32 * PAGE_SIZE
 
 // Use architecture-appropriate ELF structures
-#if defined(GUEST_ARM64)
 typedef struct elf_header64 exec_elf_header;
 typedef struct prg_header64 exec_prg_header;
-#else
-typedef struct elf_header exec_elf_header;
-typedef struct prg_header exec_prg_header;
-#endif
 
 struct exec_args {
     // number of arguments
@@ -254,17 +250,10 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
 
         if (!load_addr_set && header.type == ELF_DYNAMIC) {
             // see giant comment in linux/fs/binfmt_elf.c, around line 950
-#ifdef GUEST_ARM64
             // ARM64: Always use dynamic placement to avoid conflicts with
             // V8's CodeRange hint at 0x574c0000 (the x86 bias 0x56555000
             // places large binaries like node right on top of it)
             bias = find_hole_for_elf(&header, ph);
-#else
-            if (interp_name)
-                bias = 0x56555000; // I have no idea how this number was arrived at
-            else
-                bias = find_hole_for_elf(&header, ph);
-#endif
         }
 
         if ((err = load_entry(ph[i], bias, fd)) < 0) {
@@ -287,10 +276,8 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
 
     addr_t entry = bias + header.entry_point;
     addr_t interp_base = 0;
-#ifdef GUEST_ARM64
     current->mm->exe_bias = bias;
     current->mm->exe_entry = entry;
-#endif
 
     if (interp_name) {
         // map dat shit! interpreter edition
@@ -326,11 +313,8 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
         goto beyond_hope;
     mem_pt(current->mem, vdso_page)->data->name = "[vdso]";
     current->mm->vdso = vdso_page << PAGE_BITS;
-#if !defined(GUEST_ARM64)
-    addr_t vdso_entry = current->mm->vdso + ((exec_elf_header *) vdso_data)->entry_point;
-#endif
 
-    // map 3 empty "vvar" pages to satisfy ptraceomatic
+    // the empty "vvar" pages after it, as Linux maps [vvar]
     lost = "the vvar pages";
     page_t vvar_page = pt_find_hole(current->mem, VVAR_PAGES);
     if (vvar_page == BAD_PAGE)
@@ -342,7 +326,6 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
     // STACK TIME!
     lost = "the stack";
 
-#ifdef GUEST_ARM64
     // ARM64: stack near top of 48-bit address space. Linux maps 128 KB of
     // stack below the arguments at exec (setup_arg_pages' stack_expand), and
     // musl's pthread_getattr_np measures the main thread's stack by probing
@@ -355,19 +338,7 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
         goto beyond_hope;
     write_wrunlock(&current->mem->lock);
     addr_t sp = STACK_TOP_ADDR;
-#else
-    // allocate 1 page of stack at 0xffffd, and let it grow down
-    if ((err = pt_map_nothing(current->mem, 0xffffd, 1, P_WRITE | P_GROWSDOWN)) < 0)
-        goto beyond_hope;
-    // Map a read-only guard page above the stack (page 0xffffe).
-    if ((err = pt_map_nothing(current->mem, 0xffffe, 1, P_READ)) < 0)
-        goto beyond_hope;
-    // that was the last memory mapping
-    write_wrunlock(&current->mem->lock);
-    dword_t sp = 0xffffe000;
-#endif
-    // on 32-bit linux, there's 4 empty bytes at the very bottom of the stack.
-    // on 64-bit linux, there's 8. make ptraceomatic happy. (a major theme in this file)
+    // 8 empty bytes at the very bottom of the stack, as 64-bit Linux leaves
     sp -= sizeof(void *);
 
     err = _EFAULT;
@@ -387,11 +358,7 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
     current->mm->argv_start = sp;
     sp = align_stack(sp);
 
-#if defined(GUEST_ARM64)
     addr_t platform_addr = sp = copy_string(sp, "aarch64");
-#else
-    addr_t platform_addr = sp = copy_string(sp, "i686");
-#endif
     if (sp == 0)
         goto out_free_interp;
     // 16 random bytes so no system call is needed to seed a userspace RNG
@@ -407,15 +374,8 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
 
     // declare elf aux now so we can know how big it is
     struct aux_ent aux[] = {
-#if !defined(GUEST_ARM64)
-        {AX_SYSINFO, vdso_entry},
-#endif
         {AX_SYSINFO_EHDR, current->mm->vdso},
-#if defined(GUEST_ARM64)
         {AX_HWCAP, 0x11f}, // FP|ASIMD|EVTSTRM|AES|PMULL|ATOMICS — AES+PMULL enables ring's gcm_ghash_clmul (64-bit CLMUL) path
-#else
-        {AX_HWCAP, 0x00000000}, // suck that
-#endif
         {AX_PAGESZ, PAGE_SIZE},
         {AX_CLKTCK, 0x64},
         {AX_PHDR, load_addr + header.prghead_off},
@@ -443,23 +403,13 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
     addr_t p = sp;
 
     // argc
-#if defined(GUEST_ARM64)
     {uint64_t argc64 = argv.count; if (user_put(p, argc64)) return _EFAULT;}
-#else
-    if (user_put(p, argv.count))
-        return _EFAULT;
-#endif
     p += ELF_PTR_SIZE;
 
     // argv
     size_t argc = argv.count;
     while (argc-- > 0) {
-#if defined(GUEST_ARM64)
         {uint64_t ptr64 = argv_addr; if (user_put(p, ptr64)) return _EFAULT;}
-#else
-        if (user_put(p, argv_addr))
-            return _EFAULT;
-#endif
         argv_addr += user_strlen(argv_addr) + 1;
         p += ELF_PTR_SIZE;
     }
@@ -468,12 +418,7 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
     // envp
     size_t envc = envp.count;
     while (envc-- > 0) {
-#if defined(GUEST_ARM64)
         {uint64_t ptr64 = envp_addr; if (user_put(p, ptr64)) return _EFAULT;}
-#else
-        if (user_put(p, envp_addr))
-            return _EFAULT;
-#endif
         envp_addr += user_strlen(envp_addr) + 1;
         p += ELF_PTR_SIZE;
     }
@@ -488,7 +433,6 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
     current->mm->auxv_end = p;
 
     current->mm->stack_start = sp;
-#if defined(GUEST_ARM64)
     current->cpu.sp = sp;
     current->cpu.pc = entry;
     // Zero all general-purpose registers
@@ -501,25 +445,6 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
     current->cpu.fpcr = 0;
     current->cpu.fpsr = 0;
 
-#else
-    current->cpu.esp = sp;
-    current->cpu.eip = entry;
-    current->cpu.fcw = 0x37f;
-
-    // This code was written when I discovered that the glibc entry point
-    // interprets edx as the address of a function to call on exit, as
-    // specified in the ABI. This register is normally set by the dynamic
-    // linker, so everything works fine until you run a static executable.
-    current->cpu.eax = 0;
-    current->cpu.ebx = 0;
-    current->cpu.ecx = 0;
-    current->cpu.edx = 0;
-    current->cpu.esi = 0;
-    current->cpu.edi = 0;
-    current->cpu.ebp = 0;
-    collapse_flags(&current->cpu);
-    current->cpu.eflags = 0;
-#endif
 
     err = 0;
 out_free_interp:
@@ -660,7 +585,12 @@ static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, 
     if (args_rest_size + extra_args_size >= ARGV_MAX)
         return _E2BIG;
 
-    char new_argv_buf[ARGV_MAX];
+    // On the heap: up to ARGV_MAX, 128KB, and on the stack it was in every
+    // exec's frame (inlined into __do_execve), which overflowed a musl host's
+    // 128KB thread stack in any exec from a guest thread but the first
+    char *new_argv_buf = malloc(extra_args_size + args_rest_size);
+    if (new_argv_buf == NULL)
+        return _ENOMEM;
     struct exec_args new_argv = {.args = new_argv_buf};
     size_t n = 0;
     strcpy(new_argv_buf, interpreter);
@@ -678,14 +608,16 @@ static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, 
     new_argv.count += argv_rest.count;
 
     struct fd *interpreter_fd = generic_open(interpreter, O_RDONLY_, 0);
-    if (IS_ERR(interpreter_fd))
+    if (IS_ERR(interpreter_fd)) {
+        free(new_argv_buf);
         return PTR_ERR(interpreter_fd);
+    }
     int err = format_exec(interpreter_fd, interpreter, new_argv, envp);
     fd_close(interpreter_fd);
+    free(new_argv_buf);
     return err;
 }
 
-#if defined(GUEST_ARM64)
 // The name of a node or V8 option, to tell whether a program already gave one
 // that would be added: no leading dashes, no "no-" (--opt and --no-opt set
 // the same flag), no value, and '_' as '-' (V8 takes both).
@@ -743,7 +675,6 @@ static bool node_option_given(const char *argv, const char *envp, const char *in
     }
     return false;
 }
-#endif
 
 int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) {
     ISH_SIGNPOST_SCOPE_BEGIN(exec, "execve", _exec_spid);
@@ -848,16 +779,10 @@ static ssize_t user_read_string_array(addr_t addr, char *buf, size_t max) {
     size_t i = 0;
     size_t p = 0;
     for (;;) {
-#if defined(GUEST_ARM64)
         uint64_t str_addr64;
         if (user_get(addr + i * ELF_PTR_SIZE, str_addr64))
             return _EFAULT;
         addr_t str_addr = (addr_t) str_addr64;
-#else
-        addr_t str_addr;
-        if (user_get(addr + i * sizeof(addr_t), str_addr))
-            return _EFAULT;
-#endif
         if (str_addr == 0)
             break;
         size_t str_p = 0;
@@ -895,11 +820,71 @@ static bool guest_file_is_shebang_script(const char *path) {
     return n == 2 && magic[0] == '#' && magic[1] == '!';
 }
 
+static dword_t execve_file(const char *filename, addr_t argv_addr, addr_t envp_addr);
+
 dword_t sys_execve(addr_t filename_addr, addr_t argv_addr, addr_t envp_addr) {
     char filename[MAX_PATH];
     if (user_read_string(filename_addr, filename, sizeof(filename)))
         return _EFAULT;
+    return execve_file(filename, argv_addr, envp_addr);
+}
 
+// execveat was execve, its directory fd taken for the address of its path:
+// EFAULT. musl's fexecve asks it (fd, "", AT_EMPTY_PATH), and falls back to
+// /proc/self/fd/<fd> only for ENOSYS: CPython's os.execve(fd) failed. The
+// file is named here as execve can open it: the fd's own path with
+// AT_EMPTY_PATH (what /proc/self/fd/<fd> names, so an unlinked file is not
+// found, as musl's fallback would not find it either), or the path from the
+// directory fd. As Linux, an fd of no regular file is EACCES, a relative
+// path from an fd of no directory ENOTDIR, and with AT_SYMLINK_NOFOLLOW a
+// symlink ELOOP.
+dword_t sys_execveat(fd_t dirfd, addr_t path_addr, addr_t argv_addr, addr_t envp_addr, dword_t flags) {
+    char path[MAX_PATH];
+    if (user_read_string(path_addr, path, sizeof(path)))
+        return _EFAULT;
+    STRACE("execveat(%d, \"%.1000s\", %#x) as execve:", dirfd, path, flags);
+    if (flags & ~(AT_EMPTY_PATH_ | AT_SYMLINK_NOFOLLOW_))
+        return _EINVAL;
+    char filename[MAX_PATH];
+    if (path[0] == '/' || (dirfd == AT_FDCWD_ && path[0] != '\0')) {
+        strcpy(filename, path);
+    } else if (path[0] == '\0') {
+        if (!(flags & AT_EMPTY_PATH_))
+            return _ENOENT;
+        struct fd *fd = dirfd == AT_FDCWD_ ? NULL : f_get(dirfd);
+        if (dirfd != AT_FDCWD_ && fd == NULL)
+            return _EBADF;
+        if (fd == NULL || !S_ISREG(fd->type))
+            return _EACCES;
+        int err = generic_getpath(fd, filename);
+        if (err < 0)
+            return err;
+    } else {
+        struct fd *at = f_get(dirfd);
+        if (at == NULL)
+            return _EBADF;
+        if (!S_ISDIR(at->type))
+            return _ENOTDIR;
+        char dir[MAX_PATH];
+        int err = generic_getpath(at, dir);
+        if (err < 0)
+            return err;
+        if (snprintf(filename, sizeof(filename), "%s/%s", strcmp(dir, "/") == 0 ? "" : dir, path) >=
+                (int) sizeof(filename))
+            return _ENAMETOOLONG;
+    }
+    if (flags & AT_SYMLINK_NOFOLLOW_) {
+        struct statbuf stat;
+        int err = generic_statat(AT_PWD, filename, &stat, false);
+        if (err < 0)
+            return err;
+        if (S_ISLNK(stat.mode))
+            return _ELOOP;
+    }
+    return execve_file(filename, argv_addr, envp_addr);
+}
+
+static dword_t execve_file(const char *filename, addr_t argv_addr, addr_t envp_addr) {
     int err = _ENOMEM;
     char *argv = malloc(ARGV_MAX);
     if (argv == NULL)
@@ -959,7 +944,6 @@ dword_t sys_execve(addr_t filename_addr, addr_t argv_addr, addr_t envp_addr) {
                filename, argbuf);
     }
 
-#if defined(GUEST_ARM64)
     // Add V8 flags to a program named node: the default set, or the jitless set
     // when asked for (both below). They choose speed and memory, not
     // correctness: node runs right with all of V8's tiers (checked 2026-11-22
@@ -1114,7 +1098,6 @@ dword_t sys_execve(addr_t filename_addr, addr_t argv_addr, addr_t envp_addr) {
         }
 
     }
-#endif
 
     // Native offload: check if this binary should run natively on the host.
     // [T-ish-offload-path-scope] OpenMinis#288: path policy + env escape hatch

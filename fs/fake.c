@@ -428,6 +428,10 @@ static struct fd *fakefs_open(struct mount *mount, const char *path, int flags, 
         if (flags & O_APPEND_) real_flags |= O_APPEND;
         if (flags & O_NONBLOCK_) real_flags |= O_NONBLOCK;
         if (flags & O_NOFOLLOW_) real_flags |= O_NOFOLLOW;
+#ifdef O_DIRECTORY
+        // as realfs_open: before the open, which a FIFO's waits in
+        if (flags & O_DIRECTORY_) real_flags |= O_DIRECTORY;
+#endif
         int fd_no = open(host_abs, real_flags, 0666);
         if (fd_no < 0) {
             return ERR_PTR(errno_map());
@@ -1104,7 +1108,10 @@ retry:
 
     // this is annoying
     char entry_path[MAX_PATH + 1];
-    realfs_getpath(fd, entry_path);
+    // an entry's meta.db row is found by its path: none without the dir's
+    int err = realfs_getpath(fd, entry_path);
+    if (err < 0)
+        return err;
 
     /* [T-ios-log-verbose-tier] Per-ENTRY trace, gated on the app's Verbose
      * level. Unconditional it produced 1.68 M lines / 183 MB in one day from
@@ -1597,7 +1604,7 @@ bool fakefs_bind_mount_translate_path(const char *path, char *out_path, size_t o
  *
  * Implementation is Apple-only: it relies on GCD (dispatch sources),
  * Clang blocks (Block_copy / Block_release), os_unfair_lock and mach
- * time. On non-Apple builds (Linux / x86 iSH), the public API still
+ * time. On non-Apple builds (the Linux CLI), the public API still
  * resolves at link time but every entry point is a no-op so the host
  * never observes events. This matches the upstream iSH stance of
  * keeping fs/fake.c portable while letting Apple-side ports layer
@@ -1692,7 +1699,7 @@ uint64_t fakefs_change_dropped_count(void) {
 #else /* !__APPLE__ — non-Apple stubs.
        *
        * The host (Swift / ObjC) bridge that consumes these events only
-       * exists on Apple. On Linux / x86 iSH builds we still need the
+       * exists on Apple. On Linux builds we still need the
        * three symbols to resolve at link time (callers in fs/fake.c and
        * fs/real.c invoke them unconditionally), but they must do
        * nothing — no ring buffer, no consumer queue, no host wakeups. */

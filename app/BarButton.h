@@ -11,8 +11,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface BarButton : UIButton
 
-// Its colors, of the terminal's theme (TerminalViewController): at rest,
-// pressed or ctrl toggled on, and of its name or glyph
+// Its colors, of the terminal's theme (TerminalViewController): at rest
+// (keyColor; backgroundColor follows it a moment later), pressed or ctrl
+// toggled on, and of its name or glyph (tintColor)
 - (void)setKeyColor:(UIColor *)key pressedColor:(UIColor *)pressed textColor:(UIColor *)text;
 @property (readonly) UIColor *keyColor;
 @property IBInspectable BOOL toggleable;

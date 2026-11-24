@@ -51,6 +51,12 @@ static inline bool ish_exec_trace(void) {
 #define has_feature __has_feature
 #endif
 
+// An AddressSanitizer build (tools/build-asan.sh): clang says so by
+// __has_feature, gcc by __SANITIZE_ADDRESS__
+#if has_feature(address_sanitizer) || defined(__SANITIZE_ADDRESS__)
+#define ISH_ASAN 1
+#endif
+
 // keywords
 #define bitfield unsigned int
 #define forceinline inline __attribute__((always_inline))
@@ -125,11 +131,7 @@ typedef int32_t sdword_t;
 typedef uint16_t word_t;
 typedef uint8_t byte_t;
 
-#ifdef GUEST_ARM64
 typedef uint64_t addr_t;
-#else
-typedef dword_t addr_t;
-#endif
 typedef dword_t uint_t;
 typedef sdword_t int_t;
 
@@ -137,11 +139,7 @@ typedef sdword_t pid_t_;
 typedef dword_t uid_t_;
 typedef word_t mode_t_;
 typedef sqword_t off_t_;
-#ifdef GUEST_ARM64
 typedef sqword_t time_t_;
-#else
-typedef dword_t time_t_;
-#endif
 typedef dword_t clock_t_;
 
 #define uint(size) glue3(uint,size,_t)

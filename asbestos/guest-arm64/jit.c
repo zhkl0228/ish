@@ -2400,7 +2400,7 @@ void ish_aot_register(const struct aot_module *m) {
 // hashing. An image made by an ish that differs in any of these would run
 // with stale offsets, so it is rejected (never 0: images from before this
 // check carry 0 there).
-static uint32_t jit_abi(void) {
+uint32_t jit_abi(void) {
     const uint64_t v[] = {
         JIT_CODE_VERSION, (uint64_t) prologue_words, entry_off(), (uint64_t) n_pinned, CTX_BLK, CTX_SLOT, CTX_FAR,
         FIBER_BLOCK_code, FIBER_BLOCK_addr, offsetof(struct fiber_block, native_entry),
@@ -2420,6 +2420,10 @@ static uint32_t jit_abi(void) {
     for (size_t i = 0; i < sizeof(v); i++)
         h = (h ^ ((const uint8_t *) v)[i]) * 16777619u;
     return h ? h : 1;
+}
+
+unsigned jit_code_version(void) {
+    return JIT_CODE_VERSION;
 }
 
 static void aot_init(void) {

@@ -62,7 +62,7 @@ struct rowcol {
 
 // The selection's menu (Copy, and Open Link for a link), and where it points:
 // the selection's rows
-@property UIEditMenuInteraction *editMenu API_AVAILABLE(ios(16.0));
+@property UIEditMenuInteraction *editMenu;
 @property CGRect selectionRect;
 @property (nullable) NSString *selectionLink;
 @property UIImpactFeedbackGenerator *pressFeedback;
@@ -526,24 +526,15 @@ static const int kMaxFontSize = 72;
                                                           rect[2].doubleValue, rect[3].doubleValue)
                                       fromView:webView];
         CGPoint top = CGPointMake(CGRectGetMidX(self.selectionRect), CGRectGetMinY(self.selectionRect));
-        if (@available(iOS 16.0, *)) {
-            if (self.editMenu == nil) {
-                self.editMenu = [[UIEditMenuInteraction alloc] initWithDelegate:self];
-                [self addInteraction:self.editMenu];
-            }
-            [self.editMenu presentEditMenuWithConfiguration:[UIEditMenuConfiguration configurationWithIdentifier:nil sourcePoint:top]];
-        } else {
-            // UIMenuController's actions are the first responder's
-            [self becomeFirstResponder];
-            UIMenuController.sharedMenuController.menuItems = @[
-                [[UIMenuItem alloc] initWithTitle:@"Open Link" action:@selector(openSelectedLink:)],
-            ];
-            [UIMenuController.sharedMenuController showMenuFromView:self rect:self.selectionRect];
+        if (self.editMenu == nil) {
+            self.editMenu = [[UIEditMenuInteraction alloc] initWithDelegate:self];
+            [self addInteraction:self.editMenu];
         }
+        [self.editMenu presentEditMenuWithConfiguration:[UIEditMenuConfiguration configurationWithIdentifier:nil sourcePoint:top]];
     }];
 }
 
-- (UIMenu *)editMenuInteraction:(UIEditMenuInteraction *)interaction menuForConfiguration:(UIEditMenuConfiguration *)configuration suggestedActions:(NSArray<UIMenuElement *> *)suggestedActions API_AVAILABLE(ios(16.0)) {
+- (UIMenu *)editMenuInteraction:(UIEditMenuInteraction *)interaction menuForConfiguration:(UIEditMenuConfiguration *)configuration suggestedActions:(NSArray<UIMenuElement *> *)suggestedActions {
     // Its own actions, not the first responder's: the keyboard need not be up
     __weak typeof(self) weakSelf = self;
     NSMutableArray<UIMenuElement *> *actions = [NSMutableArray new];
@@ -564,13 +555,8 @@ static const int kMaxFontSize = 72;
     [self.terminal.webView evaluateJavaScript:@"exports.clearSelection()" completionHandler:nil];
 }
 
-- (BOOL)canPerformAction:(SEL)action withSender:(id)sender {
-    if (action == @selector(openSelectedLink:))
-        return self.selectionLink != nil;
-    return [super canPerformAction:action withSender:sender];
-}
 
-- (CGRect)editMenuInteraction:(UIEditMenuInteraction *)interaction targetRectForConfiguration:(UIEditMenuConfiguration *)configuration API_AVAILABLE(ios(16.0)) {
+- (CGRect)editMenuInteraction:(UIEditMenuInteraction *)interaction targetRectForConfiguration:(UIEditMenuConfiguration *)configuration {
     return self.selectionRect;
 }
 
@@ -1131,9 +1117,7 @@ static const char *metaKeys = "abcdefghijklmnopqrstuvwxyz0123456789-=[]\\;',./";
     UIKeyCommand *command = [UIKeyCommand keyCommandWithInput:key
                                                 modifierFlags:modifiers
                                                        action:@selector(handleKeyCommand:)];
-    if (@available(iOS 15, *)) {
-        command.wantsPriorityOverSystemBehavior = YES;
-    }
+    command.wantsPriorityOverSystemBehavior = YES;
     [_keyCommands addObject:command];
 }
 

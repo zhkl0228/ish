@@ -1,0 +1,74 @@
+{
+  "_comment": [
+    "The AOT images the app links and the root they were recorded on, as",
+    "benchmark/aojit/publish_app_images.py published them: app/fetch-aot.py fetches",
+    "them in the app's build (base_url/set/<file>, objects xz-compressed) and checks",
+    "each sha256. Written by publish_app_images.py; do not edit."
+  ],
+  "abi": "bd14aa62",
+  "base_url": "https://hk.gzmtx.cn/ish-aot",
+  "images": {
+    "bash": {
+      "module": "/bin/bash",
+      "object": "aot_bash_ios.o",
+      "sha256": "dd2f0a9d58a8eff95891b2bf8f08ba670e1a36ec787cbe4c6eec8a33c92abdb9",
+      "size": 6760328,
+      "xz_size": 967872
+    },
+    "claude": {
+      "module": "claude.exe",
+      "object": "aot_claude_ios.o",
+      "sha256": "5e18d924e7803fa032a6cddb710ea03a9bc62cf3d6496eb39928468ad541bdba",
+      "size": 192551752,
+      "xz_size": 23188572
+    },
+    "jvm": {
+      "module": "libjvm.so",
+      "object": "aot_jvm_ios.o",
+      "sha256": "d97a0f27f303283250840e68bba6c796ad53eaf46412f16b2a676987b38dc15a",
+      "size": 168396448,
+      "xz_size": 20710320
+    },
+    "musl": {
+      "module": "ld-musl",
+      "object": "aot_musl_ios.o",
+      "sha256": "a1dc07f66b9cd3f693bca7378f0d772b4aad6b053750908ebaeec97674f54d7d",
+      "size": 4789704,
+      "xz_size": 724904
+    },
+    "node": {
+      "module": "/usr/bin/node",
+      "object": "aot_node_ios.o",
+      "sha256": "ea8989d836cfdfb59525efba8af4597c34c2978b089cad97a99a3a49e47c09b7",
+      "size": 149579376,
+      "xz_size": 18432488
+    },
+    "python": {
+      "module": "libpython3",
+      "object": "aot_python_ios.o",
+      "sha256": "c2a8d74769d64008dce02749be1de40e822c27571140fe09fbe918e96e6fc19b",
+      "size": 37607464,
+      "xz_size": 4807788
+    }
+  },
+  "recorded": {
+    "apk": {
+      "bash": "5.3.9-r1",
+      "maven": "3.9.16-r0",
+      "musl": "1.2.6-r3",
+      "nodejs": "24.22.3-r0",
+      "openjdk25-jdk": "25.0.5.1_p2-r0",
+      "python3": "3.14.10-r2"
+    },
+    "npm": {
+      "@anthropic-ai/claude-code": "2.1.331",
+      "@moonshot-ai/kimi-code": "2.7.3"
+    }
+  },
+  "rootfs": {
+    "file": "arm64-root.tar.gz",
+    "sha256": "6d6ee01668af8c120ce44bd8ec3da1b42e6301a9eb090783fc7ed232da3aeded",
+    "size": 30239249
+  },
+  "set": "bd14aa62-20261124-c94ff0c2"
+}

@@ -88,12 +88,10 @@ struct task *task_create_(struct task *parent) {
     // copied from the parent, which is in its clone
     atomic_store(&task->in_syscall, false);
 
-#ifdef GUEST_ARM64
     // Invalidate exclusive monitor after copying parent state.
     // Child must not inherit parent's LDXR reservation, as any context
     // switch or interrupt (including fork/clone) invalidates exclusive state.
     task->cpu.excl_addr = UINT64_MAX;
-#endif
 
     // The poke flag must not be inherited: poked_ptr would alias the parent's
     // _poked byte (cross-task pokes), and a copied _poked=true seeds a
@@ -196,9 +194,7 @@ struct task_run_cleanup {
 
 static void task_run_cleanup(void *arg) {
     struct task_run_cleanup *cleanup = arg;
-#ifdef GUEST_ARM64
     tlb_detach(cleanup->tlb);   // exited while running guest code
-#endif
     tlb_free(cleanup->tlb);
     // [T-ish-mm-leak-refcount-handoff] If the do_exit_group safety valve
     // orphaned this thread (stuck in an uninterruptible host syscall) it
@@ -271,15 +267,11 @@ void task_run_current(void) {
             pthread_exit(NULL);
         }
         read_wrlock_after_writers(&self->mem->lock);
-#ifdef GUEST_ARM64
         tlb->cpu = cpu;
         tlb_attach(tlb, &self->mem->mmu);
-#endif
         tlb_refresh(tlb, &self->mem->mmu);
         int interrupt = cpu_run_to_interrupt(cpu, tlb);
-#ifdef GUEST_ARM64
         tlb_detach(tlb);
-#endif
         read_wrunlock(&self->mem->lock);
         handle_interrupt(interrupt);
     }
@@ -301,10 +293,23 @@ static void *task_thread(void *vtask) {
     die("task_thread returned"); // above function call should never return
 }
 
+// A guest thread's host stack: 512KB, what iOS and macOS give a thread, set
+// so that every host gives the same (musl's default is 128KB, glibc's 8MB),
+// and a frame too large for the app fails on any host, not on the phone alone.
+// AddressSanitizer's redzones make frames some times larger.
+#ifdef ISH_ASAN
+#define TASK_STACK_SIZE ((size_t) 4 << 20)
+#else
+#define TASK_STACK_SIZE ((size_t) 512 << 10)
+#endif
+
 static pthread_attr_t task_thread_attr;
 __attribute__((constructor)) static void create_attr(void) {
     pthread_attr_init(&task_thread_attr);
     pthread_attr_setdetachstate(&task_thread_attr, PTHREAD_CREATE_DETACHED);
+    int err = pthread_attr_setstacksize(&task_thread_attr, TASK_STACK_SIZE);
+    if (err != 0)
+        die("pthread_attr_setstacksize(%zu): %s", TASK_STACK_SIZE, strerror(err));
 }
 
 int task_start(struct task *task) {

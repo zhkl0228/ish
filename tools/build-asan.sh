@@ -2,7 +2,7 @@
 # Configure and build an iSH command line tool with AddressSanitizer.
 #
 # usage: tools/build-asan.sh <build dir> [meson options...]
-#   e.g. tools/build-asan.sh build-asan -Dguest_arch=arm64
+#   e.g. tools/build-asan.sh build-asan
 #
 # ASan reports an out-of-bounds or freed heap access at the moment it
 # happens, where without it iSH aborts somewhere later in malloc or free, or

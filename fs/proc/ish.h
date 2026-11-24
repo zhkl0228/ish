@@ -13,3 +13,7 @@ extern bool (*get_user_default)(const char *name, char **buffer, size_t *size);
 extern bool (*set_user_default)(const char *name, char *buffer, size_t size);
 extern bool (*remove_user_default)(const char *name);
 extern char *(*get_documents_directory)(void);
+
+// The app's name and version ("iSH 2.1.0 (806)"), which it sets at its start
+// (AppDelegate.m); "" in the command line tool
+extern const char *proc_ish_version;

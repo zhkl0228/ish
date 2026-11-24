@@ -1,3 +1,6 @@
+// musl's netinet/tcp.h has struct tcp_info only with _GNU_SOURCE (glibc's by
+// default): a Linux host's TCP_INFO (sock_inet_list)
+#define _GNU_SOURCE
 #include "kernel/packet.h"
 #include "kernel/netcap.h"
 #include "kernel/inotify.h"
@@ -157,24 +160,14 @@ static int netlink_stub_reply(struct fd *fd, const void *req, size_t req_len) {
     return (int) req_len;
 }
 
-// A guest iovec: 64-bit base and length on arm64, 32-bit on i386.
-#ifdef GUEST_ARM64
+// A guest iovec: 64-bit base and length.
 typedef struct iovec64_ guest_iovec_t;
-#else
-typedef struct iovec_ guest_iovec_t;
-#endif
 
 static int netlink_stub_sendmsg(struct fd *sock, addr_t msghdr_addr) {
     addr_t iov_addr; uint64_t iovlen;
-#ifdef GUEST_ARM64
     struct msghdr64_ m;
     if (user_get(msghdr_addr, m)) return _EFAULT;
     iov_addr = (addr_t) m.msg_iov; iovlen = m.msg_iovlen;
-#else
-    struct msghdr_ m;
-    if (user_get(msghdr_addr, m)) return _EFAULT;
-    iov_addr = m.msg_iov; iovlen = m.msg_iovlen;
-#endif
     char req[4096]; size_t total = 0;
     for (uint64_t i = 0; i < iovlen && total < sizeof(req); i++) {
         guest_iovec_t iv;
@@ -254,17 +247,10 @@ static ssize_t netlink_stub_dequeue(struct fd *sock, int guest_flags, char *buf,
 
 static int netlink_stub_recvmsg(struct fd *sock, addr_t msghdr_addr, int flags) {
     addr_t iov_addr, name_addr; uint64_t iovlen; uint32_t namelen;
-#ifdef GUEST_ARM64
     struct msghdr64_ m;
     if (user_get(msghdr_addr, m)) return _EFAULT;
     iov_addr = (addr_t) m.msg_iov; iovlen = m.msg_iovlen;
     name_addr = (addr_t) m.msg_name; namelen = m.msg_namelen;
-#else
-    struct msghdr_ m;
-    if (user_get(msghdr_addr, m)) return _EFAULT;
-    iov_addr = m.msg_iov; iovlen = m.msg_iovlen;
-    name_addr = m.msg_name; namelen = m.msg_namelen;
-#endif
     char buf[NETLINK_STUB_DGRAM_MAX * 2];
     ssize_t n = netlink_stub_dequeue(sock, flags, buf, sizeof(buf));
     if (n < 0) return (int) n;
@@ -419,7 +405,7 @@ int_t sys_socket(dword_t domain, dword_t type, dword_t protocol) {
         return _EAFNOSUPPORT;
     int real_type = sock_type_to_real(type, protocol);
     if (real_type < 0)
-        return _EINVAL;
+        return real_type;
 
     // this hack makes mtr work
     if (type == SOCK_RAW_ && protocol == IPPROTO_RAW)
@@ -1116,7 +1102,7 @@ int_t sys_socketpair(dword_t domain, dword_t type, dword_t protocol, addr_t sock
         return _EAFNOSUPPORT;
     int real_type = sock_type_to_real(type, protocol);
     if (real_type < 0)
-        return _EINVAL;
+        return real_type;
 
     int sockets[2];
     int err = socketpair(real_domain, real_type, protocol, sockets);
@@ -1640,6 +1626,25 @@ int_t sys_getsockopt(fd_t sock_fd, dword_t level, dword_t option, addr_t value_a
             *value_p = sock->socket.type;
         else if (option == SO_PROTOCOL_)
             *value_p = sock->socket.protocol;
+    } else if (level == SOL_SOCKET_ && option == SO_ACCEPTCONN_) {
+        // Whether it listens, as Linux says of any socket. It was ENOPROTOOPT:
+        // iSH's Linux CLI, run in iSH, asks it of the host for /proc/net/tcp,
+        // and a server handed its socket (inetd, socket activation) asks it.
+        // A unix socket's is iSH's own word for it (unix_listeners, as
+        // /proc/net/unix says): Darwin's SO_ACCEPTCONN said no of every one.
+        if (value_len != sizeof(dword_t))
+            return _EINVAL;
+        int listening = 0;
+        if (sock->socket.domain == AF_LOCAL_) {
+            lock(&peer_lock);
+            listening = !list_null(&sock->socket.unix_listening);
+            unlock(&peer_lock);
+        } else {
+            socklen_t len = sizeof(listening);
+            if (getsockopt(sock->real_fd, SOL_SOCKET, SO_ACCEPTCONN, &listening, &len) < 0)
+                return errno_map();
+        }
+        *(dword_t *) value = listening != 0;
     } else if (level == SOL_SOCKET_ && option == SO_PEERCRED_) {
         struct ucred_ *cred = (struct ucred_ *) value;
         if (value_len != sizeof(*cred))
@@ -1738,7 +1743,6 @@ int_t sys_sendmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
     // Read the guest msghdr struct into our internal 32-bit representation
     struct msghdr msg;
     struct msghdr_ msg_fake;
-#ifdef GUEST_ARM64
     struct msghdr64_ msg_fake64;
     if (user_get(msghdr_addr, msg_fake64))
         return _EFAULT;
@@ -1749,10 +1753,6 @@ int_t sys_sendmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
     msg_fake.msg_control = (addr_t)msg_fake64.msg_control;
     msg_fake.msg_controllen = (uint_t)msg_fake64.msg_controllen;
     msg_fake.msg_flags = msg_fake64.msg_flags;
-#else
-    if (user_get(msghdr_addr, msg_fake))
-        return _EFAULT;
-#endif
 
     // msg_name
     struct sockaddr_max_ msg_name;
@@ -1767,7 +1767,6 @@ int_t sys_sendmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
     }
 
     // msg_iovec
-#ifdef GUEST_ARM64
     struct iovec64_ msg_iov_fake64[msg_fake.msg_iovlen];
     if (user_read(msg_fake.msg_iov, msg_iov_fake64, sizeof(msg_iov_fake64)))
         return _EFAULT;
@@ -1782,22 +1781,6 @@ int_t sys_sendmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
         if (user_read((addr_t)msg_iov_fake64[i].base, msg_iov[i].iov_base, msg_iov[i].iov_len))
             goto out_free_iov;
     }
-#else
-    struct iovec_ msg_iov_fake[msg_fake.msg_iovlen];
-    if (user_get(msg_fake.msg_iov, msg_iov_fake))
-        return _EFAULT;
-    struct iovec msg_iov[msg_fake.msg_iovlen];
-    memset(msg_iov, 0, sizeof(msg_iov));
-    msg.msg_iov = msg_iov;
-    msg.msg_iovlen = sizeof(msg_iov) / sizeof(msg_iov[0]);
-    for (size_t i = 0; i < (size_t) msg.msg_iovlen; i++) {
-        msg_iov[i].iov_len = msg_iov_fake[i].len;
-        msg_iov[i].iov_base = malloc(msg_iov_fake[i].len);
-        err = _EFAULT;
-        if (user_read(msg_iov_fake[i].base, msg_iov[i].iov_base, msg_iov_fake[i].len))
-            goto out_free_iov;
-    }
-#endif
 
     // msg_control
     uint8_t msg_control_buf[2048];
@@ -1825,12 +1808,16 @@ int_t sys_sendmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
         for (cmsg = (void *) msg_control; cmsg != NULL; cmsg = CMSG_NXTHDR_(cmsg, mhdr_end)) {
             if (cmsg->level != SOL_SOCKET_)
                 continue;
+            // EINVAL by way of the cleanup: returned at once, the iovec's
+            // buffers were never freed
+            err = _EINVAL;
             if (cmsg->type != SCM_RIGHTS_)
-                return _EINVAL;
+                goto out_free_iov;
             num_fds += (cmsg->len - sizeof(struct cmsghdr_)) / sizeof(fd_t);
         }
+        err = _EINVAL;
         if (num_fds > 253) // *magic*
-            return _EINVAL;
+            goto out_free_iov;
 
         if (num_fds > 0) {
             // send one (1) real fd and put the rest in a struct scm
@@ -1858,7 +1845,18 @@ int_t sys_sendmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
                 fd_t *fds = (void *) cmsg->data;
                 for (unsigned i = 0; i < (cmsg->len - sizeof(struct cmsghdr_)) / sizeof(fd_t); i++) {
                     STRACE(" sending fd %d", fds[i]);
-                    scm->fds[fd_i++] = fd_retain(f_get(fds[i]));
+                    // An fd that is not is EBADF, nothing sent, as Linux's
+                    // scm_fp_copy. It was retained through NULL, and iSH
+                    // crashed (CPython's test_socket,
+                    // test_sendmsg_reentrant_ancillary_mutation).
+                    struct fd *passed = f_get(fds[i]);
+                    if (passed == NULL) {
+                        scm->num_fds = fd_i;
+                        scm_free(scm);
+                        err = _EBADF;
+                        goto out_free_iov;
+                    }
+                    scm->fds[fd_i++] = fd_retain(passed);
                 }
             }
             lock(&peer_lock);
@@ -1937,7 +1935,6 @@ int_t sys_recvmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
 
     // Read the guest msghdr struct into our internal 32-bit representation
     struct msghdr_ msg_fake;
-#ifdef GUEST_ARM64
     struct msghdr64_ msg_fake64;
     if (user_get(msghdr_addr, msg_fake64))
         return _EFAULT;
@@ -1948,10 +1945,6 @@ int_t sys_recvmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
     msg_fake.msg_control = (addr_t)msg_fake64.msg_control;
     msg_fake.msg_controllen = (uint_t)msg_fake64.msg_controllen;
     msg_fake.msg_flags = msg_fake64.msg_flags;
-#else
-    if (user_get(msghdr_addr, msg_fake))
-        return _EFAULT;
-#endif
 
     struct msghdr msg;
 
@@ -1982,7 +1975,6 @@ int_t sys_recvmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
         return _EINVAL;
 
     // msg_iovec (no initial content)
-#ifdef GUEST_ARM64
     struct iovec64_ msg_iov_fake64[msg_fake.msg_iovlen];
     if (user_read(msg_fake.msg_iov, msg_iov_fake64, sizeof(msg_iov_fake64)))
         return _EFAULT;
@@ -1995,18 +1987,6 @@ int_t sys_recvmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
         msg_iov[i].iov_len = (size_t)msg_iov_fake64[i].len;
         msg_iov[i].iov_base = malloc(msg_iov[i].iov_len);
     }
-#else
-    struct iovec_ msg_iov_fake[msg_fake.msg_iovlen];
-    if (user_get(msg_fake.msg_iov, msg_iov_fake))
-        return _EFAULT;
-    struct iovec msg_iov[msg_fake.msg_iovlen];
-    msg.msg_iov = msg_iov;
-    msg.msg_iovlen = sizeof(msg_iov) / sizeof(msg_iov[0]);
-    for (size_t i = 0; i < (size_t) msg.msg_iovlen; i++) {
-        msg_iov[i].iov_len = msg_iov_fake[i].len;
-        msg_iov[i].iov_base = malloc(msg_iov_fake[i].len);
-    }
-#endif
 
     // Same iOS-safe wait pattern as sys_recvfrom: avoid unbounded blocking
     // in host recvmsg() so guest signals can always be delivered. But only
@@ -2061,11 +2041,7 @@ int_t sys_recvmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
         if (chunk_size > n)
             chunk_size = n;
         if (chunk_size > 0) {
-#ifdef GUEST_ARM64
             if (user_write(msg_iov_bases[i], msg_iov[i].iov_base, chunk_size))
-#else
-            if (user_write(msg_iov_fake[i].base, msg_iov[i].iov_base, chunk_size))
-#endif
                 return _EFAULT;
         }
         n -= chunk_size;
@@ -2144,16 +2120,11 @@ int_t sys_recvmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
         msg_fake.msg_flags |= MSG_CTRUNC_;
 
     // Write back the updated msghdr to guest memory
-#ifdef GUEST_ARM64
     msg_fake64.msg_namelen = msg_fake.msg_namelen;
     msg_fake64.msg_controllen = msg_fake.msg_controllen;
     msg_fake64.msg_flags = msg_fake.msg_flags;
     if (user_put(msghdr_addr, msg_fake64))
         return _EFAULT;
-#else
-    if (user_put(msghdr_addr, msg_fake))
-        return _EFAULT;
-#endif
     return res;
 }
 
@@ -2162,13 +2133,11 @@ struct mmsghdr_ {
     uint_t len;
 };
 
-#ifdef GUEST_ARM64
 struct mmsghdr64_ {
     struct msghdr64_ hdr;
     uint32_t len;
     uint32_t _pad;
 };
-#endif
 
 int_t sys_recvmmsg(fd_t sock_fd, addr_t msg_vec, uint_t vec_len, int_t flags, addr_t timeout_addr) {
     STRACE("recvmmsg(%d, %#x, %d, %d, %#x)", sock_fd, msg_vec, vec_len, flags, timeout_addr);
@@ -2186,13 +2155,8 @@ int_t sys_recvmmsg(fd_t sock_fd, addr_t msg_vec, uint_t vec_len, int_t flags, ad
         deadline = timespec_add(timespec_now(CLOCK_MONOTONIC), convert_timespec(timeout));
     }
     int num_recv = 0;
-#ifdef GUEST_ARM64
     size_t mmsghdr_size = sizeof(struct mmsghdr64_);
     size_t len_offset = offsetof(struct mmsghdr64_, len);
-#else
-    size_t mmsghdr_size = sizeof(struct mmsghdr_);
-    size_t len_offset = offsetof(struct mmsghdr_, len);
-#endif
     for (unsigned i = 0; i < vec_len; i++) {
         addr_t msghdr = msg_vec + i * mmsghdr_size;
         int_t res = sys_recvmsg(sock_fd, msghdr, flags);
@@ -2225,13 +2189,8 @@ int_t sys_recvmmsg(fd_t sock_fd, addr_t msg_vec, uint_t vec_len, int_t flags, ad
 
 int_t sys_sendmmsg(fd_t sock_fd, addr_t msg_vec, uint_t vec_len, int_t flags) {
     int num_sent = 0;
-#ifdef GUEST_ARM64
     size_t mmsghdr_size = sizeof(struct mmsghdr64_);
     size_t len_offset = offsetof(struct mmsghdr64_, len);
-#else
-    size_t mmsghdr_size = sizeof(struct mmsghdr_);
-    size_t len_offset = offsetof(struct mmsghdr_, len);
-#endif
     for (unsigned i = 0; i < vec_len; i++) {
         addr_t msghdr = msg_vec + i * mmsghdr_size;
         int_t res = sys_sendmsg(sock_fd, msghdr, flags);
@@ -2619,12 +2578,15 @@ int sock_unix_list(struct sock_unix_entry **entries) {
         if (err == 0) {
             struct sock_unix_entry *e = &list[i];
             e->type = sock->socket.type;
-            int listening = 0;
-            socklen_t len = sizeof(listening);
-            e->listening = getsockopt(sock->real_fd, SOL_SOCKET, SO_ACCEPTCONN, &listening, &len) == 0 &&
-                listening;
+            // iSH's own word for it, unix_listeners (sys_listen): the host's
+            // SO_ACCEPTCONN said none of them listened on Darwin, and on a
+            // Linux host that is itself an iSH of before it knew the option,
+            // it failed
+            lock(&peer_lock);
+            e->listening = !list_null(&sock->socket.unix_listening);
+            unlock(&peer_lock);
             struct sockaddr_storage addr;
-            len = sizeof(addr);
+            socklen_t len = sizeof(addr);
             e->connected = !e->listening &&
                 getpeername(sock->real_fd, (struct sockaddr *) &addr, &len) == 0;
             e->inode = sock->stat.inode;
@@ -2664,32 +2626,18 @@ struct ifreq_ {
         int32_t metric;
         int32_t mtu;
         int32_t qlen;
-#ifdef GUEST_ARM64
         uint64_t data;
         uint8_t size[24];
-#else
-        uint32_t data;
-        uint8_t size[16];
-#endif
     };
 };
 // Linux's struct ifconf
 struct ifconf_ {
     int32_t len;
-#ifdef GUEST_ARM64
     uint32_t pad;
     uint64_t buf;
-#else
-    uint32_t buf;
-#endif
 };
-#ifdef GUEST_ARM64
 static_assert(sizeof(struct ifreq_) == 40, "ifreq layout");
 static_assert(sizeof(struct ifconf_) == 16, "ifconf layout");
-#else
-static_assert(sizeof(struct ifreq_) == 32, "ifreq layout");
-static_assert(sizeof(struct ifconf_) == 8, "ifconf layout");
-#endif
 
 #define SIOCGIFNAME_ 0x8910
 #define SIOCGIFCONF_ 0x8912

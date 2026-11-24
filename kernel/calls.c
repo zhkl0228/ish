@@ -21,13 +21,8 @@
 #include "asbestos/guest-arm64/jit.h"
 #endif
 
-#ifdef GUEST_ARM64
 int64_t syscall_stub(uint64_t UNUSED(a), uint64_t UNUSED(b), uint64_t UNUSED(c), uint64_t UNUSED(d),
         uint64_t UNUSED(e), uint64_t UNUSED(f)) {
-#else
-int syscall_stub(dword_t UNUSED(a), dword_t UNUSED(b), dword_t UNUSED(c), dword_t UNUSED(d),
-        dword_t UNUSED(e), dword_t UNUSED(f)) {
-#endif
     return _ENOSYS;
 }
 // While identical, this version of the stub doesn't log below. Use this for
@@ -48,11 +43,9 @@ void dump_stack(int lines);
 void dump_maps(void);
 
 // Fast path syscall handlers (forward declarations)
-#ifdef GUEST_ARM64
 static inline int fast_fstat64(struct cpu_state *cpu);
 static inline int fast_read(struct cpu_state *cpu);
 static inline int fast_write(struct cpu_state *cpu);
-#endif
 
 // Diagnostic: JIT crash info from signal handler
 __thread volatile uint64_t jit_last_host_fault = 0;
@@ -66,7 +59,6 @@ void ish_set_timer_tick_hook(ish_timer_tick_hook_t hook) {
     atomic_store_explicit(&g_timer_tick_hook, hook, memory_order_release);
 }
 
-#ifdef GUEST_ARM64
 // [T-ish-precise-fault-pc] Deliver / resume a data fault at the faulting
 // instruction instead of the start of its block.
 static void gpf_use_precise_pc(struct cpu_state *cpu) {
@@ -74,7 +66,6 @@ static void gpf_use_precise_pc(struct cpu_state *cpu) {
         cpu->pc = cpu->segfault_precise_pc;
     cpu->segfault_precise_pc = 0;
 }
-#endif
 
 // Whether the task takes sig with a handler of its own (not blocked): a fault
 // raising it is then the program's business.
@@ -92,26 +83,6 @@ void handle_interrupt(int interrupt) {
     struct cpu_state *cpu = &current->cpu;
     if (interrupt == INT_SYSCALL) {
         ISH_SIGNPOST_SCOPE_BEGIN(syscall, "syscall", _sc_spid);
-#if defined(GUEST_X86) || !defined(GUEST_ARM64)
-        // x86: syscall number in eax, args in ebx, ecx, edx, esi, edi, ebp
-        unsigned syscall_num = cpu->eax;
-        if (syscall_num >= syscall_table_size || syscall_table[syscall_num] == NULL) {
-            printk("%d(%s) missing syscall %d\n", current->pid, current->comm, syscall_num);
-            cpu->eax = _ENOSYS;
-        } else {
-            if (syscall_table[syscall_num] == (syscall_t) syscall_stub) {
-                printk("%d(%s) stub syscall %d\n", current->pid, current->comm, syscall_num);
-            }
-            STRACE("%d call %-3d ", current->pid, syscall_num);
-            atomic_store(&current->in_syscall, true);
-            int result = syscall_table[syscall_num](cpu->ebx, cpu->ecx, cpu->edx, cpu->esi, cpu->edi, cpu->ebp);
-            atomic_store(&current->in_syscall, false);
-            STRACE(" = 0x%x\n", result);
-            cpu->eax = result;
-        }
-        if (current->group->doing_group_exit)
-            do_exit(current->group->group_exit_code);
-#elif defined(GUEST_ARM64)
         // ARM64: syscall number in x8, args in x0-x5, return in x0
         unsigned syscall_num = cpu->regs[8];
         // Snapshot for SA_RESTART: x0 (first arg) is about to be clobbered by
@@ -324,7 +295,6 @@ void handle_interrupt(int interrupt) {
         // loop where receive_signals() handles SIGKILL. Catch it here.
         if (current->group->doing_group_exit)
             do_exit(current->group->group_exit_code);
-#endif
         ISH_SIGNPOST_SCOPE_END(syscall, "syscall", _sc_spid);
     } else if (interrupt == INT_GPF) {
         if (ish_exec_trace())
@@ -333,7 +303,6 @@ void handle_interrupt(int interrupt) {
                     (unsigned long long)cpu->pc,
                     (unsigned long long)cpu->segfault_addr,
                     cpu->segfault_was_write);
-#ifdef GUEST_ARM64
         // Instruction-fetch fault: if the guest PC itself points to
         // unmapped memory, the JIT could not even read an instruction
         // to compile. This leaves segfault_addr stale from an earlier
@@ -351,7 +320,6 @@ void handle_interrupt(int interrupt) {
                 cpu->segfault_was_write = 0;
             }
         }
-#endif
         // No limit on faults at one instruction: a program whose SIGSEGV
         // handler resumes elsewhere faults there legitimately, as often as
         // it runs the code. HotSpot's implicit null checks do, and a count
@@ -367,10 +335,6 @@ void handle_interrupt(int interrupt) {
             // "Segmentation fault" and exit status, which is what users
             // normally need. Opt-in verbose is for kernel debugging.
             bool trace_enabled = ish_exec_trace();
-#if defined(GUEST_X86) || !defined(GUEST_ARM64)
-            if (trace_enabled)
-                printk("%d page fault on 0x%x at 0x%x\n", current->pid, cpu->segfault_addr, cpu->eip);
-#elif defined(GUEST_ARM64)
             if (trace_enabled)
                 printk("%d page fault on 0x%llx at 0x%llx (%s)\n", current->pid, (unsigned long long)cpu->segfault_addr, (unsigned long long)cpu->pc, cpu->segfault_was_write ? "write" : "read");
             // Dump instruction bytes and key registers for debugging
@@ -532,7 +496,6 @@ void handle_interrupt(int interrupt) {
                     }
                 }
             }
-#endif
             // A read of unmapped memory is a SIGSEGV, as on Linux. Programs
             // rely on it: HotSpot's implicit null checks and Go's nil checks
             // read near address 0 and expect the fault. A recovery here used
@@ -548,32 +511,18 @@ void handle_interrupt(int interrupt) {
                 dump_stack(8);
                 dump_maps();
             }
-#ifdef GUEST_ARM64
             gpf_use_precise_pc(cpu);
-#endif
             force_signal(current, SIGSEGV_, info, false);
         }
-#ifdef GUEST_ARM64
         // Or the page is there now (mem_ptr committed it from a reservation,
         // or another thread mapped it): retry the faulting instruction.
         gpf_use_precise_pc(cpu);
-#endif
     } else if (interrupt == INT_UNDEFINED) {
         // As Linux (show_unhandled_signals): nothing when the program handles
         // SIGILL itself, as one probing for a CPU feature does; one line when
         // it is about to die of it. An instruction iSH does not implement
         // lands here too, and this line is its sample.
         if (!task_handles_signal(current, SIGILL_)) {
-#if defined(GUEST_X86) || !defined(GUEST_ARM64)
-            printk("%s[%d]: unhandled illegal instruction at %#x:", current->comm, current->pid, cpu->eip);
-            for (int i = 0; i < 8; i++) {
-                uint8_t b;
-                if (user_get(cpu->eip + i, b))
-                    break;
-                printk(" %02x", b);
-            }
-            printk("\n");
-#elif defined(GUEST_ARM64)
             uint32_t ill_insn = 0;
             bool readable = user_get(cpu->pc, ill_insn) == 0;
             if (readable)
@@ -582,15 +531,10 @@ void handle_interrupt(int interrupt) {
             else
                 printk("%s[%d]: unhandled illegal instruction at %#llx (unreadable)\n",
                        current->comm, current->pid, (unsigned long long) cpu->pc);
-#endif
         }
         struct siginfo_ info = {
             .code = SI_KERNEL_,
-#if defined(GUEST_X86) || !defined(GUEST_ARM64)
-            .fault.addr = cpu->eip,
-#elif defined(GUEST_ARM64)
             .fault.addr = cpu->pc,
-#endif
         };
         force_signal(current, SIGILL_, info, false);
     } else if (interrupt == INT_BREAKPOINT) {
@@ -657,11 +601,7 @@ void dump_mem(addr_t start, uint_t len) {
     for (addr_t addr = start; addr < start + len; addr += sizeof(dword_t)) {
         unsigned from_left = (addr - start) / sizeof(dword_t) % width;
         if (from_left == 0)
-#ifdef GUEST_ARM64
             printk("%012llx: ", (unsigned long long)addr);
-#else
-            printk("%08x: ", addr);
-#endif
         dword_t word;
         if (user_get(addr, word))
             break;
@@ -672,20 +612,14 @@ void dump_mem(addr_t start, uint_t len) {
 }
 
 void dump_stack(int lines) {
-#if defined(GUEST_X86) || !defined(GUEST_ARM64)
-    printk("stack at %x, base at %x, ip at %x\n", current->cpu.esp, current->cpu.ebp, current->cpu.eip);
-    dump_mem(current->cpu.esp, lines * sizeof(dword_t) * 8);
-#elif defined(GUEST_ARM64)
     printk("stack at %llx, base at %llx, ip at %llx\n",
            (unsigned long long)current->cpu.sp,
            (unsigned long long)current->cpu.regs[29],  // x29 is frame pointer
            (unsigned long long)current->cpu.pc);
     dump_mem(current->cpu.sp, lines * sizeof(uint64_t) * 8);
-#endif
 }
 
 // === Fast Path Implementations ===
-#ifdef GUEST_ARM64
 
 // Fast path for fstat64 (syscall 80)
 // Bypasses generic_statat path normalization when fd is already validated realfs
@@ -834,4 +768,3 @@ static inline int fast_write(struct cpu_state *cpu) {
     return res;
 }
 
-#endif // GUEST_ARM64

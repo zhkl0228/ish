@@ -430,16 +430,14 @@ static void proc_maps_show_regions(struct task *task, struct proc_data *buf, boo
         } else if (data->name != NULL) {
             strcpy(path, data->name);
         } else if (data->fd != NULL) {
-            generic_getpath(start_pt->data->fd, path);
+            // a file with no path in the guest (realfs_getpath logs why)
+            // is listed with none, not the host's path left in path
+            if (generic_getpath(start_pt->data->fd, path) < 0)
+                path[0] = '\0';
         }
-#ifdef GUEST_ARM64
         proc_printf(buf, "%012llx-%012llx %c%c%c%c %08lx 00:00 %-10d %s\n",
                 (unsigned long long)(start << PAGE_BITS),
                 (unsigned long long)(end << PAGE_BITS),
-#else
-        proc_printf(buf, "%08x-%08x %c%c%c%c %08lx 00:00 %-10d %s\n",
-                start << PAGE_BITS, end << PAGE_BITS,
-#endif
                 start_pt->flags & P_READ ? 'r' : '-',
                 start_pt->flags & P_WRITE ? 'w' : '-',
                 start_pt->flags & P_EXEC ? 'x' : '-',
@@ -612,6 +610,40 @@ static int proc_pid_exe_readlink(struct proc_entry *entry, char *buf) {
     return err;
 }
 
+// The task's name, as Linux's comm: musl's pthread_getname_np and
+// pthread_setname_np of another thread read and write
+// /proc/self/task/<tid>/comm. There was none (ENOENT).
+static int proc_pid_comm_show(struct proc_entry *entry, struct proc_data *buf) {
+    struct task *task = proc_get_task(entry);
+    if (task == NULL)
+        return _ESRCH;
+    lock(&task->general_lock);
+    proc_printf(buf, "%.16s\n", task->comm);
+    unlock(&task->general_lock);
+    proc_put_task(task);
+    return 0;
+}
+
+// As Linux's comm_write: a thread of the writer's process takes its first 15
+// bytes for its name; another's is EINVAL.
+static ssize_t proc_pid_comm_pwrite(struct proc_entry *entry, struct proc_data *data, off_t UNUSED(off)) {
+    struct task *task = proc_get_task(entry);
+    if (task == NULL)
+        return _ESRCH;
+    ssize_t res = (ssize_t) data->size;
+    if (task->group != current->group) {
+        res = _EINVAL;
+    } else {
+        lock(&task->general_lock);
+        size_t len = data->size < sizeof(task->comm) - 1 ? data->size : sizeof(task->comm) - 1;
+        memcpy(task->comm, data->data, len);
+        task->comm[len] = '\0';
+        unlock(&task->general_lock);
+    }
+    proc_put_task(task);
+    return res;
+}
+
 static void proc_pid_task_getname(struct proc_entry *entry, char *buf) {
     sprintf(buf, "%d", entry->pid);
 }
@@ -623,10 +655,26 @@ static int proc_pid_task_readlink(struct proc_entry *entry, char *buf) {
 
 static struct proc_dir_entry proc_pid_task;
 
+// Every thread of the process, by tid, each /proc/<tid> (which names its
+// thread). There was its leader only: /proc/self/task/<tid> of any other
+// thread was ENOENT. index is the last tid said, so a thread that comes or
+// goes between calls neither repeats one nor skips one.
 static bool proc_pid_task_readdir(struct proc_entry *entry, unsigned long *index, struct proc_entry *next_entry) {
-    // TODO: Expose all threads
-    *next_entry = (struct proc_entry) {&proc_pid_task, .pid = entry->pid};
-    return !(*index)++;
+    struct task *task = proc_get_task(entry);
+    if (task == NULL)
+        return false;
+    pid_t_ next = 0;
+    struct task *thread;
+    list_for_each_entry(&task->group->threads, thread, group_links) {
+        if ((unsigned long) thread->pid > *index && (next == 0 || thread->pid < next))
+            next = thread->pid;
+    }
+    proc_put_task(task);
+    if (next == 0)
+        return false;
+    *next_entry = (struct proc_entry) {&proc_pid_task, .pid = next};
+    *index = next;
+    return true;
 }
 
 static int proc_pid_cwd_readlink(struct proc_entry *entry, char *buf) {
@@ -644,6 +692,7 @@ static int proc_pid_cwd_readlink(struct proc_entry *entry, char *buf) {
 struct proc_children proc_pid_children = PROC_CHILDREN({
     {"auxv", .show = proc_pid_auxv_show},
     {"cmdline", .show = proc_pid_cmdline_show},
+    {"comm", S_IFREG | 0644, .show = proc_pid_comm_show, .pwrite = proc_pid_comm_pwrite},
     {"cwd", S_IFLNK, .readlink = proc_pid_cwd_readlink},
     {"exe", S_IFLNK, .readlink = proc_pid_exe_readlink},
     {"fd", S_IFDIR, .readdir = proc_pid_fd_readdir},

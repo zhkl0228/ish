@@ -4,8 +4,9 @@
 
 This fork adds a **native ARM64 guest backend** to upstream iSH's threaded-code interpreter
 (*Asbestos*, formerly called *jit* — renamed upstream in 2024 because it doesn't actually emit
-machine code). The new backend emulates AArch64 Linux on Apple Silicon, running alongside
-the original x86 (i386) guest backend. The result is a dramatically faster and more
+machine code). The new backend emulates AArch64 Linux on Apple Silicon; the original x86
+(i386) guest backend it was built beside, and upstream's Linux-kernel variant (iSH+Linux), have
+since been removed, so the guest is AArch64 only. The result is a dramatically faster and more
 compatible Linux environment capable of running **Python, Node.js, Go, Rust, and native
 CLI tools** directly on iPhone and iPad.
 
@@ -25,8 +26,8 @@ CLI tools** directly on iPhone and iPad.
 > What this fork adds is an **ARM64 guest backend** inside that same Asbestos infrastructure:
 > new gadgets (`asbestos/guest-arm64/gadgets-aarch64/`) that map AArch64 guest instructions
 > to a few ARM64 host instructions each — same-architecture dispatch, so each guest
-> instruction costs only a handful of host instructions. The upstream x86 backend continues
-> to ship unchanged alongside it. Some prose below says "JIT" as convenient shorthand —
+> instruction costs only a handful of host instructions. The upstream x86 backend is no longer
+> part of this fork. Some prose below says "JIT" as convenient shorthand —
 > read it as "same-arch gadget dispatch," not runtime codegen.
 
 ---
@@ -37,7 +38,7 @@ The original iSH translates **x86 (i386) instructions** on an ARM64 host — eve
 must be cross-architecture decoded and emulated. This works well for simple tools but creates
 fundamental limits:
 
-| Limitation | x86 (original) | ARM64 (this fork) |
+| Limitation | x86 (upstream iSH) | ARM64 (this fork) |
 |---|---|---|
 | Architecture translation | i386 → ARM64 (cross) | AArch64 → AArch64 (same) |
 | Address space | 32-bit (4 GB) | 48-bit (256 TB) |
@@ -210,16 +211,17 @@ Enables AI agents to share files between the host app and the Linux guest withou
 
 | Target | Scheme | xcconfig | Guest Arch | Bundle ID Suffix |
 |--------|--------|----------|------------|------------------|
-| x86 (original) | iSH | `App.xcconfig` | i386 | — |
 | ARM64 | iSH-ARM64 | `AppARM64.xcconfig` | aarch64 | `.arm64` |
 | ARM64 + FFmpeg | iSH-ARM64-ffmpeg | `AppARM64-ffmpeg.xcconfig` | aarch64 | `.arm64` |
 
 The ARM64 target links meson-built libraries (`libish.a`, `libish_emu.a`, `libfakefs.a`) directly
-from `build-arm64-release/`, bypassing Xcode's auto-discovery of x86 library targets.
+from the meson build dir, bypassing Xcode's auto-discovery of the library targets.
+
+iSH builds and runs on an AArch64 host only (Apple silicon, an iPhone or iPad, an arm64 Linux).
 
 ```bash
-# Build ARM64 CLI (macOS, for testing)
-meson setup build-arm64-release -Dguest_arch=arm64 --buildtype=release
+# Build the CLI (macOS or arm64 Linux, for testing)
+meson setup build-arm64-release --buildtype=release
 ninja -C build-arm64-release
 
 # Run
@@ -240,13 +242,29 @@ tests/regress/run.sh -i build-arm64-release/ish -r ./alpine-arm64-plain
 tests/smoke/run.sh -i build-arm64-release/ish -f ./alpine-arm64-fakefs
 ```
 
+CI (`.github/workflows/ci.yml`) archives the app for a phone (unsigned) on macOS and makes
+its ipa (`app/package-ipa.py`), and on an arm64 Linux runner runs `tests/regress/ci.sh`: the
+CLI built as a release with no warning, then the regression tests on an Alpine aarch64
+minirootfs. A push to master publishes the ipa and its dSYMs as a release,
+`ipa-<version>-<build>`, when that version is not published yet (`MARKETING_VERSION` and
+`CURRENT_PROJECT_VERSION` in `app/AppARM64.xcconfig`, which `app/FileProviderARM64.xcconfig`
+must match), or again, replacing it, when a commit of the push has `[ipa]` in its message
+(or the workflow is run by hand with `force`); the newest five are kept, and the newest is at
+`releases/latest/download/iSH-ARM64-unsigned.ipa`. It is unsigned: sign it with your own
+developer account to install it.
+
+`uname -v` (and `/proc/version`) says which build runs: `#1 SMP iSH 2.1.0 (806) <commit>
+<commit date>` (`iSH cli` in the command line tool, `-dirty` after a commit built with
+changes); `/proc/ish/version` says the same and the JIT's abi, which an AOT image must match.
+`uname -r` stays `4.20.69-ish`: programs read it to tell what the kernel has.
+
 **AddressSanitizer.** A heap overflow or use-after-free in iSH itself usually
 crashes it later, somewhere in `malloc` or `free`, or not at all.
 `tools/build-asan.sh` builds an ASan `ish`, which stops at the bad access and
 says where it happened and where the memory was allocated and freed:
 
 ```bash
-tools/build-asan.sh build-asan -Dguest_arch=arm64
+tools/build-asan.sh build-asan
 tests/regress/run.sh -i build-asan/ish -r ./alpine-arm64-plain
 tests/smoke/run.sh -i build-asan/ish -f ./alpine-arm64-fakefs
 ```
@@ -261,7 +279,9 @@ that has no ASan runtime of its own (Ubuntu's), the script links gcc's
 ## Performance
 
 Measured with `benchmark/run.sh` on macOS 26.4.1 / Apple Silicon using guest-side
-timing (startup overhead excluded). Full details in
+timing (startup overhead excluded), when this fork still built upstream's x86 backend
+beside the ARM64 one: the x86 columns are that backend's. `benchmark/run.sh` now compares
+ARM64 with native only. Full details in
 **[benchmark/BENCHMARK_PERF.md](benchmark/BENCHMARK_PERF.md)**.
 
 ### Overhead vs Native (by workload)
@@ -294,7 +314,8 @@ timing (startup overhead excluded). Full details in
 
 223 tests across 18 categories (Core OS, FileOps, Text, Build, Python, Node.js, Go/Rust/Perl/…,
 Network, VCS, Editors, Shell, DB, Media, Crypto, SysMon, Debug, PkgMgr, Signal). Both
-architectures tested under fakefs with the same installed package set. Full report:
+architectures tested under fakefs with the same installed package set, when the fork still
+built the x86 backend (`benchmark/run.sh` now tests ARM64 only). Full report:
 **[benchmark/BENCHMARK_COMPAT.md](benchmark/BENCHMARK_COMPAT.md)**.
 
 | Architecture | Pass | Fail | Rate |

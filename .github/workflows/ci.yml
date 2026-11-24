@@ -4,57 +4,86 @@ on:
   push:
   pull_request:
       branches: [master]
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Publish the ipa even if its version is published (it is replaced)
+        type: boolean
+        default: false
 
 jobs:
-  build-linux:
-    runs-on: ubuntu-24.04
-    strategy:
-      matrix:
-        cc: [clang, gcc]
-        kernel: [ish, linux]
+  linux:
+    # The CLI on an AArch64 host, and tests/regress run with it
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
-        with:
-            submodules: true
-      - uses: actions/setup-python@v6
-        with:
-            python-version: '3.x'
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install libarchive-dev
-          pip3 install meson ninja
-      - name: Clone Linux
-        if: matrix.kernel == 'linux'
-        run: deps/clone-linux.sh
-      - name: Build
-        run: |
-          meson build -Dengine=asbestos -Dkernel=${{matrix.kernel}}
-          ninja -C build
-        env:
-          CC: ${{matrix.cc}}
-      - name: Test
-        if: matrix.kernel == 'ish'
-        run: ninja -C build test
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang lld meson ninja-build pkg-config libsqlite3-dev libarchive-dev \
+              musl-tools python3 curl
+      - name: Allow ICMP sockets
+        # A guest's ICMP socket is a host one of SOCK_DGRAM (fs/sock.h), which
+        # Linux makes for a group in net.ipv4.ping_group_range only: the
+        # runner's is none ("1 0"), where Docker's, macOS's and iOS's allow
+        # any (regress_proc_net's raw socket)
+        run: sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"
+      - name: Build and test
+        run: tests/regress/ci.sh "$RUNNER_TEMP/ci"
 
-  build-mac:
+  mac:
+    # The app as it is built for a phone (archived, unsigned) and its ipa. On
+    # master the ipa is published as a release, ipa-<version>-<build>, when
+    # its version is not (app/AppARM64.xcconfig's MARKETING_VERSION and
+    # CURRENT_PROJECT_VERSION, which FileProviderARM64.xcconfig's match), or
+    # again, replacing it, when a commit of the push says [ipa] in its message
+    # (or a run by hand says force); the newest five kept. To install it, sign
+    # it with one's own developer account
     runs-on: macos-26
-    strategy:
-      matrix:
-        kernel: [ish, linux]
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v6
         with:
             submodules: true
       - name: Install dependencies
         run: |
           brew install llvm lld ninja libarchive meson
-      - name: Clone Linux
-        if: matrix.kernel == 'linux'
-        run: deps/clone-linux.sh
       - name: Build
-        if: matrix.kernel == 'ish'
-        run: xcodebuild -project iSH.xcodeproj -scheme iSH -arch arm64 -sdk iphoneos CODE_SIGNING_ALLOWED=NO
-      - name: Build
-        if: matrix.kernel == 'linux'
-        run: xcodebuild -project iSH.xcodeproj -scheme iSH+Linux -arch x86_64 -sdk iphonesimulator CODE_SIGNING_ALLOWED=NO
+        run: |
+          xcodebuild -project iSH.xcodeproj -scheme iSH-ARM64 -arch arm64 -sdk iphoneos \
+              -archivePath "$RUNNER_TEMP/iSH-ARM64.xcarchive" CODE_SIGNING_ALLOWED=NO archive
+      - name: Package
+        id: package
+        run: python3 app/package-ipa.py "$RUNNER_TEMP/iSH-ARM64.xcarchive" "$RUNNER_TEMP/ipa"
+      - name: Release
+        if: github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.package.outputs.version }}
+          BUILD: ${{ steps.package.outputs.build }}
+          FORCE: ${{ inputs.force == true || contains(join(github.event.commits.*.message, ' '), '[ipa]') }}
+        run: |
+          set -o pipefail
+          tag="ipa-$VERSION-$BUILD"
+          if gh release view "$tag" > /dev/null 2>&1; then
+              if [ "$FORCE" != true ]; then
+                  echo "$tag is published: a new version (app/AppARM64.xcconfig) or [ipa] in a commit's message publishes one"
+                  exit 0
+              fi
+              gh release delete "$tag" --cleanup-tag --yes
+          fi
+          sha=${GITHUB_SHA::8}
+          printf '%s (%s)\n\nUnsigned: sign it with your own developer account to install it.\n' \
+              "$(git log -1 --format=%s "$GITHUB_SHA")" "$sha" > "$RUNNER_TEMP/notes.md"
+          gh release create "$tag" --target "$GITHUB_SHA" --latest \
+              --title "iSH-ARM64 $VERSION ($BUILD)" --notes-file "$RUNNER_TEMP/notes.md" \
+              "$RUNNER_TEMP/ipa/iSH-ARM64-unsigned.ipa" "$RUNNER_TEMP/ipa/iSH-ARM64-dSYMs.zip"
+          # the newest five ipa releases kept, the rest removed with their tags
+          gh release list --limit 100 --json tagName,createdAt \
+              --jq '[.[] | select(.tagName | startswith("ipa-"))] | sort_by(.createdAt) | reverse | .[5:] | .[].tagName' |
+          while read -r old; do
+              gh release delete "$old" --cleanup-tag --yes
+          done

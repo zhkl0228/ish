@@ -35,10 +35,8 @@
 #include "fs/dyndev.h"
 #include "fs/devices.h"
 #include "fs/path.h"
-#ifdef GUEST_ARM64
 #include "asbestos/guest-arm64/host_fault.h"
-#endif
-#if defined(GUEST_ARM64) && defined(DEBUG)
+#if defined(DEBUG)
 #include "DebugServer.h"
 #endif
 #include "kernel/native_offload.h"
@@ -46,9 +44,6 @@
 extern void native_builtins_init(void);
 #endif
 
-#if ISH_LINUX
-#import "LinuxInterop.h"
-#endif
 
 @interface AppDelegate () <UNUserNotificationCenterDelegate>
 
@@ -57,7 +52,6 @@ extern void native_builtins_init(void);
 
 @end
 
-#if !ISH_LINUX
 static void ios_handle_exit(struct task *task, int code) {
     // we are interested in init and in children of init
     // this is called with pids_lock as an implementation side effect, please do not cite as an example of good API design
@@ -77,11 +71,6 @@ static void ios_handle_die(const char *msg) {
     NSString *message = [NSString stringWithFormat:@"%s: %s", __func__, msg];
     iSHExceptionHandler([[NSException alloc] initWithName:NSGenericException reason:message userInfo:nil]);
 }
-#elif ISH_LINUX
-void ReportPanic(const char *message) {
-    [NSNotificationCenter.defaultCenter postNotificationName:KernelPanicNotification object:nil userInfo:@{@"message":@(message)}];
-}
-#endif
 
 static int bootError;
 
@@ -169,13 +158,10 @@ static void ish_install_anon_cap(void) {
 @implementation AppDelegate
 
 - (int)boot {
-#if !ISH_LINUX
-#ifdef GUEST_ARM64
     // A host fault in translated guest code (a stale TLB entry) is retried,
     // in native code at its access; any other crash still reaches the
     // system's handler and its crash report.
     asbestos_install_host_fault_handler();
-#endif
     // Install the device-derived ledger cap, then start the live governor.
     // Both must happen before the first guest process runs.
     ish_install_anon_cap();
@@ -240,7 +226,7 @@ static void ish_install_anon_cap(void) {
     if (err < 0)
         return err;
 
-#if defined(GUEST_ARM64) && defined(DEBUG)
+#if defined(DEBUG)
     debug_server_start(1234);
 #endif
 
@@ -262,33 +248,12 @@ static void ish_install_anon_cap(void) {
         return err;
     task_start(current);
 
-#else
-    // On first launch, this will trigger the import of the default root. Make sure to do this before entering the kernel, because it needs to run something on the main thread, and that would deadlock.
-    [Roots instance];
-    NSArray<NSString *> *args = @[];
-    actuate_kernel([args componentsJoinedByString:@" "].UTF8String);
-#endif
     
     return 0;
 }
 
-#if ISH_LINUX
-const char *DefaultRootPath() {
-    return [Roots.instance rootUrl:Roots.instance.defaultRoot].fileSystemRepresentation;
-}
-
-void SyncHostname(void) {
-    async_do_in_workqueue(^{
-        char hostname[256];
-        if (gethostname(hostname, sizeof(hostname)) < 0)
-            return;
-        linux_sethostname(hostname);
-    });
-}
-#endif
 
 - (void)configureDns {
-#if !ISH_LINUX
     struct __res_state res;
     if (EXIT_SUCCESS != res_ninit(&res)) {
         exit(2);
@@ -320,7 +285,6 @@ void SyncHostname(void) {
         fd->ops->write(fd, resolvConf.UTF8String, [resolvConf lengthOfBytesUsingEncoding:NSUTF8StringEncoding]);
         fd_close(fd);
     }
-#endif
 }
 
 + (int)bootError {
@@ -382,12 +346,6 @@ void SyncHostname(void) {
 
     bootError = [self boot];
 
-#if ISH_LINUX
-    [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationWillEnterForegroundNotification object:UIApplication.sharedApplication queue:nil usingBlock:^(NSNotification * _Nonnull note) {
-        SyncHostname();
-    }];
-    SyncHostname();
-#endif
 
     return YES;
 }
@@ -421,7 +379,6 @@ void NetworkReachabilityCallback(SCNetworkReachabilityRef target, SCNetworkReach
     // Starts collecting what gets copied, for the clipboard manager.
     [ClipboardStore.shared start];
 
-#if !ISH_LINUX
     NSString *ishVersion = [NSString stringWithFormat:@"iSH %@ (%@)",
                          [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"],
                          [NSBundle.mainBundle objectForInfoDictionaryKey:(NSString *) kCFBundleVersionKey]];
@@ -429,14 +386,13 @@ void NetworkReachabilityCallback(SCNetworkReachabilityRef target, SCNetworkReach
     proc_ish_version = strdup(ishVersion.UTF8String);
     // this defaults key is set when taking app store screenshots
     extern const char *uname_hostname_override;
+    // iOS hides the device's own hostname (hostname obfuscation), so the name
+    // set in iSH is the hostname even when overriding is not switched on
     NSString *hostnameOverride = UserPreferences.shared._hostnameOverride;
-    if (@available(iOS 16.0, *)) { // Hostname obfuscation is in effect
-        hostnameOverride = hostnameOverride ? hostnameOverride : UserPreferences.shared.hostnameOverride;
-    }
+    hostnameOverride = hostnameOverride ? hostnameOverride : UserPreferences.shared.hostnameOverride;
     if (hostnameOverride) {
         uname_hostname_override = strdup(hostnameOverride.UTF8String);
     }
-#endif
     
     [UserPreferences.shared observe:@[@"shouldDisableDimming"] options:NSKeyValueObservingOptionInitial
                               owner:self usingBlock:^(typeof(self) self) {
@@ -559,8 +515,4 @@ void NetworkReachabilityCallback(SCNetworkReachabilityRef target, SCNetworkReach
 
 @end
 
-#if !ISH_LINUX
 NSString *const ProcessExitedNotification = @"ProcessExitedNotification";
-#else
-NSString *const KernelPanicNotification = @"KernelPanicNotification";
-#endif

@@ -77,5 +77,12 @@ struct timer_spec {
     struct timespec interval;
 };
 int timer_set(struct timer *timer, struct timer_spec spec, struct timer_spec *oldspec);
+// As timer_set, and calls reset with the timer's data where no callback can
+// run (under the timer's lock, as the callback): for what the callback
+// counts to start again with the new setting, no tick of the old one after.
+int timer_set_with(struct timer *timer, struct timer_spec spec, struct timer_spec *oldspec,
+                   timer_callback_t reset);
+// What is left of it until it fires (0: disarmed), and its interval
+void timer_get(struct timer *timer, struct timer_spec *spec);
 
 #endif

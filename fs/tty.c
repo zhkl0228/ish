@@ -46,6 +46,8 @@ struct tty *tty_alloc(struct tty_driver *driver, int type, int num) {
     lock_init(&tty->fds_lock);
     cond_init(&tty->produced);
     cond_init(&tty->consumed);
+    tty->output_stopped = false;
+    cond_init(&tty->output_restarted);
     memset(tty->buf_flag, false, sizeof(tty->buf_flag));
     tty->bufsize = 0;
     tty->packet_flags = 0;
@@ -109,6 +111,7 @@ void tty_release(struct tty *tty) {
         driver->ttys[tty->num] = NULL;
         unlock(&tty->lock);
         cond_destroy(&tty->produced);
+        cond_destroy(&tty->output_restarted);
         free(tty);
     } else {
         unlock(&tty->lock);
@@ -593,12 +596,25 @@ static ssize_t tty_write(struct fd *fd, const void *buf, size_t bufsize) {
             return err;
     }
     lock(&tty->lock);
+    bool blocking = !(fd->flags & O_NONBLOCK_);
+    // Its output stopped (tcflow TCOOFF), a write waits for TCOON, as Linux's
+    // n_tty_write: EAGAIN if it may not wait, EINTR for a signal.
+    while (tty->output_stopped && !tty->hung_up) {
+        if (!blocking) {
+            unlock(&tty->lock);
+            return _EAGAIN;
+        }
+        int err = wait_for(&tty->output_restarted, &tty->lock, NULL);
+        if (err < 0) {
+            unlock(&tty->lock);
+            return err;
+        }
+    }
     if (tty->hung_up || pty_is_half_closed_master(tty)) {
         unlock(&tty->lock);
         return _EIO;
     }
 
-    bool blocking = !(fd->flags & O_NONBLOCK_);
     dword_t oflags = tty->termios.oflags;
     // we have to unlock it now to avoid lock ordering problems with ptys
     // the code below is safe because it only accesses tty->driver which is immutable
@@ -671,6 +687,7 @@ static ssize_t tty_ioctl_size(int cmd) {
         case FIONREAD_:
             return sizeof(dword_t);
         case TCFLSH_: case TIOCSCTTY_:
+        case TCSBRK_: case TCSBRKP_: case TCXONC_:
             return 0;
     }
     return -1;
@@ -783,7 +800,8 @@ static int tty_ioctl(struct fd *fd, int cmd, void *arg) {
     struct tty *tty = fd->tty;
     // changing the terminal from the background (Linux: set_termios,
     // tiocspgrp, TCFLSH)
-    if (cmd == TCSETS_ || cmd == TCSETSW_ || cmd == TCSETSF_ || cmd == TIOCSPGRP_ || cmd == TCFLSH_) {
+    if (cmd == TCSETS_ || cmd == TCSETSW_ || cmd == TCSETSF_ || cmd == TIOCSPGRP_ || cmd == TCFLSH_ ||
+            cmd == TCSBRK_ || cmd == TCSBRKP_ || cmd == TCXONC_) {
         err = tty_check_background(tty, SIGTTOU_);
         if (err < 0)
             return err;
@@ -797,6 +815,45 @@ static int tty_ioctl(struct fd *fd, int cmd, void *arg) {
     }
 
     switch (cmd) {
+        // tcdrain (an argument not 0) and tcsendbreak (0). They were ENOTTY.
+        // Output is written as it comes, so there is none to wait for, and a
+        // break is nothing on a pseudo-terminal or iSH's console, as Linux's
+        // send_break of a driver with no break_ctl.
+        case TCSBRK_:
+        case TCSBRKP_:
+            break;
+
+        // tcflow, which was ENOTTY. TCOOFF stops this terminal's output until
+        // TCOON (tty_write waits); TCIOFF and TCION send the STOP or START
+        // character out, as Linux's __tty_send_xchar, the pty's other side
+        // reading it. Not the input's ^S and ^Q (IXON), which iSH leaves to
+        // the program reading them.
+        case TCXONC_:
+            switch ((uintptr_t) arg) {
+                case TCOOFF_:
+                    tty->output_stopped = true;
+                    break;
+                case TCOON_:
+                    tty->output_stopped = false;
+                    notify(&tty->output_restarted);
+                    break;
+                case TCIOFF_:
+                case TCION_: {
+                    char ch = tty->termios.cc[(uintptr_t) arg == TCIOFF_ ? VSTOP_ : VSTART_];
+                    // the driver's write without the lock, as tty_write
+                    unlock(&tty->lock);
+                    int written = tty->driver->ops->write(tty, &ch, 1, false);
+                    lock(&tty->lock);
+                    if (written < 0)
+                        err = written;
+                    break;
+                }
+                default:
+                    err = _EINVAL;
+                    break;
+            }
+            break;
+
         case TCFLSH_:
             // only input flushing is currently useful
             switch ((uintptr_t) arg) {
@@ -861,6 +918,8 @@ void tty_hangup(struct tty *tty) {
     tty->hung_up = true;
     // Wake up any threads blocked in tty_read via condvar.
     notify(&tty->produced);
+    // and in tty_write, its output stopped (TCOOFF): it says EIO
+    notify(&tty->output_restarted);
     // Wake up poll waiters by writing to their notify pipes directly,
     // avoiding poll_wakeup which acquires fd->poll_lock and can deadlock
     // when called from [Terminal destroy] on the main thread during exit.

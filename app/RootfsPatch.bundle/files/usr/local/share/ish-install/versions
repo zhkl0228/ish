@@ -1,0 +1,4 @@
+# The versions of the npm tools ish-install installs: the app's AOT images serve these
+# builds (benchmark/aojit/app-images.lock.json). Written by publish_app_images.py.
+@anthropic-ai/claude-code 2.1.331
+@moonshot-ai/kimi-code 2.7.3

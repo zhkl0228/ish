@@ -18,7 +18,6 @@
 #import "AboutViewController.h"
 #import "CurrentRoot.h"
 #import "NSObject+SaneKVO.h"
-#import "LinuxInterop.h"
 #import "ClipboardStore.h"
 #import "ClipboardShelfView.h"
 #import "ClipboardStackView.h"
@@ -52,7 +51,13 @@
 @property (weak, nonatomic) IBOutlet NSLayoutConstraint *barButtonWidth;
 @property (weak, nonatomic) IBOutlet NSLayoutConstraint *barHeight;
 
-@property (weak, nonatomic) IBOutlet UIButton *pasteButton;
+// The paste key: iOS's paste button lies over it (updatePasteControl), in the
+// key's colors it was made in, but while the Paste Stack has items, when the
+// key pastes the next one itself (pasteKeyPastesStack, pasteKey:).
+@property (weak, nonatomic) IBOutlet BarButton *pasteButton;
+@property (nonatomic, nullable) UIPasteControl *pasteControl;
+@property (nullable) UIColor *pasteControlKeyColor;
+@property (nullable) UIColor *pasteControlTextColor;
 // After tab: /, and held, the other symbols (addSymbolKey)
 @property BarButton *symbolKey;
 // At the right end, after paste: the keyboard put down (addHideKeyboardKey)
@@ -260,7 +265,6 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
 - (void)viewDidLoad {
     [super viewDidLoad];
 
-#if !ISH_LINUX
     int bootError = [AppDelegate bootError];
     if (bootError < 0) {
         NSString *message = [NSString stringWithFormat:@"could not boot"];
@@ -270,7 +274,6 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
         [self showMessage:message subtitle:subtitle];
         NSLog(@"boot failed with code %d", bootError);
     }
-#endif
 
     self.tabBar = [[TabBarView alloc] initWithFrame:CGRectZero];
     self.tabBar.delegate = self;
@@ -380,12 +383,14 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
     self.termView.pasteInterceptor = ^BOOL {
         return [weakSelf pasteFromStack];
     };
-    UILongPressGestureRecognizer *holdPaste = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(pasteButtonHeld:)];
-    [self.pasteButton addGestureRecognizer:holdPaste];
-    self.pasteButton.accessibilityCustomActions = @[[[UIAccessibilityCustomAction alloc] initWithName:@"Show Clipboard" actionHandler:^BOOL(UIAccessibilityCustomAction *action) {
-        [weakSelf showClipboard];
-        return YES;
-    }]];
+    // The paste key is iOS's paste button laid over it (updatePasteControl),
+    // which pastes through pasteItemProviders:. While the Paste Stack has
+    // items the button is hidden and the key pastes the next one itself: the
+    // stack is iSH's own, and iOS's button is enabled only while the clipboard
+    // has text, which it need not have then (pasteKeyPastesStack).
+    self.pasteConfiguration = [[UIPasteConfiguration alloc] initWithTypeIdentifiersForAcceptingClass:NSString.class];
+    self.pasteButton.accessibilityLabel = @"Paste";
+    [self.pasteButton addTarget:self action:@selector(pasteKey:) forControlEvents:UIControlEventPrimaryActionTriggered];
     [center addObserver:self selector:@selector(pasteStackDidChange:) name:ClipboardStackDidChangeNotification object:nil];
     [self pasteStackDidChange:nil];
 
@@ -416,12 +421,6 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
                                            selector:@selector(sessionDidChange:)
                                                name:TerminalSessionDidChangeNotification
                                              object:nil];
-#if ISH_LINUX
-    [NSNotificationCenter.defaultCenter addObserver:self
-                                           selector:@selector(kernelPanicked:)
-                                               name:KernelPanicNotification
-                                             object:nil];
-#endif
 }
 
 - (void)viewDidAppear:(BOOL)animated {
@@ -779,13 +778,6 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
     [self presentViewController:alert animated:YES completion:nil];
 }
 
-#if ISH_LINUX
-- (void)kernelPanicked:(NSNotification *)notif {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"panik" message:notif.userInfo[@"message"] preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"k" style:UIAlertActionStyleDefault handler:nil]];
-    [self presentViewController:alert animated:YES completion:nil];
-}
-#endif
 
 - (void)showMessage:(NSString *)message subtitle:(NSString *)subtitle {
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -825,6 +817,7 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
         // the gaps between the keys and the rest of the row
         self.barView.backgroundColor = self.view.backgroundColor;
     }];
+    [self updatePasteControl];
     UIView *oldBarView = self.termView.inputAccessoryView;
     if (UserPreferences.shared.hideExtraKeysWithExternalKeyboard && self.hasExternalKeyboard) {
         self.termView.inputAccessoryView = nil;
@@ -1445,6 +1438,60 @@ static NSString *ShellQuoted(NSString *string) {
 - (void)paste:(id)sender {
     [self.termView paste:sender];
 }
+
+// The bar's paste key is iOS's own paste button (UIPasteControl) laid over the
+// key: what that pastes iSH has without iOS asking. The key read the clipboard
+// itself, and iOS asked "would like to paste from …" at every press whenever
+// another app or device (a Mac, by Universal Clipboard) had copied what was
+// there. A paste button's colors are fixed when it is made, so it is made
+// again when the keys' change.
+- (void)updatePasteControl {
+    BarButton *key = self.pasteButton;
+    if (self.pasteControl != nil && [self.pasteControlKeyColor isEqual:key.keyColor] &&
+            [self.pasteControlTextColor isEqual:key.tintColor])
+        return;
+    [self.pasteControl removeFromSuperview];
+    UIPasteControlConfiguration *config = [UIPasteControlConfiguration new];
+    config.displayMode = UIPasteControlDisplayModeIconOnly;
+    // flat and square, in the key's colors
+    config.cornerStyle = UIButtonConfigurationCornerStyleFixed;
+    config.cornerRadius = 0;
+    config.baseBackgroundColor = key.keyColor;
+    config.baseForegroundColor = key.tintColor;
+    UIPasteControl *control = [[UIPasteControl alloc] initWithConfiguration:config];
+    control.target = self;
+    control.hidden = [self pasteKeyPastesStack];
+    control.translatesAutoresizingMaskIntoConstraints = NO;
+    [key addSubview:control];
+    [NSLayoutConstraint activateConstraints:@[
+        [control.leadingAnchor constraintEqualToAnchor:key.leadingAnchor],
+        [control.trailingAnchor constraintEqualToAnchor:key.trailingAnchor],
+        [control.topAnchor constraintEqualToAnchor:key.topAnchor],
+        [control.bottomAnchor constraintEqualToAnchor:key.bottomAnchor],
+    ]];
+    self.pasteControl = control;
+    self.pasteControlKeyColor = key.keyColor;
+    self.pasteControlTextColor = key.tintColor;
+}
+
+// What iOS's paste button pastes (updatePasteControl): the first item's text,
+// as paste: pastes the clipboard's string. The button is hidden while the
+// Paste Stack has items (pasteKey:).
+- (void)pasteItemProviders:(NSArray<NSItemProvider *> *)itemProviders {
+    __weak typeof(self) weakSelf = self;
+    [itemProviders.firstObject loadObjectOfClass:NSString.class
+                               completionHandler:^(id<NSItemProviderReading> object, NSError *error) {
+        if (object == nil) {
+            NSLog(@"Paste button: no text from the clipboard: %@", error);
+            return;
+        }
+        NSString *string = (NSString *) object;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [weakSelf.termView.terminal pasteText:string];
+        });
+    }];
+}
+
 - (void)clearScreen:(id)sender {
     [self.termView clearScreen];
 }
@@ -1750,9 +1797,20 @@ static NSString *ShellQuoted(NSString *string) {
     [self.termView becomeFirstResponder];
 }
 
-- (void)pasteButtonHeld:(UILongPressGestureRecognizer *)recognizer {
-    if (recognizer.state == UIGestureRecognizerStateBegan)
-        [self showClipboard];
+// Whether the paste key pastes the Paste Stack's next item itself, iOS's paste
+// button hidden: while the stack is open and has items. Empty, as it is when
+// just opened and once every item is pasted, the stack leaves the clipboard to
+// iOS's button, as when it is closed: the key would read the clipboard itself,
+// and iOS would ask "would like to paste from …" again.
+- (BOOL)pasteKeyPastesStack {
+    ClipboardStore *store = ClipboardStore.shared;
+    return store.stackActive && store.stackItems.count > 0;
+}
+
+// The paste key itself, while the Paste Stack has items (pasteKeyPastesStack):
+// the next one.
+- (void)pasteKey:(id)sender {
+    [self pasteFromStack];
 }
 
 - (void)togglePasteStack:(id)sender {
@@ -1788,6 +1846,10 @@ static NSString *ShellQuoted(NSString *string) {
 // The stack panel follows the store, so every window shows it while it is open.
 - (void)pasteStackDidChange:(NSNotification *)notif {
     BOOL active = ClipboardStore.shared.stackActive;
+    // The key pastes the stack's items, iOS's paste button the clipboard
+    BOOL stacked = [self pasteKeyPastesStack];
+    self.pasteControl.hidden = stacked;
+    self.pasteButton.isAccessibilityElement = stacked;
     if (active && self.stackView == nil) {
         ClipboardStackView *stack = [ClipboardStackView new];
         stack.translatesAutoresizingMaskIntoConstraints = NO;

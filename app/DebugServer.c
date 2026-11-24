@@ -6,7 +6,7 @@
 //   curl -s localhost:1234 -d '{"jsonrpc":"2.0","id":1,"method":"fs.stat","params":{"path":"/usr/lib/libpython3.11.so.1.0"}}'
 
 // Debug-only: in Release builds the entire translation unit compiles to nothing.
-#if defined(DEBUG) && defined(GUEST_ARM64)
+#if defined(DEBUG)
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1294,4 +1294,4 @@ void debug_server_start(int port) {
         fprintf(stderr, "[DebugServer] pthread_create failed: %s\n", strerror(err));
 }
 
-#endif // defined(DEBUG) && defined(GUEST_ARM64)
+#endif // defined(DEBUG)

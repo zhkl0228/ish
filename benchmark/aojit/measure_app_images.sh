@@ -10,7 +10,7 @@
 set -e
 cd "$(dirname "$0")/../.."
 repo=$PWD
-root=$repo/build-aot-root
+root=${AOT_ROOT:-$repo/build-aot-root}  # record_app_images.sh's
 aot=$repo/build-arm64-aot
 abi=$(ISH_JIT_PIC=1 build-arm64-jit/ish -f "$root" /bin/cat /proc/ish/jit | grep -o 'abi [0-9a-f]*' | cut -d' ' -f2)
 images=$(ls "$repo"/benchmark/aojit/images/$abi/app/aot_*.S | grep -v '_ios\.S$' | paste -sd, -)
@@ -27,7 +27,7 @@ fi
 if [ -f "$aot/build.ninja" ]; then
     meson configure "$aot" -Dcli_aot="$images"
 else
-    CC=${CC:-clang} meson setup "$aot" -Dguest_arch=arm64 -Djit=true -Djit_emit=false -Dbuildtype=release -Dcli_aot="$images"
+    CC=${CC:-clang} meson setup "$aot" -Djit=true -Djit_emit=false -Dbuildtype=release -Dcli_aot="$images"
 fi
 ninja -C "$aot" ish
 "$aot/ish" -f "$root" /bin/cat /proc/ish/jit | grep -E 'images:|  ok|rejected'

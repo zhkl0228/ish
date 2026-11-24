@@ -17,9 +17,7 @@
 #include "kernel/memory.h"
 #include "util/list.h"
 #include "util/signpost.h"
-#ifdef GUEST_ARM64
 #include "kernel/native_offload.h"
-#endif
 
 // Thread-local recovery state for JIT crash handling.
 // When a host SIGSEGV occurs inside JIT code (due to a stale TLB pointer
@@ -250,13 +248,8 @@ void dump_block_prof(void) {
 __thread int ish_thread_marker;
 
 // Architecture-specific instruction pointer access
-#if defined(GUEST_ARM64)
 #define CPU_IP(cpu) ((cpu)->pc)
 #define CPU_HAS_SINGLE_STEP 0
-#else
-#define CPU_IP(cpu) ((cpu)->eip)
-#define CPU_HAS_SINGLE_STEP ((cpu)->tf)
-#endif
 
 extern int current_pid(void);
 
@@ -519,7 +512,7 @@ void asbestos_invalidate_all(struct asbestos *asbestos) {
 
 // hash_size is a power of two. ARM64 code addresses are 4-byte aligned, so
 // `addr % hash_size` left 3 of every 4 buckets empty; fold the address so the
-// low bucket bits come from bits 2+ (x86 keeps its byte-granular low bits).
+// low bucket bits come from bits 2+.
 static inline size_t fiber_hash(addr_t addr, size_t size) {
     return (size_t) (addr ^ (addr >> 2) ^ (addr >> 19)) & (size - 1);
 }
@@ -541,9 +534,21 @@ static void fiber_resize_hash(struct asbestos *asbestos, size_t new_size) {
     asbestos->hash_size = new_size;
 }
 
+// Every address space's translated blocks, counted where their mem_used and
+// num_blocks are, for /proc/ish/host: what of the app's malloc they hold
+_Atomic uint64_t st_fiber_blocks, st_fiber_bytes;
+
+// A block is one malloc, its gadgets after it. used counts the gadgets'
+// unsigned longs (gen_start's capacity), not bytes.
+static size_t fiber_block_bytes(struct fiber_block *block) {
+    return sizeof(*block) + block->used * sizeof(block->code[0]);
+}
+
 static void fiber_insert(struct asbestos *asbestos, struct fiber_block *block) {
     asbestos->mem_used += block->used;
     asbestos->num_blocks++;
+    atomic_fetch_add_explicit(&st_fiber_blocks, 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&st_fiber_bytes, fiber_block_bytes(block), memory_order_relaxed);
     // target an average hash chain length of 1-2
     if (asbestos->num_blocks >= asbestos->hash_size * 2)
         fiber_resize_hash(asbestos, asbestos->hash_size * 2);
@@ -572,7 +577,6 @@ static struct fiber_block *fiber_block_compile(addr_t ip, struct tlb *tlb) {
     TRACE("%d %08x --- compiling:\n", current_pid(), ip);
     if (!gen_start(ip, &state))
         return NULL;
-#ifdef GUEST_ARM64
     // Pre-built gadget offload (ARM64 only): if a native spec_fn is registered for
     // this function entry, emit one prebuilt gadget covering the whole function
     // instead of the normal gadget stream. Lossless: no registration → normal
@@ -592,7 +596,6 @@ static struct fiber_block *fiber_block_compile(addr_t ip, struct tlb *tlb) {
             return state.block;
         }
     }
-#endif
 #ifdef ISH_JIT
     struct jit_units *jit_units = jit_units_begin();
     state.units = jit_units != NULL;
@@ -613,8 +616,7 @@ static struct fiber_block *fiber_block_compile(addr_t ip, struct tlb *tlb) {
         // no block should span more than 2 pages
         // guarantee this by limiting total block size to 1 page
         // guarantee that by stopping as soon as there's less space left than
-        // the maximum length of an x86 instruction
-        // TODO refuse to decode instructions longer than 15 bytes
+        // 15 bytes (more than an instruction's 4)
         if (state.ip - ip >= PAGE_SIZE - 15) {
             gen_exit(&state);
             break;
@@ -643,7 +645,6 @@ static struct fiber_block *fiber_block_compile(addr_t ip, struct tlb *tlb) {
     return state.block;
 }
 
-#ifdef GUEST_ARM64
 // [T-ish-precise-fault-pc] cpu->pc only follows block boundaries: a gadget
 // that faults leaves it at the start of the current block. A signal handler
 // then saw the wrong pc (Go could not turn a nil dereference into a panic),
@@ -746,7 +747,6 @@ static struct fiber_block *fiber_block_compile_protected(struct asbestos *asbest
         fiber_block_free(NULL, block);
     }
 }
-#endif
 
 // Remove all pointers to the block. It can't be freed yet because another
 // thread may be executing it.
@@ -754,6 +754,8 @@ static void fiber_block_disconnect(struct asbestos *asbestos, struct fiber_block
     if (asbestos != NULL) {
         asbestos->mem_used -= block->used;
         asbestos->num_blocks--;
+        atomic_fetch_sub_explicit(&st_fiber_blocks, 1, memory_order_relaxed);
+        atomic_fetch_sub_explicit(&st_fiber_bytes, fiber_block_bytes(block), memory_order_relaxed);
     }
     list_remove(&block->chain);
     for (int i = 0; i <= 1; i++) {
@@ -798,7 +800,6 @@ static inline size_t fiber_cache_hash(addr_t ip) {
     return (ip ^ (ip >> 12)) & (FIBER_CACHE_SIZE - 1);
 }
 
-#ifdef GUEST_ARM64
 // The guest's FPSR is the host's register while the run loop runs: put in
 // when it starts, taken back at each of its exits (fiber_cpu_out), and left
 // alone by fiber_enter and fiber_exit (entry.S).
@@ -810,7 +811,6 @@ static inline uint32_t host_fpsr_read(void) {
     __asm__ volatile("mrs %0, fpsr" : "=r"(fpsr));
     return (uint32_t) fpsr;
 }
-#endif
 
 // The run loop's state back in cpu, at its exits. _poked is the poked_ptr
 // channel's, never the copy's (see the end of cpu_step_to_interrupt).
@@ -818,9 +818,7 @@ static void fiber_cpu_out(struct cpu_state *cpu, struct fiber_frame *frame) {
     bool live_poked = cpu->_poked;
     *cpu = frame->cpu;
     cpu->_poked = live_poked;
-#ifdef GUEST_ARM64
     cpu->fpsr = host_fpsr_read();
-#endif
 }
 
 static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
@@ -859,9 +857,7 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
     frame->last_block = NULL;
     frame->cpu = *cpu;
     assert(asbestos->mmu == cpu->mmu);
-#ifdef GUEST_ARM64
     host_fpsr_write(frame->cpu.fpsr);
-#endif
 
     int interrupt = INT_NONE;
     int crash_retry_count = 0;
@@ -929,7 +925,6 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
             cpu->pc = 0;
             return INT_GPF;
         }
-#ifdef GUEST_ARM64
         // --- Mixed execution: return from a nested prebuilt-gadget call ---
         // A prebuilt spec_fn that hit a guest bl/blr set LR to PREBUILT_SENTINEL
         // and re-entered the dispatch loop to run the callee. When the callee
@@ -969,7 +964,6 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
                 continue;
             }
         }
-#endif
         // Trace-JIT bypass: if a native translation already exists for
         // this PC (in the dispatch table), skip the gadget block compile
         // and run native instead. If no translation exists yet, kick off
@@ -1017,11 +1011,7 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
                 lock(&asbestos->lock);
                 block = fiber_lookup(asbestos, ip);
                 if (block == NULL) {
-#ifdef GUEST_ARM64
                     block = fiber_block_compile_protected(asbestos, ip, tlb);
-#else
-                    block = fiber_block_compile(ip, tlb);
-#endif
                     if (block == NULL) {
                         unlock(&asbestos->lock);
                         interrupt = INT_GPF;
@@ -1073,19 +1063,15 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
                 if (!last_block->is_jetsam && !block->is_jetsam) {
                     for (int i = 0; i <= 1; i++) {
                         // The slot still holds the fake ip of this very block:
-                        // target | 1 << 63 (gen.c) on arm64. Compared on its low 32
-                        // bits, as an x86 guest's (whose fake ips wrap there), no
+                        // target | 1 << 63 (gen.c). Compared on its low 32 bits,
+                        // as an x86 guest's were (whose fake ips wrap there), no
                         // branch to a block above 4 GB was ever chained: V8's
                         // generated code (0x40000000000 up) left translated code at
                         // each of its jumps, four exits to this loop in five, and a
                         // chained slot (a host pointer) could pass for a guest
                         // address by its low bits.
                         if (last_block->jump_ip[i] == NULL ||
-#ifdef GUEST_ARM64
                                 *last_block->jump_ip[i] != ((unsigned long) block->addr | (1UL << 63)))
-#else
-                                (*last_block->jump_ip[i] & 0xffffffff) != block->addr)
-#endif
                             continue;
 #ifdef ISH_JIT
                         if (!jit_chain_ok(last_block, i, block)) {
@@ -1144,11 +1130,9 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
         interrupt = fiber_enter(block, frame, tlb);
         in_jit = 0;
         jit_frame = NULL;
-#ifdef GUEST_ARM64
         frame->cpu.segfault_precise_pc = 0;
         if (interrupt == INT_GPF)
             fiber_fix_fault_pc(asbestos, frame, tlb);
-#endif
 
 
 #ifdef ISH_JIT
@@ -1169,7 +1153,6 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
             tlb->block_cache_gen = asbestos->invalidate_gen;
             memset(frame->ret_cache, 0, sizeof(frame->ret_cache));
             frame->last_block = NULL;
-#ifdef GUEST_ARM64
             // Retry from the faulting instruction. Everything before it in
             // the block has run, and running it again repeats its side
             // effects: HotSpot's deoptimization faulted after an
@@ -1186,7 +1169,6 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
             else
                 frame->cpu.pc = jit_saved_pc;
             frame->cpu.segfault_precise_pc = 0;
-#endif
 
             crash_retry_count++;
             if (crash_retry_count >= 16) {
@@ -1282,21 +1264,16 @@ static int cpu_single_step(struct cpu_state *cpu, struct tlb *tlb) {
 #ifdef ISH_JIT
     jit_exec_ready();
 #endif
-#ifdef GUEST_ARM64
     host_fpsr_write(frame.cpu.fpsr);
-#endif
     int interrupt = fiber_enter(block, &frame, tlb);
     *cpu = frame.cpu;
-#ifdef GUEST_ARM64
     cpu->fpsr = host_fpsr_read();
-#endif
     fiber_block_free(NULL, block);
     if (interrupt == INT_NONE)
         interrupt = INT_DEBUG;
     return interrupt;
 }
 
-#ifdef GUEST_ARM64
 // Mixed execution: run guest function `target_pc` to completion as threaded-
 // code and return its result (guest x0). Called from a prebuilt spec_fn at a
 // bl/blr site. The callee runs through the normal dispatch loop; we point its
@@ -1345,13 +1322,11 @@ uint64_t prebuilt_call(struct cpu_state *cpu, struct tlb *tlb, addr_t target_pc)
     tlb->frame = outer_frame;
     return ret;
 }
-#endif
 
 int cpu_run_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
     ish_thread_marker = 1;
     if (cpu->poked_ptr == NULL)
         cpu->poked_ptr = &cpu->_poked;
-#ifdef GUEST_ARM64
     // NOTE: Do NOT invalidate exclusive monitor here.
     // This function is called once, but the inner loop (cpu_step_to_interrupt)
     // calls fiber_enter repeatedly. The LDXR/STXR pair may span multiple
@@ -1359,7 +1334,6 @@ int cpu_run_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
     // LDXR/STXR atomicity across block boundaries.
     // The exclusive monitor is invalidated by STXR itself (success or fail)
     // and by context switches / signal delivery.
-#endif
     struct asbestos *asbestos = cpu->mmu->asbestos;
     __atomic_add_fetch(&asbestos->active_threads, 1, __ATOMIC_RELAXED);
     tlb_refresh(tlb, cpu->mmu);

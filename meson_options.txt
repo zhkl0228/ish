@@ -2,12 +2,14 @@ option('log', type: 'string', value: '')
 option('nolog', type: 'string', value: '')
 option('log_handler', type: 'string', value: 'dprintf')
 
-option('engine', type: 'combo', choices: ['asbestos', 'unicorn'], value: 'asbestos')
-option('kernel', type: 'combo', choices: ['ish', 'linux'], value: 'ish')
-option('kconfig', type: 'array', value: [])
-
-option('guest_arch', type: 'combo', choices: ['x86', 'arm64'], value: 'x86',
-       description: 'Guest architecture to emulate')
+# Gone with the x86 guest (fb0351e2): the guest is AArch64 only. Kept, with
+# arm64 its only value, because a build dir set up with -Dguest_arch=arm64
+# (every one of the fork's: the default was x86) has it among its user
+# options, and meson 1.11 refuses to regenerate one with an option the
+# project no longer has ("Unknown options"). Setting it says it is
+# deprecated; x86 is refused.
+option('guest_arch', type: 'combo', choices: ['arm64'], value: 'arm64', deprecated: true,
+       description: 'Deprecated and ignored: the guest is AArch64 only')
 
 option('vdso_c_args', type: 'string', value: '')
 

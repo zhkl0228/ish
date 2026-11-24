@@ -5,8 +5,8 @@
 > **This repository is a fork of [ish-app/ish](https://github.com/ish-app/ish)** that adds a
 > **native ARM64 guest backend** to upstream iSH's threaded-code interpreter (*Asbestos*,
 > renamed from *jit* upstream in 2024 — [ish-app/ish@d375656f](https://github.com/ish-app/ish/commit/d375656f)).
-> It emulates AArch64 Linux on Apple Silicon, running alongside the original x86 (i386)
-> guest backend.
+> It emulates AArch64 Linux on Apple Silicon. The guest is AArch64 only: upstream's x86 (i386)
+> guest backend, and its Linux-kernel variant (iSH+Linux), have been removed.
 >
 > Asbestos is **not a JIT** — it doesn't emit machine code at runtime. For each basic block
 > it builds an array of pointers to pre-compiled native "gadget" functions that tail-call
@@ -16,7 +16,7 @@
 > dispatch, so the overhead per guest instruction is small.
 >
 > **Key enhancements over upstream:**
-> - **Native ARM64 gadget dispatch** — same-architecture, 2-12x faster than x86 for compute
+> - **Native ARM64 gadget dispatch** — same-architecture, 2-12x faster than upstream's x86 emulation for compute
 > - **48-bit virtual address space** — 4-level page table supports V8/Go/Rust runtimes
 > - **Node.js 22 / npm / npx** — V8 guard pages, binary patch, `--jitless` injection
 > - **Go and Rust** — large VA reservations, signal frame alignment, FUTEX_WAIT_BITSET, PMULL
@@ -25,7 +25,7 @@
 >   `Native Offload` (bypass emulation for selected binaries), bind mounts for host↔guest file sharing
 > - **iOS-first rootfs** — Alpine 3.21 aarch64 with full `apk` ecosystem and versioned overlay patching
 >
-> **Performance (ARM64 vs x86, compute-heavy):** C `int_arith_2M` **12x faster**,
+> **Performance (ARM64 vs upstream's x86 emulation, compute-heavy):** C `int_arith_2M` **12x faster**,
 > Python `fib(30)` **9.2x faster**, `sum(1M)` **10.2x faster**, shell `seq+awk 100K` **7.2x faster**.
 >
 > **Full docs:** [README_arm64.md](README_arm64.md) · [中文版](README_arm64_zh.md) ·
@@ -50,7 +50,7 @@
 </a>
 </p>
 
-A project to get a Linux shell running on iOS, using usermode x86 emulation and syscall translation.
+A project to get a Linux shell running on iOS, using usermode AArch64 (ARM64) emulation and syscall translation.
 
 For the current status of the project, check the issues tab, and the commit logs.
 
@@ -64,6 +64,8 @@ For the current status of the project, check the issues tab, and the commit logs
 
 This project has a git submodule, make sure to clone with `--recurse-submodules` or run `git submodule update --init` after cloning.
 
+iSH builds and runs on an AArch64 host only: an Apple silicon Mac (the app, or the command line tool), an iPhone or iPad, or an arm64 Linux machine (the command line tool).
+
 You'll need these things to build the project:
 
  - Python 3
@@ -75,15 +77,15 @@ You'll need these things to build the project:
 
 ## Build for iOS
 
-Open the project in Xcode, open iSH.xcconfig, and change `ROOT_BUNDLE_IDENTIFIER` to something unique. You'll also need to update the development team ID in the project (not target!) build settings. Then click Run. There are scripts that should do everything else automatically. If you run into any problems, open an issue and I'll try to help.
+Open the project in Xcode, open iSH.xcconfig, and change `ROOT_BUNDLE_IDENTIFIER` to something unique. You'll also need to update the development team ID in the project (not target!) build settings. Then choose the `iSH-ARM64` scheme and click Run. There are scripts that should do everything else automatically: the build fetches the root filesystem the app ships and the AOT images it links (`app/fetch-aot.py`, see [benchmark/aojit/README.md](benchmark/aojit/README.md)). If you run into any problems, open an issue and I'll try to help.
 
 ## Build command line tool for testing
 
-To set up your environment, cd to the project and run `meson build` to create a build directory in `build`. Then cd to the build directory and run `ninja`.
+To set up your environment, cd to the project and run `meson setup build` to create a build directory in `build`. Then cd to the build directory and run `ninja`.
 
-To set up a self-contained Alpine linux filesystem, download the Alpine minirootfs tarball for i386 from the [Alpine website](https://alpinelinux.org/downloads/) and run `./tools/fakefsify`, with the minirootfs tarball as the first argument and the name of the output directory as the second argument. Then you can run things inside the Alpine filesystem with `./ish -f alpine /bin/sh`, assuming the output directory is called `alpine`. If `tools/fakefsify` doesn't exist for you in your build directory, that might be because it couldn't find libarchive on your system (see above for ways to install it.)
+To set up a self-contained Alpine linux filesystem, download the Alpine minirootfs tarball for aarch64 from the [Alpine website](https://alpinelinux.org/downloads/) and run `./tools/fakefsify`, with the minirootfs tarball as the first argument and the name of the output directory as the second argument. Then you can run things inside the Alpine filesystem with `./ish -f alpine /bin/sh`, assuming the output directory is called `alpine`. If `tools/fakefsify` doesn't exist for you in your build directory, that might be because it couldn't find libarchive on your system (see above for ways to install it.)
 
-You can replace `ish` with `tools/ptraceomatic` to run the program in a real process and single step and compare the registers at each step. I use it for debugging. Requires 64-bit Linux 4.11 or later.
+The regression tests run the command line tool on such a filesystem: see [tests/regress/README.md](tests/regress/README.md).
 
 ## Logging
 

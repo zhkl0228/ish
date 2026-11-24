@@ -1121,25 +1121,23 @@ static UIMenu *Inline(NSArray<UIMenuElement *> *children) {
 
 // Typing the start of a filter's name offers it, as Paste does ("L" → Link, Last Week…).
 - (void)showFilterSuggestionsMatching:(NSString *)prefix {
-    if (@available(iOS 16, *)) {
-        NSMutableArray<UISearchSuggestionItem *> *suggestions = [NSMutableArray new];
-        NSArray<ClipFilter *> *active = self.activeFilters;
-        for (ClipFilter *filter in self.allFilters) {
-            if ([active containsObject:filter])
-                continue;
-            if (prefix != nil && (prefix.length == 0 || ![filter.title.lowercaseString hasPrefix:prefix.lowercaseString]))
-                continue;
-            UISearchSuggestionItem *suggestion = [UISearchSuggestionItem suggestionWithLocalizedSuggestion:filter.title
-                                                                                        descriptionString:nil
-                                                                                                 iconImage:[self imageForFilter:filter]];
-            suggestion.representedObject = filter;
-            [suggestions addObject:suggestion];
-        }
-        self.searchField.searchSuggestions = suggestions.count > 0 ? suggestions : nil;
+    NSMutableArray<UISearchSuggestionItem *> *suggestions = [NSMutableArray new];
+    NSArray<ClipFilter *> *active = self.activeFilters;
+    for (ClipFilter *filter in self.allFilters) {
+        if ([active containsObject:filter])
+            continue;
+        if (prefix != nil && (prefix.length == 0 || ![filter.title.lowercaseString hasPrefix:prefix.lowercaseString]))
+            continue;
+        UISearchSuggestionItem *suggestion = [UISearchSuggestionItem suggestionWithLocalizedSuggestion:filter.title
+                                                                                    descriptionString:nil
+                                                                                             iconImage:[self imageForFilter:filter]];
+        suggestion.representedObject = filter;
+        [suggestions addObject:suggestion];
     }
+    self.searchField.searchSuggestions = suggestions.count > 0 ? suggestions : nil;
 }
 
-- (void)searchTextField:(UISearchTextField *)field didSelectSuggestion:(id<UISearchSuggestion>)suggestion API_AVAILABLE(ios(16.0)) {
+- (void)searchTextField:(UISearchTextField *)field didSelectSuggestion:(id<UISearchSuggestion>)suggestion {
     ClipFilter *filter = suggestion.representedObject;
     if (![filter isKindOfClass:ClipFilter.class])
         return;
@@ -1167,8 +1165,7 @@ static UIMenu *Inline(NSArray<UIMenuElement *> *children) {
 }
 
 - (void)textFieldDidEndEditing:(UITextField *)textField {
-    if (@available(iOS 16, *))
-        self.searchField.searchSuggestions = nil;
+    self.searchField.searchSuggestions = nil;
 }
 
 - (void)focusResults {

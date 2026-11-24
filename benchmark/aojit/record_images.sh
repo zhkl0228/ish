@@ -28,14 +28,14 @@ rec() {
     # not when record.sh made no image (its status is lost in the pipe)
     [ "$out/aot_$name.S" -nt "$out/rec/$name.jsonl" ] || return 0
     if [ "$(uname -s)" = Darwin ]; then
-        xcrun -sdk iphoneos clang -target arm64-apple-ios15.0 -c -o "$out/aot_${name}_ios.o" "$out/aot_$name.S" &&
+        xcrun -sdk iphoneos clang -target arm64-apple-ios16.0 -c -o "$out/aot_${name}_ios.o" "$out/aot_$name.S" &&
             echo "📱 $out/aot_${name}_ios.o"
         return 0
     fi
     python3 "$here/../../tools/jit_aot/gen.py" "$out/rec/$name.jsonl" "$ish" "$rootfs" "$out/aot_${name}_ios.S" \
             --name "$(echo "$name" | tr '.-' '__')" --format macho > "$out/rec/$name.ios.log" 2>&1 ||
         { echo "[$name] ❌ the Mach-O image failed (gen.py exited $?): $out/rec/$name.ios.log"; return 0; }
-    ${IOS_CC:-clang-20} -target arm64-apple-ios15.0 -c -o "$out/aot_${name}_ios.o" "$out/aot_${name}_ios.S" &&
+    ${IOS_CC:-clang-20} -target arm64-apple-ios16.0 -c -o "$out/aot_${name}_ios.o" "$out/aot_${name}_ios.S" &&
         echo "📱 $out/aot_${name}_ios.o"
 }
 n=0

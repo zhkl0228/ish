@@ -29,6 +29,8 @@ tools/jit_aot/__pycache__/
 tools/prebuilt_gadget_gen/*.bak
 .cache/
 
+# The ish builds benchmark/aojit/README.md makes (build-arm64-jit, build-arm64-aot)
+/build-arm64-*/
 # Recorded AOT images (large, per-build); regenerate them as benchmark/aojit/README.md says
 benchmark/aojit/images/
 # Local list of the AOT images the ARM64 app links (see app/AppARM64.xcconfig)

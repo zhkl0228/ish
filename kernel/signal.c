@@ -16,8 +16,6 @@
 #endif
 
 
-int xsave_extra = 0;
-int fxsave_extra = 0;
 static void sigmask_set(sigset_t_ set);
 static void altstack_to_user(struct stack_t_ *user_stack);
 static bool is_on_altstack(addr_t sp);
@@ -190,7 +188,6 @@ void send_signal(struct task *task, int sig, struct siginfo_ info) {
         return;
     if (task->zombie || task->exiting)
         return;
-#ifdef GUEST_ARM64
     if ((sig == SIGTRAP_ || sig == SIGABRT_ || sig == SIGILL_ || sig == SIGSEGV_ || sig == SIGBUS_)
         && ish_exec_trace())
         fprintf(stderr, "SIGNAL_TRACE: sig=%d pc=0x%llx pid=%d sp=0x%llx lr=0x%llx fault=0x%llx\n",
@@ -198,7 +195,6 @@ void send_signal(struct task *task, int sig, struct siginfo_ info) {
                 (unsigned long long)task->cpu.sp,
                 (unsigned long long)task->cpu.regs[30],
                 (unsigned long long)task->cpu.segfault_addr);
-#endif
 
     // Native offload: forward signal to the host native process
     if (native_offload_forward_signal(task, sig))
@@ -348,33 +344,22 @@ static addr_t sigreturn_trampoline(const char *name) {
 }
 
 int sigset_size_valid(dword_t size) {
-#if defined(GUEST_ARM64)
     return size >= sizeof(sigset_t_) && (size % sizeof(sigset_t_) == 0);
-#else
-    return size == sizeof(sigset_t_);
-#endif
 }
 
 int user_get_sigset(addr_t addr, dword_t size, sigset_t_ *out) {
     if (!sigset_size_valid(size))
         return _EINVAL;
-#if defined(GUEST_ARM64)
     uint64_t word = 0;
     if (user_read(addr, &word, sizeof(word)))
         return _EFAULT;
     *out = (sigset_t_) word;
     return 0;
-#else
-    if (user_get(addr, *out))
-        return _EFAULT;
-    return 0;
-#endif
 }
 
 int user_put_sigset(addr_t addr, dword_t size, sigset_t_ set) {
     if (!sigset_size_valid(size))
         return _EINVAL;
-#if defined(GUEST_ARM64)
     uint64_t word = (uint64_t) set;
     if (user_write(addr, &word, sizeof(word)))
         return _EFAULT;
@@ -389,14 +374,8 @@ int user_put_sigset(addr_t addr, dword_t size, sigset_t_ set) {
         remaining -= chunk;
     }
     return 0;
-#else
-    if (user_put(addr, set))
-        return _EFAULT;
-    return 0;
-#endif
 }
 
-#if defined(GUEST_ARM64)
 struct sigaction_arm64_kernel {
     uint64_t handler;
     uint64_t flags;
@@ -439,9 +418,7 @@ static int user_put_sigaction_arm64(addr_t addr, dword_t sigset_size, const stru
         return _EFAULT;
     return user_put_sigset(addr + offsetof(struct sigaction_arm64_kernel, mask), sigset_size, in->mask);
 }
-#endif
 
-#if defined(GUEST_ARM64)
 // ARM64 signal handling - matches Linux kernel sigcontext layout
 
 static void setup_sigcontext(struct sigcontext_ *sc, struct cpu_state *cpu) {
@@ -476,26 +453,6 @@ static void setup_sigcontext(struct sigcontext_ *sc, struct cpu_state *cpu) {
     term[0] = 0;  // magic = 0 terminates
     term[1] = 0;  // size = 0
 }
-#else
-static void setup_sigcontext(struct sigcontext_ *sc, struct cpu_state *cpu) {
-    sc->ax = cpu->eax;
-    sc->bx = cpu->ebx;
-    sc->cx = cpu->ecx;
-    sc->dx = cpu->edx;
-    sc->di = cpu->edi;
-    sc->si = cpu->esi;
-    sc->bp = cpu->ebp;
-    sc->sp = sc->sp_at_signal = cpu->esp;
-    sc->ip = cpu->eip;
-    collapse_flags(cpu);
-    sc->flags = cpu->eflags;
-    sc->trapno = cpu->trapno;
-    if (cpu->trapno == INT_GPF)
-        sc->cr2 = cpu->segfault_addr;
-    // TODO more shit
-    sc->oldmask = current->blocked & 0xffffffff;
-}
-#endif
 
 static void setup_sigframe(struct siginfo_ *info, struct sigframe_ *frame) {
     frame->restorer = sigreturn_trampoline("__kernel_sigreturn");
@@ -515,6 +472,37 @@ static void setup_sigframe(struct siginfo_ *info, struct sigframe_ *frame) {
     memcpy(frame->retcode, &retcode, sizeof(retcode));
 }
 
+// A fault's SIGSEGV has the fault's ESR in its frame, after the FPSIMD
+// context, as Linux's has (esr_context): a handler reads whether a store
+// faulted, as iSH's JIT does in its host fault handler, which said "no
+// esr_context in the signal frame" when iSH ran it. There is no ESR the
+// hardware gave, so it is the one an ARMv8 data abort from EL0 has: EC 0x24,
+// IL, WnR for a store, ISV 0 (no syndrome, as for LDP/STP), and a level 3
+// translation fault (SEGV_MAPERR, 0x07) or permission fault (SEGV_ACCERR,
+// 0x0F); EC 0x20 and no WnR where the instruction fetch faulted (the fault
+// address is the pc). A SIGSEGV that is no fault (kill) has none.
+#define ESR_EC_DABT_LOW 0x24
+#define ESR_EC_IABT_LOW 0x20
+#define ESR_IL (1u << 25)
+#define ESR_WNR (1u << 6)
+#define ESR_FSC_TRANSLATION_L3 0x07
+#define ESR_FSC_PERMISSION_L3 0x0f
+static void setup_esr_context(struct sigcontext_ *sc, struct siginfo_ *info, struct cpu_state *cpu) {
+    if (info->sig != SIGSEGV_ || (info->code != SEGV_MAPERR_ && info->code != SEGV_ACCERR_))
+        return;
+    bool fetch = sc->fault_address == sc->pc;
+    uint64_t esr = (uint64_t) (fetch ? ESR_EC_IABT_LOW : ESR_EC_DABT_LOW) << 26 | ESR_IL |
+        (info->code == SEGV_MAPERR_ ? ESR_FSC_TRANSLATION_L3 : ESR_FSC_PERMISSION_L3);
+    if (!fetch && cpu->segfault_was_write)
+        esr |= ESR_WNR;
+    // in place of the terminator after the FPSIMD context, which goes after it
+    struct esr_context_ *record = (struct esr_context_ *) (sc->__reserved + sizeof(struct fpsimd_context_));
+    *record = (struct esr_context_) {.magic = ESR_MAGIC, .size = sizeof(struct esr_context_), .esr = esr};
+    uint32_t *term = (uint32_t *) (record + 1);
+    term[0] = 0;
+    term[1] = 0;
+}
+
 static void setup_rt_sigframe(struct siginfo_ *info, struct rt_sigframe_ *frame) {
     frame->restorer = sigreturn_trampoline("__kernel_rt_sigreturn");
     frame->sig = info->sig;
@@ -523,6 +511,7 @@ static void setup_rt_sigframe(struct siginfo_ *info, struct rt_sigframe_ *frame)
     frame->uc.link = 0;
     altstack_to_user(&frame->uc.stack);
     setup_sigcontext(&frame->uc.mcontext, &current->cpu);
+    setup_esr_context(&frame->uc.mcontext, info, &current->cpu);
     frame->uc.sigmask = current->blocked;
 
     static const struct {
@@ -564,7 +553,6 @@ static bool receive_signal(struct sighand *sighand, struct siginfo_ *info) {
 
     struct sigaction_ *action = &sighand->action[info->sig];
     bool need_siginfo = action->flags & SA_SIGINFO_;
-#if defined(GUEST_ARM64)
     // ARM64 only provides __kernel_rt_sigreturn in the VDSO.
     // Always use an rt_sigframe for signal delivery.
     need_siginfo = true;
@@ -591,7 +579,6 @@ static bool receive_signal(struct sighand *sighand, struct siginfo_ *info) {
         current->cpu.regs[0] = current->syscall_restart_arg0;
         current->syscall_restartable = false;
     }
-#endif
 
     // setup the frame
     union {
@@ -608,17 +595,11 @@ static bool receive_signal(struct sighand *sighand, struct siginfo_ *info) {
     }
 
     // set up registers for signal handler
-#if defined(GUEST_ARM64)
     // ARM64 spec: exceptions clear the exclusive monitor
     current->cpu.excl_addr = UINT64_MAX;
     current->cpu.regs[0] = info->sig;
     current->cpu.pc = sighand->action[info->sig].handler;
     addr_t sp = current->cpu.sp;  // Use addr_t (64-bit) for ARM64
-#else
-    current->cpu.eax = info->sig;
-    current->cpu.eip = sighand->action[info->sig].handler;
-    dword_t sp = current->cpu.esp;
-#endif
     // Only switch to the alternate signal stack when the handler was
     // registered with SA_ONSTACK. iSH previously switched whenever an altstack
     // existed at all, ignoring the flag — that put EVERY handler on the
@@ -633,27 +614,10 @@ static bool receive_signal(struct sighand *sighand, struct siginfo_ *info) {
             !is_on_altstack(sp)) {
         sp = current->altstack + current->altstack_size;
     }
-    if (xsave_extra) {
-        // do as the kernel does
-        // this is superhypermega condensed version of fpu__alloc_mathframe in
-        // arch/x86/kernel/fpu/signal.c
-        sp -= xsave_extra;
-        sp &=~ 0x3f;
-        sp -= fxsave_extra;
-    }
     sp -= frame_size;
-#if defined(GUEST_ARM64)
     // ARM64 requires the stack to be 16-byte aligned.
     sp &= ~0xf;
-#else
-    // align sp + 4 on a 16-byte boundary because that's what the abi says
-    sp = ((sp + 4) & ~0xf) - 4;
-#endif
-#if defined(GUEST_ARM64)
     current->cpu.sp = sp;
-#else
-    current->cpu.esp = sp;
-#endif
 
     // Update the mask. By default the signal will be blocked while in the
     // handler, but sigaction is allowed to customize this.
@@ -665,14 +629,9 @@ static bool receive_signal(struct sighand *sighand, struct siginfo_ *info) {
     if (need_siginfo) {
         frame.rt_sigframe.pinfo = sp + offsetof(struct rt_sigframe_, info);
         frame.rt_sigframe.puc = sp + offsetof(struct rt_sigframe_, uc);
-#if defined(GUEST_ARM64)
         // ARM64 ABI: x0=signum, x1=siginfo*, x2=ucontext*
         current->cpu.regs[1] = frame.rt_sigframe.pinfo;
         current->cpu.regs[2] = frame.rt_sigframe.puc;
-#else
-        current->cpu.edx = frame.rt_sigframe.pinfo;
-        current->cpu.ecx = frame.rt_sigframe.puc;
-#endif
     }
 
     // install frame
@@ -681,13 +640,11 @@ static bool receive_signal(struct sighand *sighand, struct siginfo_ *info) {
         force_signal(current, SIGSEGV_, SIGINFO_NIL, info->sig == SIGSEGV_);
     }
 
-#if defined(GUEST_ARM64)
     // Set LR to the signal return trampoline.
     if (need_siginfo)
         current->cpu.regs[30] = frame.rt_sigframe.restorer;
     else
         current->cpu.regs[30] = frame.sigframe.restorer;
-#endif
 
     if (action->flags & SA_RESETHAND_)
         *action = (struct sigaction_) {.handler = SIG_DFL_};
@@ -795,7 +752,6 @@ void receive_signals(void) {
         sigqueue_free(sigqueue);
     }
 
-#if defined(GUEST_ARM64)
     // A blocking call a signal interrupted, with no handler run for it,
     // starts again (calls.c), as Linux's ERESTARTSYS: PC back to its svc
     // and its first argument back. Only right after the call: on a later
@@ -815,9 +771,6 @@ void receive_signals(void) {
     // resets its restart_block)
     if (handler_ran)
         current->restart_sleep_pending = false;
-#else
-    (void) handler_ran;   // x86 restarts nothing without a handler
-#endif
 
     unlock(&sighand->lock);
 
@@ -865,7 +818,6 @@ void notify_parent_stop(int code, int sig) {
     unlock(&pids_lock);
 }
 
-#if defined(GUEST_ARM64)
 static void restore_sigcontext(struct sigcontext_ *context, struct cpu_state *cpu) {
     memcpy(cpu->regs, context->regs, sizeof(cpu->regs));
     cpu->sp = context->sp;
@@ -882,40 +834,13 @@ static void restore_sigcontext(struct sigcontext_ *context, struct cpu_state *cp
         }
     }
 }
-#else
-static void restore_sigcontext(struct sigcontext_ *context, struct cpu_state *cpu) {
-    cpu->eax = context->ax;
-    cpu->ebx = context->bx;
-    cpu->ecx = context->cx;
-    cpu->edx = context->dx;
-    cpu->edi = context->di;
-    cpu->esi = context->si;
-    cpu->ebp = context->bp;
-    cpu->esp = context->sp;
-    cpu->eip = context->ip;
-    collapse_flags(cpu);
-
-    // Use AC, RF, OF, DF, TF, SF, ZF, AF, PF, CF
-#define USE_FLAGS 0b1010000110111010101
-    cpu->eflags = (context->flags & USE_FLAGS) | (cpu->eflags & ~USE_FLAGS);
-}
-#endif
 
 int64_t sys_rt_sigreturn(void) {
     struct cpu_state *cpu = &current->cpu;
     struct rt_sigframe_ frame;
-#if defined(GUEST_ARM64)
     addr_t sp = cpu->sp;  // Use addr_t (64-bit) for ARM64
-#else
-    dword_t sp = cpu->esp;
-#endif
-#if defined(GUEST_ARM64)
     // ARM64 keeps SP pointing at the start of the frame.
     addr_t frame_addr = sp;
-#else
-    // esp/sp points past the first field of the frame
-    addr_t frame_addr = sp - offsetof(struct rt_sigframe_, sig);
-#endif
     if (user_get(frame_addr, frame)) {
         force_signal(current, SIGSEGV_, SIGINFO_NIL, false);
         return _EFAULT;
@@ -931,32 +856,19 @@ int64_t sys_rt_sigreturn(void) {
     }
     sigmask_set(frame.uc.sigmask);
     unlock(&current->sighand->lock);
-#if defined(GUEST_ARM64)
     // Return the full 64-bit x0 from the restored context.
     // IMPORTANT: The caller (handle_interrupt) must NOT modify x0 after
     // this returns, because the full register state was restored from the
     // signal frame. We return int64_t to preserve all 64 bits.
     return (int64_t)cpu->regs[0];
-#else
-    return cpu->eax;
-#endif
 }
 
 int64_t sys_sigreturn(void) {
     struct cpu_state *cpu = &current->cpu;
     struct sigframe_ frame;
-#if defined(GUEST_ARM64)
     addr_t sp = cpu->sp;  // Use addr_t (64-bit) for ARM64
-#else
-    dword_t sp = cpu->esp;
-#endif
-#if defined(GUEST_ARM64)
     // ARM64 keeps SP pointing at the start of the frame.
     addr_t frame_addr = sp;
-#else
-    // esp/sp points past the first two fields of the frame
-    addr_t frame_addr = sp - offsetof(struct sigframe_, sc);
-#endif
     if (user_get(frame_addr, frame)) {
         force_signal(current, SIGSEGV_, SIGINFO_NIL, false);
         return _EFAULT;
@@ -964,18 +876,9 @@ int64_t sys_sigreturn(void) {
     restore_sigcontext(&frame.sc, cpu);
 
     lock(&current->sighand->lock);
-#if defined(GUEST_ARM64)
     sigmask_set(current->blocked);
-#else
-    sigset_t_ oldmask = ((sigset_t_) frame.extramask << 32) | frame.sc.oldmask;
-    sigmask_set(oldmask);
-#endif
     unlock(&current->sighand->lock);
-#if defined(GUEST_ARM64)
     return (int64_t)cpu->regs[0];
-#else
-    return cpu->eax;
-#endif
 }
 
 struct sighand *sighand_new(void) {
@@ -1025,14 +928,9 @@ dword_t sys_rt_sigaction(dword_t signum, addr_t action_addr, addr_t oldaction_ad
         return _EINVAL;
     struct sigaction_ action = {}, oldaction;
     if (action_addr != 0) {
-#if defined(GUEST_ARM64)
         int err = user_get_sigaction_arm64(action_addr, sigset_size, &action);
         if (err)
             return err;
-#else
-        if (user_get(action_addr, action))
-            return _EFAULT;
-#endif
     }
     STRACE("rt_sigaction(%d, %#x {handler=%#x, flags=%#x, restorer=%#x, mask=%#llx}, 0x%x, %d)", signum,
             action_addr, action.handler, action.flags, action.restorer,
@@ -1046,14 +944,9 @@ dword_t sys_rt_sigaction(dword_t signum, addr_t action_addr, addr_t oldaction_ad
 
     if (oldaction_addr != 0)
     {
-#if defined(GUEST_ARM64)
         int err = user_put_sigaction_arm64(oldaction_addr, sigset_size, &oldaction);
         if (err)
             return err;
-#else
-        if (user_put(oldaction_addr, oldaction))
-            return _EFAULT;
-#endif
     }
     return err;
 }
@@ -1145,11 +1038,7 @@ int_t sys_rt_sigpending(addr_t set_addr, dword_t size) {
 }
 
 static addr_t current_sp(void) {
-#if defined(GUEST_ARM64)
     return current->cpu.sp;
-#else
-    return current->cpu.esp;
-#endif
 }
 
 static bool is_on_altstack(addr_t sp) {

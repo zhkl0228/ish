@@ -61,7 +61,7 @@ if [ ! -d "$DIR/bin" ] || [ ! -d "$DIR/rootfs" ]; then
     exit 2
 fi
 if [ ! -f "$BUILD/build.ninja" ]; then
-    meson setup "$BUILD" -Dguest_arch=arm64 -Djit=true --buildtype=release || exit 1
+    meson setup "$BUILD" -Djit=true --buildtype=release || exit 1
 fi
 ninja -C "$BUILD" ish || exit 1
 ISH=$BUILD/ish

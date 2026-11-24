@@ -11,6 +11,7 @@
 #include "kernel/task.h"
 #include "kernel/errno.h"
 #include "kernel/inotify.h"
+#include "fs/real.h"
 
 struct mount *find_mount_and_trim_path(char *path) {
     struct mount *mount = mount_find(path);
@@ -34,6 +35,12 @@ bool contains_mount_point(const char *path) {
 }
 
 static struct fd *generic_openat_path(struct fd *at, const char *path_raw, int flags, int mode, bool *via_procfs);
+
+// "name/": the name of a directory, as Linux takes it
+static bool path_ends_in_slash(const char *path) {
+    size_t len = strlen(path);
+    return len > 0 && path[len - 1] == '/';
+}
 
 // Linux's MAXSYMLINKS
 #define FD_LINK_MAX_LINKS 40
@@ -108,6 +115,30 @@ static struct fd *generic_openat_path(struct fd *at, const char *path_raw, int f
             (flags & O_CREAT_ ? N_PARENT_DIR_WRITE : 0), via_procfs);
     if (err < 0)
         return ERR_PTR(err);
+    // O_CREAT of a directory's name ("new/") is EISDIR, as Linux's
+    // open_last_lookups says before it looks the name up. It made a file of
+    // the name: CPython's shutil.copyfile to a directory that is not, which
+    // it takes EISDIR from (test_copyfile_nonexistent_dir).
+    // Its directories first, as Linux walks them (path_normalize does not
+    // look them up for O_CREAT): one missing is ENOENT, one no directory
+    // ENOTDIR.
+    if (flags & O_CREAT_ && path_ends_in_slash(path_raw)) {
+        char parent[MAX_PATH];
+        strcpy(parent, path);
+        size_t len = strlen(parent);
+        while (len > 1 && parent[len - 1] == '/')
+            parent[--len] = '\0';
+        char *last = strrchr(parent, '/');
+        if (last == parent)
+            last[1] = '\0';
+        else
+            *last = '\0';
+        struct statbuf stat;
+        err = generic_statat(AT_PWD, parent, &stat, true);
+        if (err < 0)
+            return ERR_PTR(err);
+        return ERR_PTR(S_ISDIR(stat.mode) ? _EISDIR : _ENOTDIR);
+    }
     struct mount *mount = find_mount_and_trim_path(path);
     // For inotify: whether the open makes the file (IN_CREATE) or empties
     // one that was there (IN_MODIFY)
@@ -165,6 +196,12 @@ static struct fd *generic_openat_path(struct fd *at, const char *path_raw, int f
     fd->type = stat.mode & S_IFMT;
     fd->flags = flags;
 
+    // Before anything opens it further or asks may it be, as Linux's
+    // lookup says it: a device was opened (dev_open) to be said no directory
+    err = _ENOTDIR;
+    if (!S_ISDIR(fd->type) && flags & O_DIRECTORY_)
+        goto error;
+
     int accmode;
     if (flags & O_RDWR_) accmode = AC_R | AC_W;
     else if (flags & O_WRONLY_) accmode = AC_W;
@@ -194,9 +231,6 @@ static struct fd *generic_openat_path(struct fd *at, const char *path_raw, int f
         goto error;
     err = _EISDIR;
     if (S_ISDIR(fd->type) && flags & (O_RDWR_ | O_WRONLY_))
-        goto error;
-    err = _ENOTDIR;
-    if (!S_ISDIR(fd->type) && flags & O_DIRECTORY_)
         goto error;
     fd->inotify_opened = true;
     inotify_fd(fd, IN_OPEN_);
@@ -241,9 +275,9 @@ int generic_accessat(struct fd *dirfd, const char *path_raw, int mode) {
     return access_check(&stat, mode);
 }
 
-int generic_linkat(struct fd *src_at, const char *src_raw, struct fd *dst_at, const char *dst_raw) {
+int generic_linkat(struct fd *src_at, const char *src_raw, struct fd *dst_at, const char *dst_raw, bool follow_src) {
     char src[MAX_PATH];
-    int err = path_normalize(src_at, src_raw, src, N_SYMLINK_NOFOLLOW);
+    int err = path_normalize(src_at, src_raw, src, follow_src ? N_SYMLINK_FOLLOW : N_SYMLINK_NOFOLLOW);
     if (err < 0)
         return err;
     char dst[MAX_PATH];
@@ -279,6 +313,16 @@ int generic_unlinkat(struct fd *at, const char *path_raw) {
     int err = path_normalize(at, path_raw, path, N_SYMLINK_NOFOLLOW | N_PARENT_DIR_WRITE);
     if (err < 0)
         return err;
+    // "name/" names a directory, which unlink does not remove: as Linux's
+    // do_unlinkat, ENOENT if there is none, EISDIR for a directory, ENOTDIR
+    // for the rest. It unlinked a file so named.
+    if (path_ends_in_slash(path_raw)) {
+        struct statbuf stat;
+        err = generic_statat(AT_PWD, path, &stat, false);
+        if (err < 0)
+            return err;
+        return S_ISDIR(stat.mode) ? _EISDIR : _ENOTDIR;
+    }
     struct mount *mount = find_mount_and_trim_path(path);
     // For inotify, what goes: watches on it end with its last link
     struct statbuf gone;
@@ -419,6 +463,30 @@ int generic_utime(struct fd *at, const char *path_raw, struct timespec atime, st
     if (err >= 0)
         inotify_path(mount, path, IN_ATTRIB_);
     mount_release(mount);
+    return err;
+}
+
+// The times of an fd's own file (futimens). One with a host fd, a file of
+// realfs or fakefs (whose utime is the host's too) or a pipe or socket, has
+// them set on it; another fd by its path, where it has one: an ad-hoc fd's
+// (eventfd, epoll) names no file, and a path from it would be looked up from
+// the cwd.
+int generic_futime(struct fd *fd, struct timespec atime, struct timespec mtime) {
+    int err;
+    if (fd->ops == &realfs_fdops) {
+        struct timespec times[2] = {atime, mtime};
+        err = futimens(fd->real_fd, times) < 0 ? errno_map() : 0;
+    } else if (is_adhoc_fd(fd)) {
+        err = _EPERM;
+    } else {
+        char path[MAX_PATH];
+        err = generic_getpath(fd, path);
+        if (err < 0)
+            return err;
+        err = generic_utime(AT_PWD, path, atime, mtime, false);
+    }
+    if (err >= 0)
+        inotify_fd(fd, IN_ATTRIB_);
     return err;
 }
 

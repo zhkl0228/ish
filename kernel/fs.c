@@ -117,25 +117,47 @@ dword_t sys_readlink(addr_t path_addr, addr_t buf_addr, dword_t bufsize) {
     return sys_readlinkat(AT_FDCWD_, path_addr, buf_addr, bufsize);
 }
 
-dword_t sys_linkat(fd_t src_at_f, addr_t src_addr, fd_t dst_at_f, addr_t dst_addr) {
+// Its flags were never read: AT_SYMLINK_FOLLOW, which links what a symlink
+// points to (CPython's os.link, by default), linked the symlink. With
+// AT_EMPTY_PATH an empty path is the fd's own file, named as execveat names
+// one (by its path, as /proc/self/fd/<fd>).
+dword_t sys_linkat(fd_t src_at_f, addr_t src_addr, fd_t dst_at_f, addr_t dst_addr, int_t flags) {
     char src[MAX_PATH];
     if (user_read_string(src_addr, src, sizeof(src)))
         return _EFAULT;
     char dst[MAX_PATH];
     if (user_read_string(dst_addr, dst, sizeof(dst)))
         return _EFAULT;
-    STRACE("linkat(%d, \"%s\", %d, \"%s\")", src_at_f, src, dst_at_f, dst);
-    struct fd *src_at = at_fd(src_at_f, src);
-    if (src_at == NULL)
-        return _EBADF;
+    STRACE("linkat(%d, \"%s\", %d, \"%s\", %#x)", src_at_f, src, dst_at_f, dst, flags);
+    if (flags & ~(AT_SYMLINK_FOLLOW_ | AT_EMPTY_PATH_))
+        return _EINVAL;
+    struct fd *src_at;
+    if (src[0] == '\0' && flags & AT_EMPTY_PATH_) {
+        struct fd *fd = f_get(src_at_f);
+        if (fd == NULL)
+            return _EBADF;
+        if (S_ISDIR(fd->type))
+            return _EPERM;
+        if (fd->ops != &realfs_fdops || is_adhoc_fd(fd))
+            return _ENOENT; // no file of a filesystem: nothing to link
+        int err = generic_getpath(fd, src);
+        if (err < 0)
+            return err;
+        src_at = AT_PWD;
+    } else {
+        src_at = at_fd(src_at_f, src);
+        if (src_at == NULL)
+            return _EBADF;
+    }
     struct fd *dst_at = at_fd(dst_at_f, dst);
     if (dst_at == NULL)
         return _EBADF;
-    return generic_linkat(src_at, src, dst_at, dst);
+    return generic_linkat(src_at, src, dst_at, dst, flags & AT_SYMLINK_FOLLOW_);
 }
 
+// as Linux's link: the symlink itself
 dword_t sys_link(addr_t src_addr, addr_t dst_addr) {
-    return sys_linkat(AT_FDCWD_, src_addr, AT_FDCWD_, dst_addr);
+    return sys_linkat(AT_FDCWD_, src_addr, AT_FDCWD_, dst_addr, 0);
 }
 
 #define AT_REMOVEDIR_ 0x200
@@ -310,7 +332,6 @@ out:
 // by the inefficiency of the emulator.
 
 static struct iovec_ *read_iovec(addr_t iovec_addr, unsigned iovec_count) {
-#ifdef GUEST_ARM64
     // ARM64 uses 64-bit iovec structure (16 bytes per entry)
     // We read the 64-bit version and convert to 32-bit for internal use
     size_t iovec64_size = sizeof(struct iovec64_) * iovec_count;
@@ -334,17 +355,6 @@ static struct iovec_ *read_iovec(addr_t iovec_addr, unsigned iovec_count) {
     }
     free(iovec64);
     return iovec;
-#else
-    dword_t iovec_size = sizeof(struct iovec_) * iovec_count;
-    struct iovec_ *iovec = malloc(iovec_size);
-    if (iovec == NULL)
-        return ERR_PTR(_ENOMEM);
-    if (user_read(iovec_addr, iovec, iovec_size)) {
-        free(iovec);
-        return ERR_PTR(_EFAULT);
-    }
-    return iovec;
-#endif
 }
 
 static ssize_t iovec_size(struct iovec_ *iovec, unsigned iovec_count) {
@@ -557,12 +567,8 @@ dword_t sys_pwrite(fd_t f, addr_t buf_addr, dword_t size, off_t_ off) {
 // src/unistd/pwritev.c emits. Combine them back into a 64-bit offset before
 // doing the pread/pwrite loop under fd->lock (like readv/writev).
 static off_t_ rw_pos(pos_arg_t pos_l, pos_arg_t pos_h) {
-#ifdef GUEST_ARM64
     (void) pos_h;
     return (off_t_) pos_l;
-#else
-    return ((qword_t) pos_h << 32) | pos_l;
-#endif
 }
 
 dword_t sys_preadv(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count,
@@ -955,7 +961,6 @@ dword_t sys_fstatfs64(fd_t f, addr_t buf_addr) {
     return statfs64_mount(f_get(f)->mount, buf_addr);
 }
 
-#if defined(GUEST_ARM64)
 // ARM64 uses statfs (not statfs64) with a different structure layout
 // The structure uses 64-bit fields throughout (LP64 ABI)
 static int_t statfs_arm64_mount(struct mount *mount, addr_t buf_addr) {
@@ -1003,7 +1008,6 @@ dword_t sys_fstatfs_arm64(fd_t f, addr_t buf_addr) {
         return _EBADF;
     return statfs_arm64_mount(fd->mount, buf_addr);
 }
-#endif
 
 dword_t sys_flock(fd_t f, dword_t operation) {
     struct fd *fd = f_get(f);
@@ -1024,12 +1028,24 @@ static dword_t sys_utime_common(fd_t at_f, addr_t path_addr, struct timespec ati
     STRACE("utimensat(%d, %s, {{%lld, %lld}, {%lld, %lld}}, %d)", at_f, path,
             (long long)atime.tv_sec, (long long)atime.tv_nsec,
             (long long)mtime.tv_sec, (long long)mtime.tv_nsec, flags);
+    // No path (futimens, utimensat(fd, NULL)): the fd's own file, as Linux's
+    // do_futimes, any file. It was "." from the fd, which named a regular
+    // file only by its path through it: ENOTDIR, now that a path from an fd
+    // of no directory is (CPython's test_utime_with_fd).
+    if (path_addr == 0) {
+        if (at_f == AT_FDCWD_)
+            return _EFAULT;
+        struct fd *fd = f_get(at_f);
+        if (fd == NULL)
+            return _EBADF;
+        return generic_futime(fd, atime, mtime);
+    }
     struct fd *at = at_fd(at_f, path);
     if (at == NULL)
         return _EBADF;
 
     bool follow_links = flags & AT_SYMLINK_NOFOLLOW_ ? false : true;
-    return generic_utime(at, path_addr != 0 ? path : ".", atime, mtime, follow_links);
+    return generic_utime(at, path, atime, mtime, follow_links);
 }
 
 dword_t sys_utimensat(fd_t at_f, addr_t path_addr, addr_t times_addr, dword_t flags) {
@@ -1152,9 +1168,7 @@ dword_t sys_fchown32(fd_t f, uid_t_ owner, uid_t_ group) {
     struct fd *fd = f_get(f);
     if (fd == NULL)
         return _EBADF;
-    // realfs can't change ownership on host, silently succeed
-    if (fd->mount->fs == &realfs)
-        return 0;
+    // a realfs file is asked as any (sys_fchownat)
     int err;
     if (owner != (uid_t) -1) {
         err = generic_fsetattr(fd, make_attr(uid, owner));
@@ -1177,11 +1191,18 @@ dword_t sys_fchownat(fd_t at_f, addr_t path_addr, dword_t owner, dword_t group, 
     struct fd *at = at_fd(at_f, path);
     if (at == NULL)
         return _EBADF;
-    // realfs can't change ownership on host, silently succeed
-    if (at != AT_PWD && at->mount->fs == &realfs)
-        return 0;
+    // realfs is asked as any filesystem: its setattr takes the host's EPERM
+    // for success, where it may not chown, and a host that may (iSH's Linux
+    // CLI as root) chowns. It returned at once from a realfs directory fd
+    // (and not from the cwd), and fchown of a realfs file did nothing.
     int err;
     bool follow_links = flags & AT_SYMLINK_NOFOLLOW_ ? false : true;
+    // with nothing to change the path is still looked up, as Linux's
+    // chown: a file that is not was success (CPython's test_chown)
+    if (owner == (uid_t) -1 && group == (uid_t) -1) {
+        struct statbuf stat;
+        return generic_statat(at, path, &stat, follow_links);
+    }
     if (owner != (uid_t) -1) {
         err = generic_setattrat(at, path, make_attr(uid, owner), follow_links);
         if (err < 0)
@@ -1203,14 +1224,15 @@ dword_t sys_lchown(addr_t path_addr, uid_t_ owner, uid_t_ group) {
     return sys_fchownat(AT_FDCWD_, path_addr, owner, group, AT_SYMLINK_NOFOLLOW_);
 }
 
-#ifdef GUEST_ARM64
 // ARM64: 64-bit values passed in single registers
 dword_t sys_truncate64(addr_t path_addr, off_t_ size) {
     STRACE("truncate64(%#x, %lld [0x%llx])", path_addr, (long long)size, (unsigned long long)size);
     char path[MAX_PATH];
     if (user_read_string(path_addr, path, sizeof(path)))
         return _EFAULT;
-    return generic_setattrat(NULL, path, make_attr(size, size), true);
+    // relative to the cwd: NULL failed path_normalize's assert, and iSH
+    // aborted on every truncate(2) of a path (CPython's test_posix)
+    return generic_setattrat(AT_PWD, path, make_attr(size, size), true);
 }
 
 dword_t sys_ftruncate64(fd_t f, off_t_ size) {
@@ -1233,39 +1255,6 @@ dword_t sys_fallocate(fd_t f, dword_t UNUSED(mode), off_t_ offset, off_t_ len) {
         return generic_fsetattr(fd, make_attr(size, offset + len));
     return 0;
 }
-#else
-// x86: 64-bit values split across two 32-bit registers
-dword_t sys_truncate64(addr_t path_addr, dword_t size_low, dword_t size_high) {
-    off_t_ size = ((qword_t) size_high << 32) | size_low;
-    char path[MAX_PATH];
-    if (user_read_string(path_addr, path, sizeof(path)))
-        return _EFAULT;
-    return generic_setattrat(NULL, path, make_attr(size, size), true);
-}
-
-dword_t sys_ftruncate64(fd_t f, dword_t size_low, dword_t size_high) {
-    off_t_ size = ((qword_t) size_high << 32) | size_low;
-    struct fd *fd = f_get(f);
-    if (fd == NULL)
-        return _EBADF;
-    return generic_fsetattr(fd, make_attr(size, size));
-}
-
-dword_t sys_fallocate(fd_t f, dword_t UNUSED(mode), dword_t offset_low, dword_t offset_high, dword_t len_low, dword_t len_high) {
-    off_t_ offset = ((qword_t) offset_high << 32) | offset_low;
-    off_t_ len = ((qword_t) len_high << 32) | len_low;
-    struct fd *fd = f_get(f);
-    if (fd == NULL)
-        return _EBADF;
-    struct statbuf statbuf;
-    int err = fd->mount->fs->fstat(fd, &statbuf);
-    if (err < 0)
-        return err;
-    if ((uint64_t) offset + (uint64_t) len > statbuf.size)
-        return generic_fsetattr(fd, make_attr(size, offset + len));
-    return 0;
-}
-#endif
 
 dword_t sys_mkdirat(fd_t at_f, addr_t path_addr, mode_t_ mode) {
     char path[MAX_PATH];
@@ -1490,7 +1479,6 @@ dword_t sys_xattr_stub(addr_t UNUSED(path_addr), addr_t UNUSED(name_addr),
     return _ENOTSUP;
 }
 
-#ifdef GUEST_ARM64
 // ARM64: posix_fadvise64 (syscall 223)
 // Advises the kernel about file access patterns.
 // Since we don't do kernel I/O optimization, we can safely ignore these hints.
@@ -1528,19 +1516,3 @@ dword_t sys_mincore(addr_t addr, dword_t length, addr_t vec_addr) {
 
     return 0;  // Success
 }
-#else
-// x86: fadvise64 has different signature/calling convention
-dword_t sys_fadvise64(fd_t f, dword_t offset_low, dword_t offset_high,
-                      dword_t len_low, dword_t len_high, dword_t advice) {
-    uint64_t offset = ((uint64_t)offset_high << 32) | offset_low;
-    uint64_t len = ((uint64_t)len_high << 32) | len_low;
-
-    STRACE("fadvise64(%d, %llu, %llu, %d)", f, offset, len, advice);
-
-    struct fd *fd = f_get(f);
-    if (fd == NULL)
-        return _EBADF;
-
-    return 0;  // Success
-}
-#endif

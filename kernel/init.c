@@ -69,6 +69,7 @@ static struct task *construct_task(struct task *parent) {
     lock_init(&group->lock);
     cond_init(&group->child_exit);
     cond_init(&group->stopped_cond);
+    cond_init(&group->cpu_itimer_armed);
     memcpy(group->limits, init_rlimits, sizeof(init_rlimits));
     group->leader = task;
     group->personality = ADDR_NO_RANDOMIZE_;

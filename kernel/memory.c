@@ -1,6 +1,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sched.h>
+#include <signal.h> // sig_atomic_t
 #include <sys/mman.h>
 #include <string.h>
 #include <stdlib.h>
@@ -30,7 +31,6 @@ static struct mmu_ops mem_mmu_ops;
 #include "emu/tlb.h"
 
 
-#ifdef GUEST_ARM64
 // ============================================================
 // ARM64: 4-level page table for 48-bit address space
 // ============================================================
@@ -430,129 +430,6 @@ page_t pt_find_hole_for_reservation(struct mem *mem, pages_t size) {
     return pt_find_hole_impl(mem, size, /*prefer_high=*/true);
 }
 
-#else
-// ============================================================
-// x86: 2-level flat page table for 32-bit address space
-// ============================================================
-
-void mem_init(struct mem *mem) {
-    mem->pgdir = calloc(MEM_PGDIR_SIZE, sizeof(struct pt_entry *));
-    mem->pgdir_used = 0;
-    mem->mmap_hint = 0;
-    mem->reservations = NULL;
-    mem->mmu.ops = &mem_mmu_ops;
-    mem->mmu.asbestos = asbestos_new(&mem->mmu);
-    mem->mmu.changes = 0;
-    wrlock_init(&mem->lock);
-    lock_init(&mem->cow_lock);
-}
-
-void mem_destroy(struct mem *mem) {
-    // [T-ish-mm-diag] See the ARM64 variant above.
-    if (ish_verbose_trace_enabled)
-    printk("[iSH][MEM-DESTROY] pid=%d mem=%p seq=%llu rwlock_val=%d holder_pid=%d\n",
-           current ? current->pid : -1, (void *) mem,
-           (unsigned long long) MM_OF_MEM(mem)->seq, mem->lock.val, mem->lock.pid);
-    write_wrlock(&mem->lock);
-    pt_unmap_always(mem, 0, MEM_PAGES);
-    // [T-ish-mm-double-destroy-crash] Freed asbestos MUST also be nulled out.
-    // Under CLONE_VM exit_group races (multi-threaded python3 during MCP
-    // teardown), the same struct mm can be reached by a second cleanup path
-    // once refcount has already hit zero — the pt_unmap_always above would
-    // then dereference a freed asbestos and crash in asbestos_invalidate_range
-    // with EXC_BAD_ACCESS. Nulling here + NULL-guarding the invalidate calls
-    // turns the race into a safe no-op instead of a segfault.
-    asbestos_free(mem->mmu.asbestos);
-    mem->mmu.asbestos = NULL;
-    while (mem->reservations) {
-        struct mem_reservation *r = mem->reservations;
-        mem->reservations = r->next;
-        free(r);
-    }
-    for (int i = 0; i < MEM_PGDIR_SIZE; i++) {
-        if (mem->pgdir[i] != NULL)
-            free(mem->pgdir[i]);
-    }
-    free(mem->pgdir);
-    write_wrunlock(&mem->lock);
-    wrlock_destroy(&mem->lock);
-}
-
-#define PGDIR_TOP(page) ((page) >> 10)
-#define PGDIR_BOTTOM(page) ((page) & (MEM_PGDIR_SIZE - 1))
-
-static struct pt_entry *mem_pt_new(struct mem *mem, page_t page) {
-    struct pt_entry *pgdir = mem->pgdir[PGDIR_TOP(page)];
-    if (pgdir == NULL) {
-        pgdir = mem->pgdir[PGDIR_TOP(page)] = calloc(MEM_PGDIR_SIZE, sizeof(struct pt_entry));
-        mem->pgdir_used++;
-    }
-    return &pgdir[PGDIR_BOTTOM(page)];
-}
-
-struct pt_entry *mem_pt(struct mem *mem, page_t page) {
-    struct pt_entry *pgdir = mem->pgdir[PGDIR_TOP(page)];
-    if (pgdir == NULL)
-        return NULL;
-    struct pt_entry *entry = &pgdir[PGDIR_BOTTOM(page)];
-    if (entry->data == NULL)
-        return NULL;
-    return entry;
-}
-
-static void mem_pt_del(struct mem *mem, page_t page) {
-    struct pt_entry *entry = mem_pt(mem, page);
-    if (entry != NULL)
-        entry->data = NULL;
-}
-
-void mem_next_page(struct mem *mem, page_t *page) {
-    (*page)++;
-    if (*page >= MEM_PAGES)
-        return;
-    while (*page < MEM_PAGES && mem->pgdir[PGDIR_TOP(*page)] == NULL)
-        *page = (*page - PGDIR_BOTTOM(*page)) + MEM_PGDIR_SIZE;
-}
-
-static page_t x86_find_hole_from(struct mem *mem, pages_t size, page_t start) {
-    page_t hole_end = 0;
-    bool in_hole = false;
-    for (page_t page = start; page > 0x40000; page--) {
-        if (!in_hole && mem_pt(mem, page) == NULL) {
-            in_hole = true;
-            hole_end = page + 1;
-        }
-        if (mem_pt(mem, page) != NULL)
-            in_hole = false;
-        else if (hole_end - page == size)
-            return page;
-    }
-    return BAD_PAGE;
-}
-
-page_t pt_find_hole(struct mem *mem, pages_t size) {
-    page_t start = mem->mmap_hint;
-    if (start == 0 || start > 0xefffd || start <= 0x40000 + size)
-        start = 0xefffd;
-
-    page_t result = x86_find_hole_from(mem, size, start);
-    if (result != BAD_PAGE) {
-        mem->mmap_hint = (result > 0) ? result - 1 : 0;
-        return result;
-    }
-
-    if (start < 0xefffd) {
-        result = x86_find_hole_from(mem, size, 0xefffd);
-        if (result != BAD_PAGE) {
-            mem->mmap_hint = (result > 0) ? result - 1 : 0;
-            return result;
-        }
-    }
-
-    return BAD_PAGE;
-}
-
-#endif // GUEST_ARM64
 
 // ============================================================
 // Reservation API — shared by x86 and ARM64.
@@ -652,8 +529,15 @@ int pt_map(struct mem *mem, page_t start, pages_t pages, void *memory, size_t of
     assert((uintptr_t) memory % real_page_size == 0 || memory == vdso_data);
 
     struct data *data = data_new(memory, pages * PAGE_SIZE + offset, start);
-    if (data == NULL)
+    if (data == NULL) {
+        // The memory is given to the mapping, by every caller: with nothing
+        // to hold it, it goes, or it stays a host mapping no page reaches
+        // (anonymous memory, a page copied on write, a file's mapping). The
+        // vdso is in iSH's own data, not a host mapping.
+        if (memory != vdso_data)
+            munmap(memory, pages * PAGE_SIZE + offset);
         return _ENOMEM;
+    }
     pt_map_data(mem, start, pages, data, offset, flags);
     return 0;
 }
@@ -727,12 +611,22 @@ int pt_unmap_always(struct mem *mem, page_t start, pages_t pages) {
     return 0;
 }
 
-// [T-ish-cluster-hitrate] Every anonymous host allocation, and the guest pages
-// it backs, regardless of which path asked for it. Without this the cluster
-// hit rate is unanchored: a high hit rate means nothing if most memory is
-// actually arriving through mmap/brk instead.
-_Atomic uint64_t st_anon_mmaps;        // host mmap calls for anonymous memory
-_Atomic uint64_t st_anon_pages_mapped; // guest pages they backed
+// Every anonymous host mmap that became guest memory since the app started,
+// for /proc/ish/host, and the guest pages it holds. Each is a host mapping,
+// and the app's host mappings and address space are what run out: a PROT_NONE
+// one, which costs no memory, is counted too, a mapping made in 16MB chunks
+// once for each (pt_map_chunked), a page copied on write, which has a host
+// mapping of its own, and what backs a file's mapping past its end (realfs's
+// map_past_end, the pages the file is not mapped over). Of them the lazy
+// commits are pt_map_cluster's.
+_Atomic uint64_t st_anon_mmaps;
+_Atomic uint64_t st_anon_pages_mapped;
+_Atomic uint64_t st_cow_copies;        // of them, pages copied on write
+
+void anon_mmap_count(uint64_t mmaps, pages_t pages) {
+    atomic_fetch_add_explicit(&st_anon_mmaps, mmaps, memory_order_relaxed);
+    atomic_fetch_add_explicit(&st_anon_pages_mapped, (uint64_t) pages, memory_order_relaxed);
+}
 
 // A chunk of a mapping the host has no free range for: 16MB, a multiple of
 // every host page size
@@ -828,6 +722,10 @@ int pt_map_chunked(struct mem *mem, page_t start, pages_t pages, size_t offset, 
         page += count;
     }
     free(chunks);
+    // Anonymous memory's chunks are as many anonymous host mmaps; a file's
+    // are its caller's to count (realfs_mmap, what it backs with anonymous)
+    if (flags & P_ANONYMOUS)
+        anon_mmap_count(n, pages);
     return 0;
 }
 
@@ -865,17 +763,12 @@ int pt_map_nothing(struct mem *mem, page_t start, pages_t pages, unsigned flags)
     int err;
     if (memory != MAP_FAILED) {
         err = pt_map(mem, start, pages, memory, 0, flags | P_ANONYMOUS);
+        if (err >= 0)
+            anon_mmap_count(1, pages);
     } else {
         err = pt_map_chunked(mem, start, pages, 0, flags | P_ANONYMOUS, map_anonymous_chunk, &host_prot);
         if (err < 0)
             return err;
-    }
-    if (host_prot != PROT_NONE) {
-        // PROT_NONE reservations cost no physical memory, so they would only
-        // dilute the ratio we are trying to measure.
-        atomic_fetch_add_explicit(&st_anon_mmaps, 1, memory_order_relaxed);
-        atomic_fetch_add_explicit(&st_anon_pages_mapped, (uint64_t)pages,
-                                  memory_order_relaxed);
     }
 #if ANON_MMAP_LIMIT_PAGES > 0
     // [T-ish-anon-count-negative] Charge HERE, not at the call sites.
@@ -1018,10 +911,11 @@ int pt_map_cluster(struct mem *mem, page_t page, unsigned flags,
     return 0;
 }
 
-// Snapshot the cluster-commit counters for host-side diagnostics.
-void ish_anon_mmap_stats(uint64_t *mmaps, uint64_t *pages) {
+// Snapshot the anonymous host mmap counters for /proc/ish/host.
+void ish_anon_mmap_stats(uint64_t *mmaps, uint64_t *pages, uint64_t *cow_copies) {
     if (mmaps) *mmaps = atomic_load(&st_anon_mmaps);
     if (pages) *pages = atomic_load(&st_anon_pages_mapped);
+    if (cow_copies) *cow_copies = atomic_load(&st_cow_copies);
 }
 
 void ish_cluster_stats(uint64_t *calls, uint64_t *full, uint64_t *single,
@@ -1066,7 +960,6 @@ int pt_set_flags(struct mem *mem, page_t start, pages_t pages, int flags) {
     for (page_t page = start; page < start + pages; page++) {
         struct pt_entry *entry = mem_pt(mem, page);
         if (entry == NULL) {
-#ifdef GUEST_ARM64
             // Page is reservation-only (V8 heap cage chunk reserved
             // PROT_NONE, guest now mprotect'ing RW). Materialise it
             // via pt_map_nothing with the requested flags — i.e. treat
@@ -1110,7 +1003,6 @@ int pt_set_flags(struct mem *mem, page_t start, pages_t pages, int flags) {
                 pt_map_nothing(mem, run_start, run_len, flags | P_ANONYMOUS);
 #endif
             }
-#endif
             continue;
         }
         int old_flags = entry->flags;
@@ -1215,9 +1107,7 @@ int pt_copy_on_write(struct mem *src, struct mem *dst, page_t start, page_t page
 
 static void mem_changed(struct mem *mem) {
     __atomic_add_fetch(&mem->mmu.changes, 1, __ATOMIC_SEQ_CST);
-#ifdef GUEST_ARM64
     mmu_tlbs_stale(&mem->mmu);
-#endif
 }
 
 // Public wrapper: bump the memory-change generation so other threads' TLB
@@ -1285,13 +1175,8 @@ void *mem_ptr(struct mem *mem, addr_t addr, int type) {
             goto check_reservation;
 
         // Enforce RLIMIT_STACK: don't grow stack beyond the limit.
-#ifdef GUEST_ARM64
         // Stack top is at STACK_TOP_PAGE (guard page), stack grows down from STACK_INIT_PAGE.
         pages_t guard_page = STACK_TOP_PAGE;
-#else
-        // Stack top is at page 0xffffe (guard page), stack grows down from 0xffffd.
-        pages_t guard_page = 0xffffe;
-#endif
         rlim_t_ stack_limit = rlimit(RLIMIT_STACK_);
         if (stack_limit != RLIM_INFINITY_) {
             pages_t stack_pages = guard_page - page;
@@ -1577,10 +1462,23 @@ have_entry:
 #if ANON_MMAP_LIMIT_PAGES > 0
                 // pt_map will unmap the old page (decrementing anon_page_count),
                 // so pre-increment for the new CoW copy to keep balance.
-                if (entry->flags & P_ANONYMOUS)
+                bool anonymous = entry->flags & P_ANONYMOUS;
+                if (anonymous)
                     atomic_fetch_add(&anon_page_count, 1);
 #endif
-                pt_map(mem, page, 1, copy, 0, entry->flags &~ P_COW);
+                if (pt_map(mem, page, 1, copy, 0, entry->flags &~ P_COW) >= 0) {
+                    anon_mmap_count(1, 1);
+                    atomic_fetch_add_explicit(&st_cow_copies, 1, memory_order_relaxed);
+                } else {
+                    // Not mapped (pt_map let the copy go), and the old page
+                    // not unmapped: what was counted for it is not. The page
+                    // stays copy on write, so the store faults (mem_ptr_nofault
+                    // gives no pointer to write a P_COW page through).
+#if ANON_MMAP_LIMIT_PAGES > 0
+                    if (anonymous)
+                        atomic_fetch_sub(&anon_page_count, 1);
+#endif
+                }
                 mem_changed(mem);
             } else {
                 munmap(copy, PAGE_SIZE);
