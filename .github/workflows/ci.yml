@@ -17,6 +17,12 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq clang lld meson ninja-build pkg-config libsqlite3-dev libarchive-dev \
               musl-tools python3 curl
+      - name: Allow ICMP sockets
+        # A guest's ICMP socket is a host one of SOCK_DGRAM (fs/sock.h), which
+        # Linux makes for a group in net.ipv4.ping_group_range only: the
+        # runner's is none ("1 0"), where Docker's, macOS's and iOS's allow
+        # any (regress_proc_net's raw socket)
+        run: sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"
       - name: Build and test
         run: tests/regress/ci.sh "$RUNNER_TEMP/ci"
 
