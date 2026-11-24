@@ -281,6 +281,13 @@ struct fpsimd_context_ {
     __uint128_t vregs[32];
 };
 
+// The ESR of a fault, after the FPSIMD context, as Linux puts it
+struct esr_context_ {
+    uint32_t magic;
+    uint32_t size;
+    uint64_t esr;
+};
+
 struct sigcontext_ {
     uint64_t fault_address;  // This was missing!
     uint64_t regs[31];
