@@ -903,6 +903,17 @@ EOF
             "$FAKEFSIFY" "$dir/root.tar.gz" "$dir/fs"
     }
     echo
+    echo "########## socket of a protocol the type does not have: EPROTONOSUPPORT (EINVAL) ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_socket_protocol" tests/regress/regress_socket_protocol.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_socket_protocol 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_socket_protocol"
+    else
+        echo "failed to build regress_socket_protocol" >&2
+        status=1
+    fi
+    echo
     echo "########## a thread's name: PR_GET_NAME, /proc/<pid>/comm, /proc/self/task/<tid> ##########"
     if "$CC_GUEST" -static -O0 -Wall -pthread -o "$GUEST_ROOT/tmp/regress_thread_name" tests/regress/regress_thread_name.c; then
         out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_thread_name 2>&1)

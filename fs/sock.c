@@ -405,7 +405,7 @@ int_t sys_socket(dword_t domain, dword_t type, dword_t protocol) {
         return _EAFNOSUPPORT;
     int real_type = sock_type_to_real(type, protocol);
     if (real_type < 0)
-        return _EINVAL;
+        return real_type;
 
     // this hack makes mtr work
     if (type == SOCK_RAW_ && protocol == IPPROTO_RAW)
@@ -1102,7 +1102,7 @@ int_t sys_socketpair(dword_t domain, dword_t type, dword_t protocol, addr_t sock
         return _EAFNOSUPPORT;
     int real_type = sock_type_to_real(type, protocol);
     if (real_type < 0)
-        return _EINVAL;
+        return real_type;
 
     int sockets[2];
     int err = socketpair(real_domain, real_type, protocol, sockets);

@@ -131,16 +131,20 @@ static inline int sock_family_from_real(int fake) {
 #define SOCK_NONBLOCK_ 0x800
 #define SOCK_CLOEXEC_ 0x80000
 
+// The host's type, or the guest's error, as Linux's: a protocol the type
+// does not have is EPROTONOSUPPORT (inet_create), a type there is not EINVAL.
+// It was EINVAL for both: CPython's test_socket, which probes UDP-Lite at
+// import and takes only EPROTONOSUPPORT for "none", could not be imported.
 static inline int sock_type_to_real(int type, int protocol) {
     switch (type & 0xff) {
         case SOCK_STREAM_:
             if (protocol != 0 && protocol != IPPROTO_TCP)
-                return -1;
+                return _EPROTONOSUPPORT;
             return SOCK_STREAM;
         case SOCK_DGRAM_:
             switch (protocol) {
                 default:
-                    return -1;
+                    return _EPROTONOSUPPORT;
                 case 0:
                 case IPPROTO_UDP:
                 case IPPROTO_ICMP:
@@ -151,7 +155,7 @@ static inline int sock_type_to_real(int type, int protocol) {
         case SOCK_RAW_:
             switch (protocol) {
                 default:
-                    return -1;
+                    return _EPROTONOSUPPORT;
                 case IPPROTO_RAW:
                 case IPPROTO_UDP:
                 case IPPROTO_ICMP:
@@ -164,10 +168,10 @@ static inline int sock_type_to_real(int type, int protocol) {
             // SOCK_STREAM is functionally equivalent (reliable, ordered,
             // bidirectional). Rust std uses SOCK_SEQPACKET for spawn pipes.
             if (protocol != 0)
-                return -1;
+                return _EPROTONOSUPPORT;
             return SOCK_STREAM;
     }
-    return -1;
+    return _EINVAL;
 }
 
 #define MSG_OOB_ 0x1
