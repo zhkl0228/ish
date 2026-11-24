@@ -3,7 +3,7 @@
 //
 //   anonymous host mmaps since the app started: N, for X MB; of them lazy
 //       commits C (H host pages, G guest pages), Y MB; copies on write K, a host
-//       page each: V MB of address space
+//       page each: V MB
 //   MADV_DONTNEED zeroed in place since the app started: P pages, Z MB
 //   translated blocks now: B, W MB
 //
@@ -30,9 +30,11 @@
 // The counts are the app's, every process's: exact only with no other process
 // in it, as when this is its first, pid 1 (tests/regress/run.sh, iSH's CLI).
 // With others (a device with Claude Code running, whose JSC heap commits and
-// gives back pages and makes blocks all the time) what can be is checked as
-// at least, and what cannot (nothing committed, nothing zeroed, the blocks
-// gone again) is said SKIP.
+// gives back pages and makes and drops blocks all the time) the counts since
+// the app started are checked as at least what this process did (the commits,
+// the pages zeroed, the copies on write). What cannot be told then is said
+// SKIP: that nothing was committed or zeroed, and anything of the blocks,
+// which are counted as they are now and fall when others drop theirs.
 //
 // Build: aarch64-linux-musl-gcc -static -O0 -o regress_host_stats regress_host_stats.c
 
@@ -92,7 +94,7 @@ static struct stats read_stats(void) {
     for (char *line = strtok(text, "\n"); line != NULL; line = strtok(NULL, "\n")) {
         lines += sscanf(line, "anonymous host mmaps since the app started: %llu, for %lf MB; of them lazy commits "
                         "%llu (%llu host pages, %llu guest pages), %lf MB; copies on write %llu, a host page each: "
-                        "%lf MB of address space",
+                        "%lf MB",
                         &s.anon_mmaps, &s.anon_mb, &s.lazy, &s.host_pages, &s.guest_pages, &s.committed_mb, &s.cow,
                         &s.cow_mb) == 8;
         lines += sscanf(line, "MADV_DONTNEED zeroed in place since the app started: %llu pages, %lf MB", &s.zeroed,
@@ -141,8 +143,10 @@ static void lazy_commits_and_dontneed(void) {
     double zeroed_mb = zeroed * 4096.0 / MB;
     snprintf(detail, sizeof(detail), "%llu pages (%.1f MB, said %.1f MB), %.1f MB committed", zeroed, zeroed_mb,
              s3.zeroed_mb - s2.zeroed_mb, committed);
+    // With others, what they committed is in committed too: at least the
+    // pages this process touched
     check("MADV_DONTNEED zeroes in place what was committed",
-          zeroed_mb > committed - 0.15 && (!alone || zeroed_mb < committed + 0.15) &&
+          (alone ? zeroed_mb > committed - 0.15 && zeroed_mb < committed + 0.15 : zeroed >= TOUCHES) &&
           s3.zeroed_mb - s2.zeroed_mb > zeroed_mb - 0.15 && s3.zeroed_mb - s2.zeroed_mb < zeroed_mb + 0.15, detail);
     int nonzero = 0;
     for (int i = 0; i < TOUCHES; i++)
@@ -237,12 +241,12 @@ static void translated_blocks(void) {
     struct stats s1 = read_stats();
     unsigned long long blocks = s1.blocks - s0.blocks;
     snprintf(detail, sizeof(detail), "%llu more", blocks);
-    check("a block for each function", blocks >= FUNCS && (!alone || blocks < FUNCS + 1000), detail);
+    check_alone("a block for each function", blocks >= FUNCS && blocks < FUNCS + 1000, detail);
     // the MB are said to one decimal
     double per_block = (s1.blocks_mb - s0.blocks_mb + 0.1) * MB / blocks;
     snprintf(detail, sizeof(detail), "%.1f MB for %llu blocks, %.0f bytes a block", s1.blocks_mb - s0.blocks_mb,
              blocks, per_block);
-    check("a block's bytes at least its gadgets' 128", per_block >= 128, detail);
+    check_alone("a block's bytes at least its gadgets' 128", per_block >= 128, detail);
 
     munmap(code, FUNCS * 8);
     struct stats s2 = read_stats();
@@ -254,15 +258,18 @@ static void translated_blocks(void) {
     fflush(stdout);
     pid_t pid = fork();
     if (pid == 0) {
+        // 1 where it failed itself (said FAIL), 2 where it saw too few blocks
         make_and_run_code();
-        _exit(read_stats().blocks >= s2.blocks + FUNCS ? 0 : 1);
+        _exit(read_stats().blocks >= s2.blocks + FUNCS ? 0 : 2);
     }
     int status;
     waitpid(pid, &status, 0);
     struct stats s3 = read_stats();
     snprintf(detail, sizeof(detail), "child status %#x; %llu blocks, %.1f MB after it, %llu, %.1f MB before",
              status, s3.blocks, s3.blocks_mb, s2.blocks, s2.blocks_mb);
-    check("a child's blocks are counted while it runs", WIFEXITED(status) && WEXITSTATUS(status) == 0, detail);
+    check("a child runs them and exits",
+          WIFEXITED(status) && (WEXITSTATUS(status) == 0 || WEXITSTATUS(status) == 2), detail);
+    check_alone("a child's blocks are counted while it runs", WIFEXITED(status) && WEXITSTATUS(status) == 0, detail);
     check_alone("a child's blocks go when it exits", s3.blocks < s2.blocks + 200 && s3.blocks_mb < s2.blocks_mb + 0.15,
                 detail);
 

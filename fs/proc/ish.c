@@ -211,11 +211,11 @@ static int proc_ish_show_host(struct proc_entry *UNUSED(entry), struct proc_data
     ish_anon_mmap_stats(&anon_mmaps, &anon_pages, &cow_copies);
     ish_cluster_stats(&calls, &whole, &single, NULL, NULL, NULL, NULL, &pages_committed);
     extern _Atomic uint64_t st_dontneed_zeroed;
-    // A copy on write is a guest page in a host mapping of a host page, 16KB
-    // on iOS: its MB are the address space they take, four times the memory
+    // A copy on write is a guest page in a host mapping of its own, a host
+    // page: 16KB on iOS, of memory as of address space (the host cannot give
+    // less; see pt_map_cluster), four times the guest page it holds
     proc_printf(buf, "anonymous host mmaps since the app started: %llu, for %.1f MB; of them lazy commits %llu "
-                "(%llu host pages, %llu guest pages), %.1f MB; copies on write %llu, a host page each: %.1f MB of "
-                "address space\n",
+                "(%llu host pages, %llu guest pages), %.1f MB; copies on write %llu, a host page each: %.1f MB\n",
                 (unsigned long long) anon_mmaps, anon_pages * PAGE_SIZE / 1048576.0, (unsigned long long) calls,
                 (unsigned long long) whole, (unsigned long long) single, pages_committed * PAGE_SIZE / 1048576.0,
                 (unsigned long long) cow_copies, cow_copies * real_page_size / 1048576.0);

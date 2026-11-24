@@ -653,7 +653,15 @@ int realfs_mmap(struct fd *fd, struct mem *mem, page_t start, pages_t pages, off
         // lib/modules at its start. With no 140MB free that was ENOMEM, and
         // the JVM died of SIGSEGV before saying a word.
         if (memory == MAP_FAILED) {
-            struct past_end_chunks chunks = {fd->real_fd, mmap_prot, mmap_flags, real_offset, st.st_size};
+            struct past_end_chunks chunks = {
+                .fd = fd->real_fd,
+                .prot = mmap_prot,
+                .flags = mmap_flags,
+                .offset = real_offset,
+                .file_size = st.st_size,
+                .anonymous_mmaps = 0,
+                .anonymous = 0,
+            };
             int err = pt_map_chunked(mem, start, pages, correction, prot, map_past_end_chunk, &chunks);
             if (err >= 0)
                 anon_mmap_count(chunks.anonymous_mmaps, chunks.anonymous / PAGE_SIZE);

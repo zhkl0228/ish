@@ -100,16 +100,17 @@ static int proc_fstat(struct fd *fd, struct statbuf *stat) {
     return proc_entry_stat(&fd->proc.entry, stat);
 }
 
+// The content as show() makes it: a snapshot, fd->proc.data, which reads go
+// on in until one reads from the start again (proc_pread), as Linux's
+// seq_file has it. Made again for every read, a reader that took it in
+// several reads, as musl's fread does, got the parts of different contents
+// whenever it changed between them: lines twice, or none.
 static int proc_refresh_data(struct fd *fd) {
     mode_t_ mode = proc_entry_mode(&fd->proc.entry);
     if (S_ISDIR(mode))
         return _EISDIR;
     assert(S_ISREG(mode));
 
-    if (fd->proc.data.data == NULL) {
-        fd->proc.data.capacity = 4096;
-        fd->proc.data.data = malloc(fd->proc.data.capacity); // default size
-    }
     // Not every regular proc entry has a show(): entries that serve their
     // content through pread/pwrite (e.g. /proc/<pid>/mem) leave it NULL, and
     // proc_entry_mode() defaults a typeless entry to S_IFREG, so the S_ISDIR
@@ -118,11 +119,19 @@ static int proc_refresh_data(struct fd *fd) {
     if (fd->proc.entry.meta->show == NULL)
         return _EINVAL;
 
+    if (fd->proc.data.data == NULL) {
+        fd->proc.data.capacity = 4096;
+        fd->proc.data.data = malloc(fd->proc.data.capacity); // default size
+    }
     fd->proc.data.size = 0;
     struct proc_entry *entry = &fd->proc.entry;
     int err = entry->meta->show(entry, &fd->proc.data);
-    if (err < 0)
+    if (err < 0) {
+        // no snapshot: the next read makes one
+        free(fd->proc.data.data);
+        fd->proc.data.data = NULL;
         return err;
+    }
     return 0;
 }
 
@@ -150,11 +159,15 @@ static off_t_ proc_seek(struct fd *fd, off_t_ off, int whence) {
         return fd->offset;
     }
 
-    int err = proc_refresh_data(fd);
-    if (err < 0)
-        return err;
+    // Only the end needs the content's size, and a seek elsewhere leaves the
+    // snapshot to the read from there (proc_pread)
+    if (whence == LSEEK_END || fd->proc.data.data == NULL) {
+        int err = proc_refresh_data(fd);
+        if (err < 0)
+            return err;
+    }
 
-    err = generic_seek(fd, off, whence, fd->proc.data.size);
+    int err = generic_seek(fd, off, whence, fd->proc.data.size);
     if (err < 0)
         return err;
 
@@ -167,9 +180,13 @@ static ssize_t proc_pread(struct fd *fd, void *buf, size_t bufsize, off_t off) {
         return fd->proc.entry.meta->pread(&fd->proc.entry, &data, off);
     }
     
-    int err = proc_refresh_data(fd);
-    if (err < 0)
-        return err;
+    // From the start, the content as it is now; further on, the snapshot the
+    // reader is in
+    if (off == 0 || fd->proc.data.data == NULL) {
+        int err = proc_refresh_data(fd);
+        if (err < 0)
+            return err;
+    }
 
     const char *data = fd->proc.data.data;
     assert(data != NULL);
