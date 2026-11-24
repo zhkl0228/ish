@@ -50,6 +50,10 @@ struct asbestos {
 #ifdef ISH_JIT
     void *jit_ctxs;             // guest-arm64/jit.c: per-module contexts of this address space
 #endif
+    // When a thread last left translated code (cpu_run_to_interrupt), in ms
+    // of CLOCK_MONOTONIC: how long the address space has been idle, for
+    // asbestos_reclaim_idle
+    _Atomic uint64_t last_active_ms;
 };
 
 // this is roughly the average number of instructions in a basic block according to anonymous sources
@@ -99,6 +103,13 @@ extern volatile bool g_trace_highbits;
 // Create a new asbestos
 struct asbestos *asbestos_new(struct mmu *mmu);
 void asbestos_free(struct asbestos *asbestos);
+// Frees every translated block of an address space none of whose threads is
+// running translated code, nor has for idle_ms: what memory pressure can take
+// back from an idle process, which translates its blocks again when it runs.
+// Nothing if a thread is in its code, or came in meanwhile. Says how many
+// blocks, and the bytes malloc held for them.
+void asbestos_reclaim_idle(struct asbestos *asbestos, uint64_t now_ms, uint64_t idle_ms, size_t *blocks,
+                           size_t *bytes);
 // Every address space's translated blocks, and the bytes malloc holds for them
 extern _Atomic uint64_t st_fiber_blocks, st_fiber_bytes;
 

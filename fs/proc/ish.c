@@ -6,6 +6,7 @@
 #include "platform/platform.h"
 #include "fs/real.h"
 #include "kernel/memory.h"
+#include "kernel/mm.h"
 #include "asbestos/asbestos.h"
 #ifdef ISH_JIT
 #include "asbestos/guest-arm64/jit.h"
@@ -279,6 +280,31 @@ static ssize_t proc_ish_write_jit(struct proc_entry *UNUSED(entry), struct proc_
 }
 #endif
 
+// The translated blocks of every address space now, and what memory pressure
+// has freed of idle ones (kernel/mmap.c); "reclaim" written frees those idle
+// now, as the brake does
+static int proc_ish_show_translations(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    proc_printf(buf, "blocks now: %llu, %.1f MB\n", (unsigned long long) atomic_load(&st_fiber_blocks),
+                atomic_load(&st_fiber_bytes) / 1048576.0);
+    uint64_t runs, spaces, blocks, bytes;
+    ish_reclaim_describe(&runs, &spaces, &blocks, &bytes);
+    proc_printf(buf, "reclaimed: %llu blocks, %.1f MB, of %llu idle address spaces, in %llu reclaims\n",
+                (unsigned long long) blocks, bytes / 1048576.0, (unsigned long long) spaces,
+                (unsigned long long) runs);
+    return 0;
+}
+
+static ssize_t proc_ish_write_translations(struct proc_entry *UNUSED(entry), struct proc_data *data,
+                                           off_t UNUSED(off)) {
+    size_t n = data->size;
+    if (n > 0 && data->data[n - 1] == '\n')
+        n--;
+    if (n != strlen("reclaim") || memcmp(data->data, "reclaim", n) != 0)
+        return _EINVAL;
+    ish_reclaim_translations();
+    return data->size;
+}
+
 // [T-ish-poll-spin-guard] Poll wakeup counters and guard switches (fs/poll.c).
 static int proc_ish_show_poll_spin(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
     char text[512];
@@ -300,5 +326,6 @@ struct proc_children proc_ish_children = PROC_CHILDREN({
     {"jit", .show = proc_ish_show_jit, .pwrite = proc_ish_write_jit},
 #endif
     {"poll_spin", .show = proc_ish_show_poll_spin, .pwrite = proc_ish_write_poll_spin},
+    {"translations", S_IFREG | 0644, .show = proc_ish_show_translations, .pwrite = proc_ish_write_translations},
     {"version", .show = proc_ish_show_version},
 });

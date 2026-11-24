@@ -1,7 +1,10 @@
+#include <pthread.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdatomic.h>
 #include <time.h>
 #include <unistd.h>
+#include "asbestos/asbestos.h"
 #include "debug.h"
 #include "kernel/calls.h"
 #include "kernel/errno.h"
@@ -77,6 +80,114 @@ void ish_set_memory_status(uint64_t limit_bytes, uint64_t avail_bytes, bool pres
                (unsigned long)(limit_bytes >> 20),
                (unsigned long)(avail_bytes >> 20),
                pressure_critical ? " [OS pressure critical]" : "");
+    // What can be given back before an allocation is refused: idle
+    // processes' translations
+    if (next == ISH_MEM_BRAKE)
+        ish_reclaim_translations_async();
+}
+
+// ---- Translations of idle address spaces, given back under memory pressure
+//
+// Every address space has blocks of its own: a forked child translates again
+// what its parent had, and a multiprocessing.Pool(200) of python took 24.8 MB
+// a worker, 13.5 MB of it translated blocks (35.8K), where Linux shares the
+// code. A worker waiting for work keeps them all. Under memory pressure (the
+// brake) the blocks of every address space whose threads have run no
+// translated code for TRANSLATIONS_IDLE_MS are freed (asbestos_reclaim_idle);
+// it translates them again when it runs. /proc/ish/translations says what was
+// freed, and "reclaim" written to it frees them at once.
+#define TRANSLATIONS_IDLE_MS 2000
+// Between two reclaims the brake runs on: those freed are freed, and a
+// reclaim walks every address space's blocks
+#define TRANSLATIONS_RECLAIM_EVERY_MS 5000
+
+static _Atomic uint64_t st_reclaims, st_reclaim_spaces, st_reclaim_blocks, st_reclaim_bytes;
+static _Atomic bool reclaim_running;
+static _Atomic uint64_t reclaim_last_ms;
+
+void ish_reclaim_translations(void) {
+    // The address spaces of the tasks, each once and retained, under the
+    // locks that keep them (pids_lock, then the task's general_lock, as
+    // /proc's readers take them); reclaimed with neither held
+    size_t n = 0, cap = 64;
+    struct mm **mms = malloc(cap * sizeof(*mms));
+    lock(&pids_lock);
+    for (pid_t_ pid = 1; pid <= MAX_PID && mms != NULL; pid++) {
+        struct task *task = pid_get_task(pid);
+        if (task == NULL)
+            continue;
+        lock(&task->general_lock);
+        struct mm *mm = task->mm;
+        bool seen = mm == NULL;
+        for (size_t i = 0; i < n && !seen; i++)
+            seen = mms[i] == mm;
+        if (!seen) {
+            if (n == cap) {
+                cap *= 2;
+                struct mm **grown = realloc(mms, cap * sizeof(*mms));
+                if (grown == NULL) {
+                    unlock(&task->general_lock);
+                    break;
+                }
+                mms = grown;
+            }
+            mm_retain(mm);
+            mms[n++] = mm;
+        }
+        unlock(&task->general_lock);
+    }
+    unlock(&pids_lock);
+
+    uint64_t now = ish_monotonic_ms();
+    size_t spaces = 0, blocks = 0, bytes = 0;
+    for (size_t i = 0; i < n; i++) {
+        struct asbestos *asbestos = mms[i]->mem.mmu.asbestos;
+        size_t b = 0, by = 0;
+        if (asbestos != NULL)
+            asbestos_reclaim_idle(asbestos, now, TRANSLATIONS_IDLE_MS, &b, &by);
+        if (b != 0) {
+            spaces++;
+            blocks += b;
+            bytes += by;
+        }
+        mm_release_from(mms[i], "ish_reclaim_translations");
+    }
+    free(mms);
+    atomic_fetch_add(&st_reclaims, 1);
+    atomic_fetch_add(&st_reclaim_spaces, spaces);
+    atomic_fetch_add(&st_reclaim_blocks, blocks);
+    atomic_fetch_add(&st_reclaim_bytes, bytes);
+    if (blocks != 0)
+        printk("mem: freed %zu translated blocks (%.1f MB) of %zu idle address spaces\n", blocks,
+               bytes / 1048576.0, spaces);
+}
+
+static void *reclaim_thread(void *UNUSED(arg)) {
+    ish_reclaim_translations();
+    atomic_store(&reclaim_last_ms, ish_monotonic_ms());
+    atomic_store(&reclaim_running, false);
+    return NULL;
+}
+
+void ish_reclaim_translations_async(void) {
+    uint64_t last = atomic_load(&reclaim_last_ms);
+    if (last != 0 && ish_monotonic_ms() - last < TRANSLATIONS_RECLAIM_EVERY_MS)
+        return;
+    if (atomic_exchange(&reclaim_running, true))
+        return;
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, reclaim_thread, NULL) != 0) {
+        atomic_store(&reclaim_running, false);
+        return;
+    }
+    pthread_detach(thread);
+}
+
+void ish_reclaim_describe(uint64_t *runs, uint64_t *spaces, uint64_t *blocks, uint64_t *bytes) {
+    *runs = atomic_load(&st_reclaims);
+    *spaces = atomic_load(&st_reclaim_spaces);
+    *blocks = atomic_load(&st_reclaim_blocks);
+    *bytes = atomic_load(&st_reclaim_bytes);
 }
 
 bool ish_mem_commit_ok(uint64_t bytes) {

@@ -125,6 +125,13 @@ enum ish_mem_state { ISH_MEM_OK = 0, ISH_MEM_BRAKE = 1 };
 // jetsam allowance); `avail_bytes` = os_proc_available_memory();
 // `pressure_critical` = the OS sent a critical memory-pressure event.
 void ish_set_memory_status(uint64_t limit_bytes, uint64_t avail_bytes, bool pressure_critical);
+// Frees the translated blocks of every address space that has run no
+// translated code for a while (kernel/mmap.c): now, or on a thread of its own
+// (what the brake does, at most every few seconds)
+void ish_reclaim_translations(void);
+void ish_reclaim_translations_async(void);
+// What reclaims freed since boot: how many ran, the address spaces, blocks and bytes
+void ish_reclaim_describe(uint64_t *runs, uint64_t *spaces, uint64_t *blocks, uint64_t *bytes);
 // True once the host feed has been installed (footprint mode active).
 bool ish_footprint_mode(void);
 // Admission check for `bytes` of new anonymous commitment. In legacy mode

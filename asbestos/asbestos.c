@@ -372,6 +372,7 @@ void jit_highbit_alert(struct cpu_state *cpu) { (void)cpu; }
 static void fiber_block_disconnect(struct asbestos *asbestos, struct fiber_block *block);
 static void fiber_block_free(struct asbestos *asbestos, struct fiber_block *block);
 static void fiber_free_jetsam(struct asbestos *asbestos);
+static uint64_t asbestos_now_ms(void);
 static void fiber_resize_hash(struct asbestos *asbestos, size_t new_size);
 
 struct asbestos *asbestos_new(struct mmu *mmu) {
@@ -384,6 +385,7 @@ struct asbestos *asbestos_new(struct mmu *mmu) {
     wrlock_init(&asbestos->jetsam_lock);
     atomic_init(&asbestos->jit_active_threads, 0);
     atomic_init(&asbestos->jetsam_gen, 0);
+    atomic_init(&asbestos->last_active_ms, asbestos_now_ms());
     return asbestos;
 }
 
@@ -782,15 +784,48 @@ static void fiber_block_free(struct asbestos *asbestos, struct fiber_block *bloc
     free(block);
 }
 
-static void fiber_free_jetsam(struct asbestos *asbestos) {
+static void fiber_free_jetsam_counted(struct asbestos *asbestos, size_t *blocks, size_t *bytes) {
     struct fiber_block *block, *tmp;
     list_for_each_entry_safe(&asbestos->jetsam, block, tmp, jetsam) {
         list_remove(&block->jetsam);
+        *blocks += 1;
+        *bytes += fiber_block_bytes(block);
 #ifdef ISH_JIT
         jit_block_free(block);
 #endif
         free(block);
     }
+}
+
+static void fiber_free_jetsam(struct asbestos *asbestos) {
+    size_t blocks = 0, bytes = 0;
+    fiber_free_jetsam_counted(asbestos, &blocks, &bytes);
+}
+
+static uint64_t asbestos_now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t) ts.tv_sec * 1000 + (uint64_t) ts.tv_nsec / 1000000;
+}
+
+void asbestos_reclaim_idle(struct asbestos *asbestos, uint64_t now_ms, uint64_t idle_ms, size_t *blocks,
+                           size_t *bytes) {
+    *blocks = *bytes = 0;
+    if (__atomic_load_n(&asbestos->active_threads, __ATOMIC_RELAXED) != 0)
+        return;
+    if (now_ms - atomic_load(&asbestos->last_active_ms) < idle_ms)
+        return;
+    // A thread running its code holds this to read (cpu_step_to_interrupt):
+    // with it held to write none is, and none comes in until the blocks are
+    // freed. A thread blocked in a call finds its caches stale when it comes
+    // back (invalidate_gen), as after any invalidation.
+    if (!write_wrtrylock(&asbestos->jetsam_lock))
+        return;
+    asbestos_invalidate_all(asbestos);
+    lock(&asbestos->lock);
+    fiber_free_jetsam_counted(asbestos, blocks, bytes);
+    unlock(&asbestos->lock);
+    write_wrunlock(&asbestos->jetsam_lock);
 }
 
 int fiber_enter(struct fiber_block *block, struct fiber_frame *frame, struct tlb *tlb);
@@ -1339,6 +1374,7 @@ int cpu_run_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
     tlb_refresh(tlb, cpu->mmu);
     int interrupt = (CPU_HAS_SINGLE_STEP ? cpu_single_step : cpu_step_to_interrupt)(cpu, tlb);
     cpu->trapno = interrupt;
+    atomic_store_explicit(&asbestos->last_active_ms, asbestos_now_ms(), memory_order_relaxed);
     __atomic_sub_fetch(&asbestos->active_threads, 1, __ATOMIC_RELAXED);
 
     lock(&asbestos->lock);
