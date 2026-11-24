@@ -177,17 +177,28 @@ static void *after_main_exit(void *arg) {
     exit(failed != 0);
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    (void) argc;
     // run.sh runs this as init, whose process group is 1 (kill(-1) is every
     // process) and which ignores signals it has no handler for: the cases
-    // run in a child.
+    // run in a child. The child runs this program anew, not as forked: a
+    // forked child's main thread has no clear_child_tid (musl's _Fork sets
+    // none, and fork does not pass one on), so the thread list lock it holds
+    // as it leaves with pthread_exit (case 11) was never let go, and the
+    // threads that took it after hung: case 11's fork, and case 10's
+    // SIGEV_THREAD thread if it had not left yet, which under load (ASan,
+    // tests run side by side) it had not, about one run in twenty. The same
+    // on Linux; started anew, musl gives the main thread one.
     if (getpid() == 1) {
         pid_t child = fork();
-        if (child != 0) {
-            int status;
-            waitpid(child, &status, 0);
-            return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+        if (child == 0) {
+            execv(argv[0], argv);
+            printf("FAIL execv %s: %s\n", argv[0], strerror(errno));
+            _exit(1);
         }
+        int status;
+        waitpid(child, &status, 0);
+        return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
     }
     char detail[160];
     pthread_t t;
