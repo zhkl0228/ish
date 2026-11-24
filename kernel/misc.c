@@ -5,6 +5,7 @@
 #define PRCTL_SET_DUMPABLE_ 4
 #define PRCTL_SET_KEEPCAPS_ 8
 #define PRCTL_SET_NAME_ 15
+#define PRCTL_GET_NAME_ 16
 
 int_t sys_prctl(dword_t option, addr_t arg2, addr_t UNUSED(arg3), addr_t UNUSED(arg4), addr_t UNUSED(arg5)) {
     switch (option) {
@@ -29,6 +30,20 @@ int_t sys_prctl(dword_t option, addr_t arg2, addr_t UNUSED(arg3), addr_t UNUSED(
             name[sizeof(name) - 1] = '\0';
             STRACE("prctl(PRCTL_SET_NAME, \"%s\")", name);
             strcpy(current->comm, name);
+            return 0;
+        }
+        // The thread's name, its 16 bytes with the NUL, as Linux's. It was
+        // EINVAL: musl's pthread_getname_np of the caller asks it (CPython's
+        // _thread._get_name, test_threading's thread name tests).
+        case PRCTL_GET_NAME_: {
+            char name[16];
+            lock(&current->general_lock);
+            memcpy(name, current->comm, sizeof(name));
+            unlock(&current->general_lock);
+            name[sizeof(name) - 1] = '\0';
+            STRACE("prctl(PRCTL_GET_NAME) \"%s\"", name);
+            if (user_write(arg2, name, sizeof(name)))
+                return _EFAULT;
             return 0;
         }
         default:
