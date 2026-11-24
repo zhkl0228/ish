@@ -76,6 +76,11 @@ struct fd {
             struct unix_abstract *unix_name_abstract;
             uint8_t unix_name_len;
             char unix_name[108];
+            // the other end's name, getpeername's: the listener's for a
+            // connecting end (connect), the connecting end's for an
+            // accepted one (accept)
+            uint8_t unix_peer_name_len;
+            char unix_peer_name[108];
             // The id behind the name bind() gave (inode->socket_id or the
             // abstract name's), 0 before. Connect finds the listener by it.
             uint32_t unix_socket_id;

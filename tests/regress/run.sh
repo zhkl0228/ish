@@ -982,6 +982,17 @@ EOF
         status=1
     fi
     echo
+    echo "########## unix sockets' names (autobind, getpeername), msg_flags, ENOTSOCK ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_unix_names" tests/regress/regress_unix_names.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_unix_names 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_unix_names"
+    else
+        echo "failed to build regress_unix_names" >&2
+        status=1
+    fi
+    echo
     echo "########## dup2, dup3, F_DUPFD given an fd they may not take (iSH's heap broken) ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_dup_bad_fd" tests/regress/regress_dup_bad_fd.c; then
         out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_dup_bad_fd 2>&1)

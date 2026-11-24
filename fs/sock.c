@@ -439,6 +439,14 @@ static struct fd *sock_getfd(fd_t sock_fd) {
     return sock;
 }
 
+// What a socket call says of an fd sock_getfd gave none for, as Linux's
+// sockfd_lookup: EBADF if there is no such fd, ENOTSOCK if it is no socket.
+// It was EBADF for both (CPython's socket(fileno=) of a file,
+// test_socket_fileno_requires_socket_fd).
+static int sock_fd_error(fd_t sock_fd) {
+    return f_get(sock_fd) == NULL ? _EBADF : _ENOTSOCK;
+}
+
 static uint32_t unix_socket_next_id(void) {
     static uint32_t next_id = 0;
     static lock_t next_id_lock = LOCK_INITIALIZER;
@@ -638,7 +646,22 @@ static int sockaddr_read_bind(addr_t sockaddr_addr, void *sockaddr, uint_t *sock
             uint32_t socket_id;
             int err;
             if (path_size == 0) {
-                return _ENOENT;
+                // No name to bind: autobind, as Linux's unix_autobind, to a
+                // name in the abstract namespace, five hex digits after its
+                // null byte, the first not taken (ENOSPC if none is). It was
+                // ENOENT (CPython's test_socket testAutobind). No name to
+                // connect to is EINVAL, as Linux's unix_validate_addr.
+                if (bind_fd == NULL)
+                    return _EINVAL;
+                static _Atomic uint32_t autobind_next;
+                err = _EEXIST;
+                for (uint32_t tries = 0; tries <= 0xfffff && err == _EEXIST; tries++) {
+                    path[0] = '\0';
+                    path_size = 1 + sprintf(path + 1, "%05x", (unsigned) (atomic_fetch_add(&autobind_next, 1) & 0xfffff));
+                    err = unix_abstract_get(path + 1, path_size - 1, bind_fd, &socket_id);
+                }
+                if (err == _EEXIST)
+                    return _ENOSPC;
             } else if (path[0] != '\0') {
                 STRACE(" unix socket %s", path);
                 err = unix_socket_get(path, bind_fd, &socket_id);
@@ -721,7 +744,7 @@ int_t sys_bind(fd_t sock_fd, addr_t sockaddr_addr, uint_t sockaddr_len) {
         return packet_bind(packet, sockaddr_addr, sockaddr_len);
     struct fd *sock = sock_getfd(sock_fd);
     if (sock == NULL)
-        return _EBADF;
+        return sock_fd_error(sock_fd);
     // netlink bind: accepted. nl_groups is remembered for the log only: no
     // event is ever multicast, so a subscribed reader simply waits (in
     // bounded polls, see netlink_stub_dequeue).
@@ -778,7 +801,7 @@ int_t sys_connect(fd_t sock_fd, addr_t sockaddr_addr, uint_t sockaddr_len) {
     STRACE("connect(%d, 0x%x, %d)", sock_fd, sockaddr_addr, sockaddr_len);
     struct fd *sock = sock_getfd(sock_fd);
     if (sock == NULL)
-        return _EBADF;
+        return sock_fd_error(sock_fd);
     struct sockaddr_max_ sockaddr;
     uint32_t unix_socket_id = 0;
     int err = sockaddr_read_bind(sockaddr_addr, &sockaddr, &sockaddr_len, NULL, &unix_socket_id);
@@ -815,6 +838,10 @@ int_t sys_connect(fd_t sock_fd, addr_t sockaddr_addr, uint_t sockaddr_len) {
         list_for_each_entry(&unix_listeners, listener, socket.unix_listening) {
             if (listener->socket.unix_socket_id == unix_socket_id) {
                 sock->socket.unix_peer_cred = listener->socket.unix_peer_cred;
+                // and its name, getpeername's, as Linux's (the listener's
+                // bound one, not the host's socket iSH backs it with)
+                sock->socket.unix_peer_name_len = listener->socket.unix_name_len;
+                memcpy(sock->socket.unix_peer_name, listener->socket.unix_name, listener->socket.unix_name_len);
                 break;
             }
         }
@@ -842,7 +869,7 @@ int_t sys_listen(fd_t sock_fd, int_t backlog) {
     STRACE("listen(%d, %d)", sock_fd, backlog);
     struct fd *sock = sock_getfd(sock_fd);
     if (sock == NULL)
-        return _EBADF;
+        return sock_fd_error(sock_fd);
     // A unix socket goes on the list of listeners, with the credentials a
     // connecting end takes (on Linux, set by every listen()), before anyone
     // can connect: see sys_connect.
@@ -869,7 +896,7 @@ int_t sys_accept(fd_t sock_fd, addr_t sockaddr_addr, addr_t sockaddr_len_addr) {
     STRACE("accept(%d, 0x%x, 0x%x)", sock_fd, sockaddr_addr, sockaddr_len_addr);
     struct fd *sock = sock_getfd(sock_fd);
     if (sock == NULL)
-        return _EBADF;
+        return sock_fd_error(sock_fd);
     dword_t sockaddr_len = 0;
     if (sockaddr_addr != 0) {
         if (user_get(sockaddr_len_addr, sockaddr_len))
@@ -965,6 +992,10 @@ int_t sys_accept(fd_t sock_fd, addr_t sockaddr_addr, addr_t sockaddr_len_addr) {
                 client_fd->socket.unix_peer = peer;
                 peer->socket.unix_peer = client_fd;
                 peer->socket.unix_pending = NULL;
+                // its other end's name: the connecting end's own, if it
+                // bound one
+                client_fd->socket.unix_peer_name_len = peer->socket.unix_name_len;
+                memcpy(client_fd->socket.unix_peer_name, peer->socket.unix_name, peer->socket.unix_name_len);
             }
             lock(&client_fd->lock);
             struct scm *scm, *tmp;
@@ -1001,17 +1032,23 @@ int_t sys_accept4(fd_t sock_fd, addr_t sockaddr_addr, addr_t sockaddr_len_addr, 
     return client_f;
 }
 
-static void copy_unix_name(char *sockaddr, dword_t *sockaddr_len, struct fd *sock) {
-    struct sockaddr_ *fake_addr = (void *) sockaddr;
+// The address of a name into a buffer of *sockaddr_len bytes, cut to fit
+// (zeros after it), and its whole length, as Linux says when it is cut (the
+// caller sees it was). A buffer shorter than the family took its length less
+// the family's for the name's room, below 0 and so huge: memset past it.
+static void copy_unix_name_of(char *sockaddr, dword_t *sockaddr_len, const char *name, size_t name_len) {
+    struct sockaddr_max_ full = {};
+    struct sockaddr_ *fake_addr = (void *) &full;
     fake_addr->family = PF_LOCAL_;
+    memcpy(fake_addr->data, name, name_len);
+    size_t full_len = offsetof(struct sockaddr_, data) + name_len;
+    memset(sockaddr, 0, *sockaddr_len);
+    memcpy(sockaddr, &full, *sockaddr_len < full_len ? *sockaddr_len : full_len);
+    *sockaddr_len = full_len;
+}
 
-    size_t data_len = *sockaddr_len - offsetof(struct sockaddr_, data);
-    size_t name_len = sock->socket.unix_name_len;
-    if (name_len > data_len)
-        name_len = data_len;
-    memset(fake_addr->data, 0, data_len);
-    memcpy(fake_addr->data, sock->socket.unix_name, name_len);
-    *sockaddr_len = offsetof(struct sockaddr_, data) + name_len;
+static void copy_unix_name(char *sockaddr, dword_t *sockaddr_len, struct fd *sock) {
+    copy_unix_name_of(sockaddr, sockaddr_len, sock->socket.unix_name, sock->socket.unix_name_len);
 }
 
 int_t sys_getsockname(fd_t sock_fd, addr_t sockaddr_addr, addr_t sockaddr_len_addr) {
@@ -1021,7 +1058,7 @@ int_t sys_getsockname(fd_t sock_fd, addr_t sockaddr_addr, addr_t sockaddr_len_ad
         return packet_getsockname(packet, sockaddr_addr, sockaddr_len_addr);
     struct fd *sock = sock_getfd(sock_fd);
     if (sock == NULL)
-        return _EBADF;
+        return sock_fd_error(sock_fd);
     dword_t sockaddr_len;
     if (user_get(sockaddr_len_addr, sockaddr_len))
         return _EFAULT;
@@ -1074,18 +1111,34 @@ int_t sys_getpeername(fd_t sock_fd, addr_t sockaddr_addr, addr_t sockaddr_len_ad
     STRACE("getpeername(%d, 0x%x, 0x%x)", sock_fd, sockaddr_addr, sockaddr_len_addr);
     struct fd *sock = sock_getfd(sock_fd);
     if (sock == NULL)
-        return _EBADF;
+        return sock_fd_error(sock_fd);
     dword_t sockaddr_len;
     if (user_get(sockaddr_len_addr, sockaddr_len))
         return _EFAULT;
 
-    // TODO if this is a unix socket, return the same string the peer passed to
-    // bind once the peer pointer is available
-
     char sockaddr[sockaddr_len];
+    dword_t buffer_len = sockaddr_len;
     int res = getpeername(sock->real_fd, (void *) sockaddr, &sockaddr_len);
     if (res < 0)
         return errno_map();
+
+    // A unix socket's other end is the name it bound, as Linux says (into
+    // the guest's buffer: the host's call set its length to the host's): the
+    // host's is the socket iSH backs it with (or none), and the guest got
+    // its own sockaddr's bytes, zeros for an abstract name (CPython's
+    // test_socket testLinuxAbstractNamespace). The host says whether it is
+    // connected (ENOTCONN), above.
+    if (sock->socket.domain == PF_LOCAL_) {
+        sockaddr_len = buffer_len;
+        lock(&peer_lock);
+        copy_unix_name_of(sockaddr, &sockaddr_len, sock->socket.unix_peer_name, sock->socket.unix_peer_name_len);
+        unlock(&peer_lock);
+        if (user_write(sockaddr_addr, sockaddr, sizeof(sockaddr)))
+            return _EFAULT;
+        if (user_put(sockaddr_len_addr, sockaddr_len))
+            return _EFAULT;
+        return 0;
+    }
 
     int err = sockaddr_write(sockaddr_addr, sockaddr, sizeof(sockaddr), &sockaddr_len);
     if (err < 0)
@@ -1161,7 +1214,7 @@ int_t sys_sendto(fd_t sock_fd, addr_t buffer_addr, dword_t len, dword_t flags, a
         return packet_unsupported(f_get(sock_fd), "sendto");
     struct fd *sock = sock_getfd(sock_fd);
     if (sock == NULL)
-        return _EBADF;
+        return sock_fd_error(sock_fd);
     char *buffer = malloc(len + 1);
     if (user_read(buffer_addr, buffer, len))
         return _EFAULT;
@@ -1288,7 +1341,7 @@ int_t sys_recvfrom(fd_t sock_fd, addr_t buffer_addr, dword_t len, dword_t flags,
     STRACE("recvfrom(%d, 0x%x, %d, %d, 0x%x, 0x%x)", sock_fd, buffer_addr, len, flags, sockaddr_addr, sockaddr_len_addr);
     struct fd *sock = sock_getfd(sock_fd);
     if (sock == NULL)
-        return _EBADF;
+        return sock_fd_error(sock_fd);
     // The error queue is always empty (see IP_RECVERR in setsockopt).
     if (flags & MSG_ERRQUEUE_)
         return _EAGAIN;
@@ -1408,7 +1461,7 @@ int_t sys_shutdown(fd_t sock_fd, dword_t how) {
     STRACE("shutdown(%d, %d)", sock_fd, how);
     struct fd *sock = sock_getfd(sock_fd);
     if (sock == NULL)
-        return _EBADF;
+        return sock_fd_error(sock_fd);
     int err = shutdown(sock->real_fd, how);
     if (err < 0)
         return errno_map();
@@ -1465,7 +1518,7 @@ int_t sys_setsockopt(fd_t sock_fd, dword_t level, dword_t option, addr_t value_a
     }
     struct fd *sock = sock_getfd(sock_fd);
     if (sock == NULL)
-        return _EBADF;
+        return sock_fd_error(sock_fd);
     char value[value_len];
     if (user_read(value_addr, value, value_len))
         return _EFAULT;
@@ -1608,7 +1661,7 @@ int_t sys_getsockopt(fd_t sock_fd, dword_t level, dword_t option, addr_t value_a
     }
     struct fd *sock = sock_getfd(sock_fd);
     if (sock == NULL)
-        return _EBADF;
+        return sock_fd_error(sock_fd);
     dword_t value_len;
     if (user_get(len_addr, value_len))
         return _EFAULT;
@@ -1736,7 +1789,7 @@ int_t sys_sendmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
     STRACE("sendmsg(%d, %#x, %d)", sock_fd, msghdr_addr, flags);
     struct fd *sock = sock_getfd(sock_fd);
     if (sock == NULL)
-        return _EBADF;
+        return sock_fd_error(sock_fd);
     if (fd_is_netlink_stub(sock))
         return netlink_stub_sendmsg(sock, msghdr_addr);
 
@@ -1926,7 +1979,7 @@ int_t sys_recvmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
     STRACE("recvmsg(%d, %#x, %d)", sock_fd, msghdr_addr, flags);
     struct fd *sock = sock_getfd(sock_fd);
     if (sock == NULL)
-        return _EBADF;
+        return sock_fd_error(sock_fd);
     // The error queue is always empty (see IP_RECVERR in setsockopt).
     if (flags & MSG_ERRQUEUE_)
         return _EAGAIN;
@@ -2114,8 +2167,11 @@ int_t sys_recvmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
     }
     msg_fake.msg_namelen = msg.msg_namelen;
 
-    // msg_flags (changed)
-    msg_fake.msg_flags = sock_flags_from_real(msg.msg_flags);
+    // msg_flags (changed): what came of the receive only, as Linux's, not
+    // the flags it was called with. XNU's recvmsg gives those back too, and
+    // the host's was called with MSG_DONTWAIT (above), which the guest got,
+    // 0x40, of every receive (CPython's test_socket testSendAndRecvFds).
+    msg_fake.msg_flags = sock_flags_from_real(msg.msg_flags) & (MSG_OOB_ | MSG_TRUNC_ | MSG_CTRUNC_ | MSG_EOR_);
     if (control_truncated)
         msg_fake.msg_flags |= MSG_CTRUNC_;
 
