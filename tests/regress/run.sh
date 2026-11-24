@@ -881,6 +881,17 @@ EOF
         status=1
     fi
     echo
+    echo "########## poll of an fd that is not: POLLNVAL, ready at once (it waited) ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_poll_nval" tests/regress/regress_poll_nval.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_poll_nval 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_poll_nval"
+    else
+        echo "failed to build regress_poll_nval" >&2
+        status=1
+    fi
+    echo
     echo "########## ITIMER_VIRTUAL and ITIMER_PROF ##########"
     if "$CC_GUEST" -static -O0 -Wall -pthread -o "$GUEST_ROOT/tmp/regress_cpu_itimers" tests/regress/regress_cpu_itimers.c; then
         out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_cpu_itimers 2>&1)
