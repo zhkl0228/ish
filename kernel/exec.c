@@ -9,12 +9,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "misc.h"
 #include "kernel/calls.h"
 #include "kernel/random.h"
 #include "kernel/errno.h"
 #include "fs/fd.h"
+#include "fs/path.h"
 #include "kernel/elf.h"
 #include "kernel/vdso.h"
 #include "kernel/mm.h"
@@ -895,11 +897,71 @@ static bool guest_file_is_shebang_script(const char *path) {
     return n == 2 && magic[0] == '#' && magic[1] == '!';
 }
 
+static dword_t execve_file(const char *filename, addr_t argv_addr, addr_t envp_addr);
+
 dword_t sys_execve(addr_t filename_addr, addr_t argv_addr, addr_t envp_addr) {
     char filename[MAX_PATH];
     if (user_read_string(filename_addr, filename, sizeof(filename)))
         return _EFAULT;
+    return execve_file(filename, argv_addr, envp_addr);
+}
 
+// execveat was execve, its directory fd taken for the address of its path:
+// EFAULT. musl's fexecve asks it (fd, "", AT_EMPTY_PATH), and falls back to
+// /proc/self/fd/<fd> only for ENOSYS: CPython's os.execve(fd) failed. The
+// file is named here as execve can open it: the fd's own path with
+// AT_EMPTY_PATH (what /proc/self/fd/<fd> names, so an unlinked file is not
+// found, as musl's fallback would not find it either), or the path from the
+// directory fd. As Linux, an fd of no regular file is EACCES, a relative
+// path from an fd of no directory ENOTDIR, and with AT_SYMLINK_NOFOLLOW a
+// symlink ELOOP.
+dword_t sys_execveat(fd_t dirfd, addr_t path_addr, addr_t argv_addr, addr_t envp_addr, dword_t flags) {
+    char path[MAX_PATH];
+    if (user_read_string(path_addr, path, sizeof(path)))
+        return _EFAULT;
+    STRACE("execveat(%d, \"%.1000s\", %#x) as execve:", dirfd, path, flags);
+    if (flags & ~(AT_EMPTY_PATH_ | AT_SYMLINK_NOFOLLOW_))
+        return _EINVAL;
+    char filename[MAX_PATH];
+    if (path[0] == '/' || (dirfd == AT_FDCWD_ && path[0] != '\0')) {
+        strcpy(filename, path);
+    } else if (path[0] == '\0') {
+        if (!(flags & AT_EMPTY_PATH_))
+            return _ENOENT;
+        struct fd *fd = dirfd == AT_FDCWD_ ? NULL : f_get(dirfd);
+        if (dirfd != AT_FDCWD_ && fd == NULL)
+            return _EBADF;
+        if (fd == NULL || !S_ISREG(fd->type))
+            return _EACCES;
+        int err = generic_getpath(fd, filename);
+        if (err < 0)
+            return err;
+    } else {
+        struct fd *at = f_get(dirfd);
+        if (at == NULL)
+            return _EBADF;
+        if (!S_ISDIR(at->type))
+            return _ENOTDIR;
+        char dir[MAX_PATH];
+        int err = generic_getpath(at, dir);
+        if (err < 0)
+            return err;
+        if (snprintf(filename, sizeof(filename), "%s/%s", strcmp(dir, "/") == 0 ? "" : dir, path) >=
+                (int) sizeof(filename))
+            return _ENAMETOOLONG;
+    }
+    if (flags & AT_SYMLINK_NOFOLLOW_) {
+        struct statbuf stat;
+        int err = generic_statat(AT_PWD, filename, &stat, false);
+        if (err < 0)
+            return err;
+        if (S_ISLNK(stat.mode))
+            return _ELOOP;
+    }
+    return execve_file(filename, argv_addr, envp_addr);
+}
+
+static dword_t execve_file(const char *filename, addr_t argv_addr, addr_t envp_addr) {
     int err = _ENOMEM;
     char *argv = malloc(ARGV_MAX);
     if (argv == NULL)

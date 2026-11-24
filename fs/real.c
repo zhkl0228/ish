@@ -880,13 +880,17 @@ int realfs_setattr(struct mount *mount, const char *path, struct attr attr) {
     int root = mount->root_fd;
     int err;
     switch (attr.type) {
+        // The path is the file's: generic_setattrat followed its symlinks, or
+        // not, as asked. The host following it again, lchown of a symlink
+        // chowned what it points to (a dangling one's ENOENT: CPython's
+        // test_lchown). A gid was set as the owner.
         case attr_uid:
-            err = fchownat(root, path, attr.uid, -1, 0);
+            err = fchownat(root, path, attr.uid, -1, AT_SYMLINK_NOFOLLOW);
             if (err < 0 && errno == EPERM)
                 return 0; // silently ignore, we're not root on host
             break;
         case attr_gid:
-            err = fchownat(root, path, attr.gid, -1, 0);
+            err = fchownat(root, path, -1, attr.gid, AT_SYMLINK_NOFOLLOW);
             if (err < 0 && errno == EPERM)
                 return 0;
             break;
@@ -913,7 +917,8 @@ int realfs_fsetattr(struct fd *fd, struct attr attr) {
                 return 0;
             break;
         case attr_gid:
-            err = fchown(real_fd, attr.gid, -1);
+            // the group, not the owner (it set the owner to the gid)
+            err = fchown(real_fd, -1, attr.gid);
             if (err < 0 && errno == EPERM)
                 return 0;
             break;

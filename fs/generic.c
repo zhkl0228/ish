@@ -11,6 +11,7 @@
 #include "kernel/task.h"
 #include "kernel/errno.h"
 #include "kernel/inotify.h"
+#include "fs/real.h"
 
 struct mount *find_mount_and_trim_path(char *path) {
     struct mount *mount = mount_find(path);
@@ -165,13 +166,13 @@ static struct fd *generic_openat_path(struct fd *at, const char *path_raw, int f
     fd->type = stat.mode & S_IFMT;
     fd->flags = flags;
 
-    int accmode;
     // Before anything opens it further or asks may it be, as Linux's
     // lookup says it: a device was opened (dev_open) to be said no directory
     err = _ENOTDIR;
     if (!S_ISDIR(fd->type) && flags & O_DIRECTORY_)
         goto error;
 
+    int accmode;
     if (flags & O_RDWR_) accmode = AC_R | AC_W;
     else if (flags & O_WRONLY_) accmode = AC_W;
     else accmode = AC_R;
@@ -244,9 +245,9 @@ int generic_accessat(struct fd *dirfd, const char *path_raw, int mode) {
     return access_check(&stat, mode);
 }
 
-int generic_linkat(struct fd *src_at, const char *src_raw, struct fd *dst_at, const char *dst_raw) {
+int generic_linkat(struct fd *src_at, const char *src_raw, struct fd *dst_at, const char *dst_raw, bool follow_src) {
     char src[MAX_PATH];
-    int err = path_normalize(src_at, src_raw, src, N_SYMLINK_NOFOLLOW);
+    int err = path_normalize(src_at, src_raw, src, follow_src ? N_SYMLINK_FOLLOW : N_SYMLINK_NOFOLLOW);
     if (err < 0)
         return err;
     char dst[MAX_PATH];
@@ -422,6 +423,30 @@ int generic_utime(struct fd *at, const char *path_raw, struct timespec atime, st
     if (err >= 0)
         inotify_path(mount, path, IN_ATTRIB_);
     mount_release(mount);
+    return err;
+}
+
+// The times of an fd's own file (futimens). One with a host fd, a file of
+// realfs or fakefs (whose utime is the host's too) or a pipe or socket, has
+// them set on it; another fd by its path, where it has one: an ad-hoc fd's
+// (eventfd, epoll) names no file, and a path from it would be looked up from
+// the cwd.
+int generic_futime(struct fd *fd, struct timespec atime, struct timespec mtime) {
+    int err;
+    if (fd->ops == &realfs_fdops) {
+        struct timespec times[2] = {atime, mtime};
+        err = futimens(fd->real_fd, times) < 0 ? errno_map() : 0;
+    } else if (is_adhoc_fd(fd)) {
+        err = _EPERM;
+    } else {
+        char path[MAX_PATH];
+        err = generic_getpath(fd, path);
+        if (err < 0)
+            return err;
+        err = generic_utime(AT_PWD, path, atime, mtime, false);
+    }
+    if (err >= 0)
+        inotify_fd(fd, IN_ATTRIB_);
     return err;
 }
 
