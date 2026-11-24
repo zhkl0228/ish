@@ -664,9 +664,11 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
     [self.tabBar setSessions:self.tabs selectedIndex:selected];
 }
 
+// Another tab, the keyboard as it was: put down, it stays down (a tap on the
+// terminal brings it back); up, it stays up. A new shell (a new tab, New Tab
+// Here, Restart) brings it up, to type in.
 - (void)tabBar:(TabBarView *)tabBar didSelectTabAtIndex:(NSUInteger)index {
     [self selectTabAtIndex:index];
-    [self.termView becomeFirstResponder];
 }
 
 // Closing a tab hangs up its terminal, and the job that owns it (claude, top,
@@ -719,7 +721,6 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
         self.selectedSession = keep;
         for (TerminalSession *session in others)
             [self closeTab:session];
-        [self.termView becomeFirstResponder];
     }];
 }
 
@@ -759,6 +760,8 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
     if (index >= self.tabs.count)
         return;
     TerminalSession *session = self.tabs[index];
+    // the keyboard back after, if it was up before
+    BOOL typing = self.termView.isFirstResponder;
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Rename Tab" message:nil preferredStyle:UIAlertControllerStyleAlert];
     [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
         textField.text = session.title;
@@ -771,7 +774,8 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
     UIAlertAction *rename = [UIAlertAction actionWithTitle:@"Rename" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
         NSString *title = [weakAlert.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
         session.title = title.length > 0 ? title : nil;
-        [weakSelf.termView becomeFirstResponder];
+        if (typing)
+            [weakSelf.termView becomeFirstResponder];
     }];
     [alert addAction:rename];
     alert.preferredAction = rename; // Return in the text field confirms
@@ -1426,13 +1430,16 @@ static NSString *ShellQuoted(NSString *string) {
     [self.termView find:self.findBar.field.text backwards:backwards incremental:NO];
 }
 
-// Done: the highlights go, and the keyboard goes back to the terminal
+// Done, or another tab: the highlights go, and the keyboard, if the find
+// bar had it, goes back to the terminal; put down, it stays down
 - (void)hideFind {
     if (!self.finding)
         return;
+    BOOL typing = self.findBar.field.isFirstResponder;
     [self.termView clearFind];
     self.findBar.hidden = YES;
-    [self.termView becomeFirstResponder];
+    if (typing)
+        [self.termView becomeFirstResponder];
 }
 
 - (void)paste:(id)sender {
