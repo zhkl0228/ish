@@ -82,11 +82,36 @@ struct host_memory get_host_memory(void) {
         sscanf(buf, "%llu %llu", &size, &resident);
         m.footprint = resident * (uint64_t) sysconf(_SC_PAGESIZE);
     }
-    // a line of /proc/self/maps per mapping
+    // a line of /proc/self/maps per mapping, "start-end ...", in address order:
+    // what lies between two no mapping takes. x86-64's [vsyscall] is in the
+    // kernel's half, not the process's address space, and left out.
+    uint64_t start = 0, end = 0, last_end = 0;
+    int field = 0; // 0 start, 1 end, 2 the rest of the line
     fd = open("/proc/self/maps", O_RDONLY);
-    while ((n = read(fd, buf, sizeof(buf))) > 0)
-        for (ssize_t i = 0; i < n; i++)
-            m.mappings += buf[i] == '\n';
+    while ((n = read(fd, buf, sizeof(buf))) > 0) {
+        for (ssize_t i = 0; i < n; i++) {
+            char c = buf[i];
+            if (c == '\n') {
+                if (start < 0xffff000000000000) {
+                    if (last_end != 0 && start - last_end > m.largest_free)
+                        m.largest_free = start - last_end;
+                    m.mappings++;
+                    m.address_space += end - start;
+                    last_end = end;
+                }
+                start = end = 0;
+                field = 0;
+            } else if (field == 0 && c == '-') {
+                field = 1;
+            } else if (field == 1 && c == ' ') {
+                field = 2;
+            } else if (field == 0) {
+                start = start << 4 | (uint64_t) (c <= '9' ? c - '0' : c - 'a' + 10);
+            } else if (field == 1) {
+                end = end << 4 | (uint64_t) (c <= '9' ? c - '0' : c - 'a' + 10);
+            }
+        }
+    }
     close(fd);
     m.malloc_in_use = mallinfo2().uordblks;
     return m;

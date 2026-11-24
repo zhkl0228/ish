@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <errno.h>
 #include <stdatomic.h>
+#include <time.h>
 
 #define DEFAULT_CHANNEL memory
 #include "debug.h"
@@ -25,6 +26,7 @@ static void mem_changed(struct mem *mem);
 static struct mmu_ops mem_mmu_ops;
 
 #include "kernel/mm.h"
+#include "platform/platform.h"
 #include "emu/tlb.h"
 
 
@@ -736,6 +738,34 @@ _Atomic uint64_t st_anon_pages_mapped; // guest pages they backed
 // every host page size
 #define MAP_CHUNK_BYTES ((size_t) 16 << 20)
 
+// A mapping the host would not give, whole nor in chunks, is ENOMEM to the
+// guest, which goes on or not as it will: Java's compiler daemon said "Map
+// failed" of the JDK's 140MB lib/modules with 1.1GB available to the app, and
+// nothing told why. What was asked is said, with the host's errno and its
+// memory as /proc/ish/host has it: whether its address space ran out or
+// broke up. Once a second at most, with how many were not said.
+static void host_map_failed(size_t total, int whole_error, size_t chunk, size_t chunks, int chunk_error) {
+    static _Atomic time_t last;
+    static _Atomic unsigned unsaid;
+    time_t now = time(NULL);
+    if (atomic_exchange(&last, now) == now) {
+        atomic_fetch_add(&unsaid, 1);
+        return;
+    }
+    struct host_memory m = get_host_memory();
+    char chunk_said[80] = "";
+    if (chunks != 0)
+        snprintf(chunk_said, sizeof(chunk_said), ", nor its 16MB chunk %zu of %zu (errno %d)", chunk + 1, chunks,
+                 chunk_error);
+    printk("%s[%d]: the host would not map %zu bytes (errno %d)%s; the OS lets the app take %llu MB more, "
+           "footprint %llu MB, %llu mappings in %llu MB of address space, the largest range free %llu MB, malloc "
+           "in use %llu MB (%u more not said)\n", current->comm, current->pid, total, whole_error, chunk_said,
+           (unsigned long long) m.available >> 20, (unsigned long long) m.footprint >> 20,
+           (unsigned long long) m.mappings, (unsigned long long) m.address_space >> 20,
+           (unsigned long long) m.largest_free >> 20, (unsigned long long) m.malloc_in_use >> 20,
+           atomic_exchange(&unsaid, 0));
+}
+
 // The app's address space is the host's, shared by every guest process and
 // capped by iOS; once it is fragmented its largest free range can be smaller
 // than one mapping. V8's code range, 256MB made RWX at once, failed to commit
@@ -750,30 +780,39 @@ _Atomic uint64_t st_anon_pages_mapped; // guest pages they backed
 //
 // All or nothing: every chunk's memory and data object first, the pages
 // mapped only when all are there. A mapping of one chunk is not tried again.
+// The caller's mmap of the whole has just failed, and errno is its.
 int pt_map_chunked(struct mem *mem, page_t start, pages_t pages, size_t offset, unsigned flags,
                    void *(*map_chunk)(size_t from, size_t size, void *ctx), void *ctx) {
+    int whole_error = errno;
     size_t total = (size_t) pages * PAGE_SIZE + offset;
     size_t n = (total + MAP_CHUNK_BYTES - 1) / MAP_CHUNK_BYTES;
-    if (n < 2)
+    if (n < 2) {
+        host_map_failed(total, whole_error, 0, 0, 0);
         return _ENOMEM;
+    }
     struct data **chunks = calloc(n, sizeof(*chunks));
     if (chunks == NULL)
         return _ENOMEM;
     size_t i;
+    int chunk_error = 0;
     for (i = 0; i < n; i++) {
         size_t from = i * MAP_CHUNK_BYTES;
         size_t size = total - from < MAP_CHUNK_BYTES ? total - from : MAP_CHUNK_BYTES;
         void *memory = map_chunk(from, size, ctx);
-        if (memory == MAP_FAILED)
+        if (memory == MAP_FAILED) {
+            chunk_error = errno;
             break;
+        }
         page_t first = i == 0 ? start : start + (from - offset) / PAGE_SIZE;
         chunks[i] = data_new(memory, size, first);
         if (chunks[i] == NULL) {
+            chunk_error = errno;
             munmap(memory, size);
             break;
         }
     }
     if (i < n) {
+        host_map_failed(total, whole_error, i, n, chunk_error);
         while (i-- > 0) {
             munmap(chunks[i]->data, chunks[i]->size);
             free(chunks[i]);

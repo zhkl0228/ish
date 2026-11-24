@@ -173,6 +173,8 @@ static int proc_ish_show_host(struct proc_entry *UNUSED(entry), struct proc_data
     proc_printf(buf, "footprint: %.1f MB\n", m.footprint / 1048576.0);
     proc_printf(buf, "mappings: %llu\n", (unsigned long long) m.mappings);
     proc_printf(buf, "malloc in use: %.1f MB\n", m.malloc_in_use / 1048576.0);
+    proc_printf(buf, "address space: %.1f MB in the mappings, %.1f MB the largest range none takes\n",
+                m.address_space / 1048576.0, m.largest_free / 1048576.0);
     return 0;
 }
 

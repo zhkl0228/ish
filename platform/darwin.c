@@ -70,7 +70,10 @@ struct host_memory get_host_memory(void) {
     mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
     if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t) &vm, &count) == KERN_SUCCESS)
         m.footprint = vm.phys_footprint;
-    // vm_region_64 from each region's end to the next, as vmmap counts them
+    // vm_region_64 from each region's end to the next, as vmmap counts them;
+    // what lies between two, and between the last and the end of the task's
+    // address space, no mapping takes
+    vm_address_t end = (vm_address_t) vm.min_address;
     for (vm_address_t address = 0;;) {
         vm_size_t size = 0;
         vm_region_basic_info_data_64_t info;
@@ -79,9 +82,15 @@ struct host_memory get_host_memory(void) {
         if (vm_region_64(mach_task_self(), &address, &size, VM_REGION_BASIC_INFO_64, (vm_region_info_t) &info,
                          &info_count, &object) != KERN_SUCCESS)
             break;
+        if (address > end && address - end > m.largest_free)
+            m.largest_free = address - end;
         m.mappings++;
+        m.address_space += size;
         address += size;
+        end = address;
     }
+    if (vm.max_address > end && vm.max_address - end > m.largest_free)
+        m.largest_free = vm.max_address - end;
     malloc_statistics_t stats = {};
     malloc_zone_statistics(NULL, &stats);
     m.malloc_in_use = stats.size_in_use;

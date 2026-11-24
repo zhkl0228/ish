@@ -28,6 +28,8 @@ struct host_memory {
     uint64_t footprint;     // the app's memory: its physical footprint (Darwin), resident set (Linux)
     uint64_t mappings;      // its host mappings (VM regions)
     uint64_t malloc_in_use; // malloc's bytes in use
+    uint64_t address_space; // the address space its mappings take
+    uint64_t largest_free;  // its largest range of address space that no mapping takes
 };
 struct host_memory get_host_memory(void);
 
