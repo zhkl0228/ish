@@ -529,7 +529,11 @@ void realfs_shared_maps_stats(uint64_t *maps, uint64_t *bytes, uint64_t *reused,
 // The host's mapping of the file, memory, made a shared one and mapped. Its
 // file is set here, as pt_set_file would set it, before another process can
 // find it: two processes' pt_set_file, each under its own lock, would both
-// take a reference to a file of their own, and one be lost.
+// take a reference to a file of their own, and one be lost. It is in the
+// table before its pages are mapped, with a reference of its own until they
+// are: a process mapping the same file at the same time (two JVMs started
+// together, as Gradle starts its workers) finds it while this one is still
+// mapping its 35000 pages of lib/modules, not a mapping of its own.
 static int shared_map_add(struct mem *mem, page_t start, pages_t pages, void *memory, size_t correction,
                           unsigned flags, struct fd *fd, off_t file_offset, const struct stat *st, off_t offset,
                           size_t size, int map_flags) {
@@ -544,6 +548,7 @@ static int shared_map_add(struct mem *mem, page_t start, pages_t pages, void *me
     *data = (struct data) {
         .data = memory,
         .size = size,
+        .refcount = 1,
         .fd = fd_retain(fd),
         .file_offset = file_offset,
         .release = shared_map_release,
@@ -558,11 +563,12 @@ static int shared_map_add(struct mem *mem, page_t start, pages_t pages, void *me
         .flags = map_flags,
         .data = data,
     };
-    pt_map_data(mem, start, pages, data, correction, flags);
     lock(&shared_maps_lock);
     map->next = shared_maps;
     shared_maps = map;
     unlock(&shared_maps_lock);
+    pt_map_data(mem, start, pages, data, correction, flags);
+    data_unref(data); // the pages hold theirs
     return 0;
 }
 
@@ -579,6 +585,26 @@ int realfs_mmap(struct fd *fd, struct mem *mem, page_t start, pages_t pages, off
 
     struct stat st;
     int have_stat = (fstat(fd->real_fd, &st) == 0);
+
+    // What no process can write is shared (struct shared_map): a private
+    // mapping's pages copy on write, so one made writable is copied first.
+    // Also one past the file's end: what lies there is zeros, and the table
+    // knows the file by its size and modification time, so the same bytes.
+    // musl maps a library so, its code, data and BSS in one mapping from the
+    // file before it maps its data and BSS over it: libjvm's 19MB of code.
+    bool shareable = have_stat && !(prot & P_WRITE) &&
+        ((mmap_flags & MAP_PRIVATE) || (fd->flags & O_ACCMODE_) == O_RDONLY_);
+    unsigned shared_flags = prot | ((mmap_flags & MAP_PRIVATE) ? P_COW : 0);
+    if (shareable) {
+        struct data *data = shared_map_get(&st, real_offset, map_size, mmap_flags);
+        if (data != NULL) {
+            pt_map_data(mem, start, pages, data, correction, shared_flags);
+            data_unref(data); // shared_map_get's: the pages hold theirs
+            atomic_fetch_add(&shared_maps_reused, 1);
+            atomic_fetch_add(&shared_maps_reused_bytes, map_size);
+            return 0;
+        }
+    }
 
     // A mapping beyond the host page the file's end falls in. One that ends in
     // that page is the file's (file_pages_end), as most are whose file is not
@@ -615,23 +641,10 @@ int realfs_mmap(struct fd *fd, struct mem *mem, page_t start, pages_t pages, off
             struct past_end_chunks chunks = {fd->real_fd, mmap_prot, mmap_flags, real_offset, st.st_size};
             return pt_map_chunked(mem, start, pages, correction, prot, map_past_end_chunk, &chunks);
         }
+        if (shareable)
+            return shared_map_add(mem, start, pages, memory, correction, shared_flags, fd, offset, &st, real_offset,
+                                  map_size, mmap_flags);
         return pt_map(mem, start, pages, memory, correction, prot);
-    }
-
-    // What no process can write is shared (struct shared_map): a private
-    // mapping's pages copy on write, so one made writable is copied first
-    bool shareable = have_stat && !(prot & P_WRITE) &&
-        ((mmap_flags & MAP_PRIVATE) || (fd->flags & O_ACCMODE_) == O_RDONLY_);
-    unsigned shared_flags = prot | ((mmap_flags & MAP_PRIVATE) ? P_COW : 0);
-    if (shareable) {
-        struct data *data = shared_map_get(&st, real_offset, map_size, mmap_flags);
-        if (data != NULL) {
-            pt_map_data(mem, start, pages, data, correction, shared_flags);
-            data_unref(data); // shared_map_get's: the pages hold theirs
-            atomic_fetch_add(&shared_maps_reused, 1);
-            atomic_fetch_add(&shared_maps_reused_bytes, map_size);
-            return 0;
-        }
     }
 
     char *memory = mmap(NULL, map_size,

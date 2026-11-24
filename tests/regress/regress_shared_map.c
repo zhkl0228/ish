@@ -14,6 +14,10 @@
 //    /proc/ish/host counts grows by its size), and it reads the marks;
 //  - mapped private, read-only, by both: the child makes its mapping writable
 //    and writes a mark, which this process does not see, nor the file;
+//  - mapped private, read-only, 1MB past its end (as musl maps a library:
+//    code, data and BSS from the file at once), by this process and a child:
+//    the child's is mapped again from this one's, the bytes after the end in
+//    its last page are zeros;
 //  - written (a mark changed), then mapped again: the new mark is read;
 //  - unmapped by every process: iSH's table has none of it left.
 // Natively it passes, /proc/ish/host's checks skipped.
@@ -98,6 +102,24 @@ static int child_maps_shared(const char *path) {
     return marks_read(map) ? 0 : 2;
 }
 
+// 0: its own private read-only mapping past the file's end reads the marks,
+// and zeros after the end in the file's last page (natively a page wholly past
+// the end is SIGBUS: not read)
+static int child_maps_past_end(const char *path) {
+    int fd = open(path, O_RDONLY);
+    uint8_t *map = mmap(NULL, len + MB, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (map == MAP_FAILED)
+        return 1;
+    return marks_read(map) && map[len] == 0 ? 0 : 2;
+}
+
+// Whether what /proc/ish/host counts as mapped again grew by a mapping of
+// size bytes: it says MB to one decimal
+static int grew_by(double before, double after, size_t size) {
+    double mb = (double) size / MB;
+    return after - before > mb - 0.1 && after - before < mb + 1;
+}
+
 // 0: its private mapping, made writable, takes a write the file does not
 static int child_writes_private(const char *path) {
     int fd = open(path, O_RDONLY);
@@ -136,10 +158,27 @@ int main(void) {
     check("a child's own shared read-only mapping reads the marks", child == 0, detail);
     if (ish != 0) {
         int found = shared_stats(&maps_after, &reused_after);
-        double grew = reused_after - reused_before, size = len / 1048576.0;
         snprintf(detail, sizeof(detail), "/proc/ish/host %s; mapped again %.1f MB, the mapping %.1f MB",
-                 found < 0 ? "has no shared file mappings line" : "has the line", grew, size);
-        check("the child's mapped again from this one (iSH)", found > 0 && grew >= size && grew < size + 1, detail);
+                 found < 0 ? "has no shared file mappings line" : "has the line", reused_after - reused_before,
+                 (double) len / MB);
+        check("the child's mapped again from this one (iSH)", found > 0 && grew_by(reused_before, reused_after, len),
+              detail);
+    }
+
+    // Private, read-only, past the file's end, here and in a child
+    shared_stats(&maps_after, &reused_before);
+    uint8_t *past = mmap(NULL, len + MB, PROT_READ, MAP_PRIVATE, ro, 0);
+    check("private read-only mapping past the file's end", past != MAP_FAILED && marks_read(past) && past[len] == 0,
+          strerror(errno));
+    child = in_child(child_maps_past_end, path);
+    snprintf(detail, sizeof(detail), "child said %d", child);
+    check("a child's own mapping past the end reads the marks", child == 0, detail);
+    if (ish != 0) {
+        int found = shared_stats(&maps_after, &reused_after);
+        snprintf(detail, sizeof(detail), "mapped again %.1f MB, the mapping %.1f MB", reused_after - reused_before,
+                 (double) (len + MB) / MB);
+        check("the child's past the end mapped again from this one (iSH)",
+              found > 0 && grew_by(reused_before, reused_after, len + MB), detail);
     }
 
     // Private, read-only, here and in a child that writes its own
@@ -162,6 +201,7 @@ int main(void) {
 
     // Unmapped by every process: none of it left in the table
     munmap(shared, len);
+    munmap(past, len + MB);
     munmap(private, len);
     munmap(again, len);
     close(ro);
