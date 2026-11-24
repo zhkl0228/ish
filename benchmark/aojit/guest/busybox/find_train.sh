@@ -1,6 +1,7 @@
 # find recording workload (busybox find): name and type walks, size/newer/depth filters, -exec, xargs,
 # over trees unlike measure/find.sh.
-P=/usr/lib/python3.12
+# python3's library, whichever version the root has (3.12 on the CLI's, 3.14 on the app's)
+for P in /usr/lib/python3.*; do break; done
 for i in 1 2; do find $P -name '*.py' | wc -l > /dev/null; done
 find $P -iname '*TEST*' > /dev/null; find $P -type d -name '__pycache__' | wc -l > /dev/null
 find $P -maxdepth 2 -type f -name '*.py' -size +40k > /dev/null; find $P -path '*email*' -name '*.py' > /dev/null

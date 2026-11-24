@@ -2,7 +2,8 @@
 # 2026-09-27) with patterns and trees unlike measure/grep.sh: basic and extended regexes, -i, -w, -v,
 # -o, -c, -l, -L, -C, -F, -x, -e lists, and a large-file scan.
 W=/tmp/aojit/busybox/grepwork; rm -rf $W; mkdir -p $W; cd $W
-P=/usr/lib/python3.12
+# python3's library, whichever version the root has (3.12 on the CLI's, 3.14 on the app's)
+for P in /usr/lib/python3.*; do break; done
 awk 'BEGIN { srand(3); for (i = 0; i < 150000; i++) printf "%s [%s] id=%d user=u%03d %s\n", (i % 7 ? "INFO" : "WARN"), (rand() < 0.1 ? "ERROR" : "ok"), i, int(rand() * 900), (rand() < 0.5 ? "GET /api/v1/items" : "POST /api/v2/login") }' > log.txt
 grep -rn 'raise ValueError' $P/json $P/email > /dev/null; grep -rn -i 'deprecat' $P/logging > /dev/null
 grep -rc 'import' $P/http $P/json | grep '\.py:' > /dev/null; grep -rl 'class .*Error' $P/email > /dev/null

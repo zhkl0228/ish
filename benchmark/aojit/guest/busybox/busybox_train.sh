@@ -27,8 +27,10 @@ xargs -n 1000 echo < n.txt | wc -l
 mkdir -p tree; for d in a b c d e; do mkdir -p tree/$d; for f in $(seq 1 60); do echo "file $d $f $((f * 7))" > tree/$d/f$f.txt; done; done
 find tree -type f | wc -l; find tree -name 'f1*.txt' | sort | head -3; find tree -type f -exec grep -l ' 4' {} + | wc -l
 grep -r 'file c' tree | wc -l; ls -la tree/a | head -3; du -s tree; cp -r tree tree2; mv tree2 tree3; rm -rf tree3
-find /usr/lib/python3.12 -name '*.py' | head -2000 | xargs grep -l 'import os' | wc -l
-grep -rc 'def ' /usr/lib/python3.12/json /usr/lib/python3.12/email | tail -2
+# python3's library, whichever version the root has (3.12 on the CLI's, 3.14 on the app's)
+for P in /usr/lib/python3.*; do break; done
+find $P -name '*.py' | head -2000 | xargs grep -l 'import os' | wc -l
+grep -rc 'def ' $P/json $P/email | tail -2
 # --- archives, checksums, misc
 tar cf t.tar tree; gzip -c t.tar > t.tar.gz; gunzip -c t.tar.gz | tar tf - | wc -l; tar xzf t.tar.gz -C /tmp/aojit/busybox/work && ls /tmp/aojit/busybox/work/tree | wc -l
 md5sum log.csv n.txt; sha256sum log.csv | cut -c1-16; cksum n.txt
