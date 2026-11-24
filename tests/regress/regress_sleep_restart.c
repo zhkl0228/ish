@@ -57,15 +57,23 @@ static void on_usr1(int sig) {
 }
 
 // A child sleeping ms with how, its outcome through a pipe; the caller does
-// to it what the case does. *pid the child's.
+// to it what the case does. *pid the child's. It returns once the child is
+// about to sleep: the caller's times count from there. They counted from the
+// fork, and where the child took longer to start (iSH run by iSH), a few ms of
+// its sleep were not in them: it slept 1298 ms of a stop until 1300, and had
+// 1703 ms of 2000 left after a signal at 300.
 static int sleeper(enum how how, long ms, pid_t *pid) {
-    int p[2];
+    int p[2], ready[2];
     pipe(p);
+    pipe(ready);
     *pid = fork();
     if (*pid == 0) {
         close(p[0]);
+        close(ready[0]);
         struct timespec req = {ms / 1000, ms % 1000 * 1000000}, rem = {0, 0};
+        // from before the caller is told, so its times are within this one
         long start = now_ms();
+        write(ready[1], "", 1);
         long ret = how == NANOSLEEP ? syscall(SYS_nanosleep, &req, &rem)
                                     : syscall(SYS_clock_nanosleep, CLOCK_MONOTONIC, 0, &req, &rem);
         struct outcome o = {ret, ret < 0 ? errno : 0, now_ms() - start, rem.tv_sec * 1000 + rem.tv_nsec / 1000000};
@@ -73,6 +81,10 @@ static int sleeper(enum how how, long ms, pid_t *pid) {
         _exit(0);
     }
     close(p[1]);
+    close(ready[1]);
+    char c;
+    read(ready[0], &c, 1);
+    close(ready[0]);
     return p[0];
 }
 
@@ -150,7 +162,9 @@ int main(void) {
         kill(pid, SIGUSR1);
         o = outcome_of(fd, pid);
         check(restart ? "a handler with SA_RESTART: EINTR, and the remainder" : "a handler: EINTR, and the remainder",
-              o.ret == -1 && o.err == EINTR && o.elapsed_ms < 1000 && o.rem_ms > 1000 && o.rem_ms <= 1700, describe(o));
+              // what is left of 2000 after the signal at 300: 1700, and the
+              // little between the child telling it sleeps and its sleeping
+              o.ret == -1 && o.err == EINTR && o.elapsed_ms < 1000 && o.rem_ms > 1000 && o.rem_ms <= 1750, describe(o));
     }
     signal(SIGUSR1, SIG_DFL);
 
