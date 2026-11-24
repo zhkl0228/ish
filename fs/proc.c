@@ -7,6 +7,18 @@
 #include "fs/proc.h"
 #include "fs/path.h"
 
+// tack on some dynamically generated attributes of an entry of dir, read at
+// index
+static void proc_entry_attach(struct proc_entry *dir, struct proc_entry *next_entry, unsigned long index) {
+    if (next_entry->meta->parent == NULL)
+        next_entry->meta->parent = dir->meta;
+    else
+        // this asserts that an entry has a unique parent
+        assert(next_entry->meta->parent == dir->meta);
+    if (next_entry->meta->inode == 0)
+        next_entry->meta->inode = index + 1;
+}
+
 static int proc_lookup(const char *path, struct proc_entry *entry) {
     entry->meta = &proc_root;
     char component[MAX_NAME + 1];
@@ -20,16 +32,12 @@ static int proc_lookup(const char *path, struct proc_entry *entry) {
         unsigned long index = 0;
         struct proc_entry next_entry = {0};
         char entry_name[MAX_NAME];
+        if (entry->meta->lookup != NULL && entry->meta->lookup(entry, component, &index, &next_entry)) {
+            proc_entry_attach(entry, &next_entry, index);
+            goto found;
+        }
         while (proc_dir_read(entry, &index, &next_entry)) {
-            // tack on some dynamically generated attributes
-            if (next_entry.meta->parent == NULL)
-                next_entry.meta->parent = entry->meta;
-            else
-                // this asserts that an entry has a unique parent
-                assert(next_entry.meta->parent == entry->meta);
-            if (next_entry.meta->inode == 0)
-                next_entry.meta->inode = index + 1;
-
+            proc_entry_attach(entry, &next_entry, index);
             proc_entry_getname(&next_entry, entry_name);
             if (strcmp(entry_name, component) == 0)
                 goto found;

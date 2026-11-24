@@ -2,6 +2,8 @@
 #include <sys/resource.h>
 #include <stdatomic.h>
 #include <inttypes.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "kernel/calls.h"
 #include "fs/proc.h"
@@ -247,10 +249,16 @@ static bool proc_root_readdir(struct proc_entry *UNUSED(entry), unsigned long *i
 
     pid_t_ pid = *index - PROC_ROOT_LEN;
     if (pid <= MAX_PID) {
+        // Processes only, as Linux lists them: a thread is in its process's
+        // task/, and found by its tid (/proc/<tid>) without being listed.
+        // Listed, top and ps -e showed every thread as a process. A leader
+        // that exits before its threads keeps its pid till the last.
         lock(&pids_lock);
-        do {
-            pid++;
-        } while (pid <= MAX_PID && pid_get_task(pid) == NULL);
+        for (pid++; pid <= MAX_PID; pid++) {
+            struct task *task = pid_get_task(pid);
+            if (task != NULL && task_is_leader(task))
+                break;
+        }
         unlock(&pids_lock);
         if (pid > MAX_PID)
             return false;
@@ -262,4 +270,24 @@ static bool proc_root_readdir(struct proc_entry *UNUSED(entry), unsigned long *i
     return false;
 }
 
-struct proc_dir_entry proc_root = {NULL, S_IFDIR, .readdir = proc_root_readdir};
+// A task by its id, a thread's too, which readdir does not list: as Linux
+// finds /proc/<tid>. The id as readdir would name it, no other spelling.
+static bool proc_root_lookup(struct proc_entry *UNUSED(entry), const char *name, unsigned long *index,
+                             struct proc_entry *next_entry) {
+    char *end;
+    unsigned long id = strtoul(name, &end, 10);
+    char spelled[24];
+    snprintf(spelled, sizeof(spelled), "%lu", id);
+    if (strcmp(spelled, name) != 0 || id > MAX_PID)
+        return false;
+    lock(&pids_lock);
+    bool exists = pid_get_task(id) != NULL;
+    unlock(&pids_lock);
+    if (!exists)
+        return false;
+    *next_entry = (struct proc_entry) {&proc_pid, .pid = id};
+    *index = id + PROC_ROOT_LEN;
+    return true;
+}
+
+struct proc_dir_entry proc_root = {NULL, S_IFDIR, .readdir = proc_root_readdir, .lookup = proc_root_lookup};

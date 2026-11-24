@@ -52,6 +52,10 @@ struct proc_dir_entry {
 
     // directory with dynamic contents
     bool (*readdir)(struct proc_entry *entry, unsigned long *index, struct proc_entry *next_entry);
+    // and with entries found by name that readdir does not list (the root's
+    // threads): true, with the entry and its index as readdir would say
+    // them, if it finds name; else what readdir lists is looked through
+    bool (*lookup)(struct proc_entry *entry, const char *name, unsigned long *index, struct proc_entry *next_entry);
 
     struct proc_dir_entry *parent;
     int inode;

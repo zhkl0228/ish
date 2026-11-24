@@ -4,12 +4,14 @@
 // iSH said EINVAL of PR_GET_NAME, had no /proc/<pid>/comm, and listed only
 // the leader in /proc/<pid>/task: musl's pthread_getname_np failed for any
 // thread, and pthread_setname_np of another thread with ENOENT (CPython's
-// test_threading, its thread name tests).
+// test_threading, its thread name tests). And /proc listed every thread
+// beside the processes: top and ps -e showed each as a process.
 //
 // Checked: PR_GET_NAME says what PR_SET_NAME set; pthread_setname_np and
 // pthread_getname_np of this thread and of another; /proc/self/task lists
-// both threads; /proc/self/comm reads the name with a newline; a write to
-// another process's comm is EINVAL. Natively passes.
+// both threads; /proc lists this process and not the other thread, whose
+// /proc/<tid> is still found; /proc/self/comm reads the name with a newline;
+// a write to another process's comm is EINVAL. Natively passes.
 //
 // Build: aarch64-linux-musl-gcc -static -O0 -pthread -o regress_thread_name regress_thread_name.c
 
@@ -91,6 +93,23 @@ int main(void) {
     snprintf(detail, sizeof(detail), "this thread %s, the other (%d) %s", saw_self ? "listed" : "not listed",
              other_tid, saw_other ? "listed" : "not listed");
     check("/proc/self/task lists both threads", saw_self && saw_other, detail);
+
+    saw_self = saw_other = 0;
+    d = opendir("/proc");
+    while (d != NULL && (de = readdir(d)) != NULL) {
+        if (atoi(de->d_name) == getpid())
+            saw_self = 1;
+        if (atoi(de->d_name) == other_tid)
+            saw_other = 1;
+    }
+    if (d != NULL)
+        closedir(d);
+    char tid_path[64];
+    snprintf(tid_path, sizeof(tid_path), "/proc/%d/status", other_tid);
+    int found = access(tid_path, R_OK) == 0;
+    snprintf(detail, sizeof(detail), "this process %s, the other thread %s, its /proc/<tid> %s",
+             saw_self ? "listed" : "not listed", saw_other ? "listed" : "not listed", found ? "found" : "not found");
+    check("/proc lists the process, not its other thread", saw_self && !saw_other && found, detail);
 
     char buf[64] = "";
     int fd = open("/proc/self/comm", O_RDONLY);
