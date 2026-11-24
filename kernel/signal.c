@@ -152,16 +152,22 @@ void deliver_signal(struct task *task, int sig, struct siginfo_ info) {
 // a blocked one stay pending with the task going on as if nothing happened).
 // to_default resets the action even to a handler, as force_sigsegv does when
 // the handler of the signal that failed to be delivered is SIGSEGV's own.
-void force_signal(struct task *task, int sig, struct siginfo_ info, bool to_default) {
-    if (task->sighand == NULL)
-        return;
-    lock(&task->sighand->lock);
+// The caller holds task->sighand->lock: delivering a signal to the task
+// itself, in receive_signals, when its frame cannot be written.
+static void force_signal_unlocked(struct task *task, int sig, struct siginfo_ info, bool to_default) {
     struct sigaction_ *action = &task->sighand->action[sig];
     if (to_default || sigset_has(task->blocked, sig) || action->handler == SIG_IGN_) {
         action->handler = SIG_DFL_;
         sigset_del(&task->blocked, sig);
     }
     deliver_signal_unlocked(task, sig, info, true);
+}
+
+void force_signal(struct task *task, int sig, struct siginfo_ info, bool to_default) {
+    if (task->sighand == NULL)
+        return;
+    lock(&task->sighand->lock);
+    force_signal_unlocked(task, sig, info, to_default);
     unlock(&task->sighand->lock);
     cpu_poke(&task->cpu);
 }
@@ -634,10 +640,15 @@ static bool receive_signal(struct sighand *sighand, struct siginfo_ *info) {
         current->cpu.regs[2] = frame.rt_sigframe.puc;
     }
 
-    // install frame
+    // install frame. receive_signals holds the sighand lock: force_signal,
+    // which takes it, waited for itself here, and the thread hung for good.
+    // A process killing it (timeout of CPython's tests) then waited for that
+    // lock holding pids_lock, and the app's main thread, reading a tab's
+    // program, for pids_lock, until iOS killed the app (build/ish-crash-reports
+    // 195709, 0x8BADF00D).
     if (user_write(sp, &frame, frame_size)) {
-        printk("failed to install frame for %d at %#x\n", info->sig, sp);
-        force_signal(current, SIGSEGV_, SIGINFO_NIL, info->sig == SIGSEGV_);
+        printk("failed to install frame for %d at %#llx\n", info->sig, (unsigned long long) sp);
+        force_signal_unlocked(current, SIGSEGV_, SIGINFO_NIL, info->sig == SIGSEGV_);
     }
 
     // Set LR to the signal return trampoline.
