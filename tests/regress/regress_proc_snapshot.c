@@ -56,9 +56,12 @@ int main(void) {
     fd = open("/proc/self/maps", O_RDONLY);
     size_t len = (size_t) read(fd, parts, 64);
     unsigned long below = lowest - 0x100000;
-    void *map = mmap((void *) below, 0x1000, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
-    if (map == MAP_FAILED) {
-        printf("FAIL mmap at %#lx, below the lowest mapping %#lx\n", below, lowest);
+    // Nothing is below the lowest mapping, and MAP_FIXED_NOREPLACE says it
+    // need not replace anything there (iSH takes the flag for a hint, as
+    // Linux did before 4.17, and the hint is had where nothing is)
+    void *map = mmap((void *) below, 0x1000, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    if (map != (void *) below) {
+        printf("FAIL mmap at %#lx, below the lowest mapping %#lx: %p\n", below, lowest, map);
         return 1;
     }
     off_t at = lseek(fd, 0, SEEK_CUR);
