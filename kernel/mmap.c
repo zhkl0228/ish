@@ -138,21 +138,40 @@ void ish_reclaim_translations(void) {
     }
     unlock(&pids_lock);
 
+    // Their asbestoses, each once (forked address spaces share one,
+    // mem_asbestos_share), retained: an address space may leave its own
+    // meanwhile (mem_asbestos_detach, which holds its mem's lock to write),
+    // and the others using it go
+    struct asbestos **spaces_of = malloc(n * sizeof(*spaces_of) + 1);
+    size_t m = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (spaces_of != NULL) {
+            read_wrlock(&mms[i]->mem.lock);
+            struct asbestos *asbestos = mms[i]->mem.mmu.asbestos;
+            bool seen = asbestos == NULL;
+            for (size_t j = 0; j < m && !seen; j++)
+                seen = spaces_of[j] == asbestos;
+            if (!seen)
+                spaces_of[m++] = asbestos_retain(asbestos);
+            read_wrunlock(&mms[i]->mem.lock);
+        }
+        mm_release_from(mms[i], "ish_reclaim_translations");
+    }
+    free(mms);
+
     uint64_t now = ish_monotonic_ms();
     size_t spaces = 0, blocks = 0, bytes = 0;
-    for (size_t i = 0; i < n; i++) {
-        struct asbestos *asbestos = mms[i]->mem.mmu.asbestos;
+    for (size_t i = 0; i < m; i++) {
         size_t b = 0, by = 0;
-        if (asbestos != NULL)
-            asbestos_reclaim_idle(asbestos, now, TRANSLATIONS_IDLE_MS, &b, &by);
+        asbestos_reclaim_idle(spaces_of[i], now, TRANSLATIONS_IDLE_MS, &b, &by);
         if (b != 0) {
             spaces++;
             blocks += b;
             bytes += by;
         }
-        mm_release_from(mms[i], "ish_reclaim_translations");
+        asbestos_release(spaces_of[i]);
     }
-    free(mms);
+    free(spaces_of);
     atomic_fetch_add(&st_reclaims, 1);
     atomic_fetch_add(&st_reclaim_spaces, spaces);
     atomic_fetch_add(&st_reclaim_blocks, blocks);
@@ -377,6 +396,10 @@ struct mm *mm_copy(struct mm *mm) {
     mem_init(&new_mm->mem);
     fd_retain(new_mm->exefile);
     write_wrlock(&mm->mem.lock);
+    // The parent's translated blocks are the child's too, while their code
+    // is the same (mem_asbestos_share; before the copy, which keeps P_CODE
+    // where the asbestos is shared). The child's mem is no one else's yet.
+    mem_asbestos_share(&mm->mem, &new_mm->mem);
     pt_copy_on_write(&mm->mem, &new_mm->mem, 0, MEM_PAGES);
     write_wrunlock(&mm->mem.lock);
     return new_mm;
@@ -579,6 +602,10 @@ static addr_t do_mmap(addr_t addr, uint64_t len, dword_t prot, dword_t flags, fd
         if ((err = fd->ops->mmap(fd, current->mem, page, pages, offset, prot, flags)) < 0)
             return err;
         pt_set_file(current->mem, page, pages, fd, offset);
+        // its code may be translated for others sharing the asbestos that
+        // map the same (dlopen in each worker of a pool): what bytes it has
+        if (!(prot & P_WRITE) && !(flags & MMAP_SHARED))
+            mem_set_code_tags(current->mem, page, pages, fd, offset);
     }
     return page << PAGE_BITS;
 }

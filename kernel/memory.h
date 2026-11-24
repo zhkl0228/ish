@@ -114,7 +114,11 @@ struct pt_entry {
     struct data *data;
     size_t offset;
     unsigned flags;
-    struct list blocks[2];
+    // What bytes the page has, while they are a file's (mapped from it,
+    // private, never writable since: mem_set_code_tags): its identity and the
+    // page's offset in it, hashed. 0 otherwise. For an asbestos address spaces
+    // share (mmu_code_tag).
+    uint64_t code_tag;
 };
 // page flags
 // P_READ and P_EXEC are ignored for now
@@ -138,6 +142,9 @@ struct pt_entry {
 // clears this flag (bumping mmu->changes) before the store is allowed to
 // land. Set by mmu_mark_code_page when a block is compiled from the page.
 #define P_CODE (1 << 8)
+// Mapped while the address space shared its asbestos (mem_asbestos_share):
+// what others using it have there may differ (mmu_code_tag)
+#define P_LATE (1 << 9)
 
 bool pt_is_hole(struct mem *mem, page_t start, pages_t pages);
 page_t pt_find_hole(struct mem *mem, pages_t size);
@@ -219,6 +226,35 @@ int mem_segv_reason(struct mem *mem, addr_t addr);
 // that raced with compilation clears it.
 int mmu_mark_code_page(struct mmu *mmu, page_t page);
 bool mmu_code_page_intact(struct mmu *mmu, page_t page);
+// What code the page has, for a block translated from it into an asbestos
+// address spaces share (mem_asbestos_share): 0 if it is not to be shared
+// (unmapped, not executable, writable or anonymous: the address space's own);
+// CODE_TAG_EARLY if it was mapped before the asbestos was shared, and every
+// address space using it has it the same; else (P_LATE) its file's bytes
+// (code_tag), the same in another only if that one has the same there.
+// mem's lock held.
+#define CODE_TAG_EARLY 1
+uint64_t mmu_code_tag(struct mmu *mmu, page_t page);
+// Pages mapped from a file, private and not writable: what bytes of it they
+// have (code_tag). mem's lock held to write.
+void mem_set_code_tags(struct mem *mem, page_t start, pages_t pages, struct fd *fd, size_t offset);
+// A forked child's asbestos is its parent's (mm_copy), if the parent's has
+// had no block of a writable or anonymous page; both locks held to write
+void mem_asbestos_share(struct mem *src, struct mem *dst);
+// The address space leaves the asbestos it shares for one of its own (mem's
+// lock held to write), as its threads were to: a block was translated from
+// other code than it has there (differs, INT_ASBESTOS_DIFFERS), or of its own
+// (INT_ASBESTOS_DETACH), or it wrote code (detach_requested)
+void mem_asbestos_detach(struct mem *mem, bool differs);
+// A page that goes (pt_unmap): its blocks go, but of an asbestos others share
+// too (asbestos_page_changing). mem's lock held to write.
+void mem_asbestos_page_unmapping(struct mem *mem, page_t page, struct pt_entry *entry);
+// A store to code a thread made through no write fault (IC IVAU): the page's
+// blocks go, and a shared asbestos is left
+void mmu_code_written(struct mmu *mmu, page_t page);
+// Forks that shared their parent's asbestos, and address spaces that left one:
+// for a mapping change, a block of their own, a write to code
+void mem_asbestos_describe(uint64_t *shared_forks, uint64_t *mapping, uint64_t *private_blocks, uint64_t *written);
 
 extern size_t real_page_size;
 

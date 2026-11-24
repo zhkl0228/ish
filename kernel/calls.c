@@ -547,6 +547,13 @@ void handle_interrupt(int interrupt) {
             .sig = SIGTRAP_,
             .code = TRAP_TRACE_,
         }, false);
+    } else if (interrupt == INT_ASBESTOS_DETACH || interrupt == INT_ASBESTOS_DIFFERS) {
+        // its address space leaves the asbestos it shares before it runs or
+        // translates more (asbestos.c, mem_code_written); the guest has not
+        // moved, its pc the block's
+        write_wrlock(&current->mem->lock);
+        mem_asbestos_detach(current->mem, interrupt == INT_ASBESTOS_DIFFERS);
+        write_wrunlock(&current->mem->lock);
     } else if (interrupt == INT_TIMER) {
         ish_timer_tick_hook_t hook =
             atomic_load_explicit(&g_timer_tick_hook, memory_order_acquire);

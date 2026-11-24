@@ -30,6 +30,9 @@ struct mmu {
     // (tlb_attach()); a change to the mappings marks them stale.
     lock_t tlbs_lock;
     struct list tlbs;
+    // It wrote code of an asbestos other address spaces use (mem_code_written):
+    // its threads leave it (INT_ASBESTOS_DETACH) before they run more of it
+    _Atomic bool detach_requested;
 };
 
 #define MEM_READ 0

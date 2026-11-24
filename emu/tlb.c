@@ -345,9 +345,10 @@ __no_instrument int c_store8(struct tlb *tlb, addr_t addr, uint8_t value) {
 // Without this, a store through an already-writable TLB entry (which never
 // takes the mem_ptr write-miss path that calls asbestos_invalidate_page)
 // leaves stale translations running — JSC's in-place JIT repatching breaks.
+// A shared asbestos's code written so is its address space's to leave too
+// (mmu_code_written).
 __no_instrument void c_ic_ivau(struct tlb *tlb, addr_t addr) {
-    extern void asbestos_invalidate_page(struct asbestos *asbestos, page_t page);
-    asbestos_invalidate_page(tlb->mmu->asbestos, PAGE(addr));
+    mmu_code_written(tlb->mmu, PAGE(addr));
 }
 
 // Atomic memory operations (LSE): LDADD/LDCLR/LDEOR/LDSET/LDSMAX/LDSMIN/LDUMAX/LDUMIN/SWP

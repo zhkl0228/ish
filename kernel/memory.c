@@ -35,6 +35,9 @@ static struct mmu_ops mem_mmu_ops;
 // ARM64: 4-level page table for 48-bit address space
 // ============================================================
 
+static void asbestos_page_changing(struct mem *mem, page_t page, struct pt_entry *entry);
+static void mem_code_written(struct mem *mem, struct pt_entry *entry, page_t page);
+
 static void mem_nudge_readers(void *mmu) {
     mmu_poke_tlbs(mmu);
 }
@@ -46,6 +49,7 @@ void mem_init(struct mem *mem) {
     mem->reservations = NULL;
     mem->mmu.ops = &mem_mmu_ops;
     mem->mmu.asbestos = asbestos_new(&mem->mmu);
+    atomic_init(&mem->mmu.detach_requested, false);
     mem->mmu.changes = 0;
     lock_init(&mem->mmu.tlbs_lock);
     list_init(&mem->mmu.tlbs);
@@ -133,16 +137,17 @@ void mem_destroy(struct mem *mem) {
            current ? current->pid : -1, (void *) mem,
            (unsigned long long) MM_OF_MEM(mem)->seq, mem->lock.val, mem->lock.pid);
     write_wrlock(&mem->lock);
+    // Its asbestos first: shared, it would leave it for a new one at its first
+    // code page, and the last to use it frees it
+    if (mem->mmu.asbestos != NULL)
+        asbestos_release(mem->mmu.asbestos);
+    mem->mmu.asbestos = NULL;
     pt_unmap_always(mem, 0, MEM_PAGES);
     while (mem->reservations) {
         struct mem_reservation *r = mem->reservations;
         mem->reservations = r->next;
         free(r);
     }
-    // [T-ish-mm-double-destroy-crash] Null out after free so a racing
-    // second cleanup path can't dereference a stale pointer.
-    asbestos_free(mem->mmu.asbestos);
-    mem->mmu.asbestos = NULL;
     pt_node_free(mem->pgdir, 0);
     mem->pgdir = NULL;
     write_wrunlock(&mem->lock);
@@ -546,11 +551,14 @@ void pt_map_data(struct mem *mem, page_t start, pages_t pages, struct data *data
     for (page_t page = start; page < start + pages; page++) {
         if (mem_pt(mem, page) != NULL)
             pt_unmap(mem, page, 1);
+        // shared after unmapping, which may leave a shared asbestos
+        bool late = mem->mmu.asbestos != NULL && asbestos_shared(mem->mmu.asbestos);
         data->refcount++;
         struct pt_entry *pt = mem_pt_new(mem, page);
         pt->data = data;
         pt->offset = ((page - start) << PAGE_BITS) + offset;
-        pt->flags = flags;
+        pt->flags = flags | (late ? P_LATE : 0);
+        pt->code_tag = 0;
     }
 }
 
@@ -589,7 +597,7 @@ int pt_unmap_always(struct mem *mem, page_t start, pages_t pages) {
         if (pt == NULL)
             continue;
 
-        asbestos_invalidate_page(mem->mmu.asbestos, page);
+        mem_asbestos_page_unmapping(mem, page, pt);
         struct data *data = pt->data;
 #if ANON_MMAP_LIMIT_PAGES > 0
         // Decrement per-page for anonymous mappings. This correctly handles
@@ -947,7 +955,7 @@ _Atomic uint64_t st_wx_clears = 0;
 // allocation type and state, not user-visible protection bits. P_CODE must
 // survive mprotect: making a compiled code page writable doesn't remove the
 // need to invalidate its blocks on the first store.
-#define P_META_FLAGS (P_ANONYMOUS | P_GROWSDOWN | P_COW | P_SHARED | P_CODE)
+#define P_META_FLAGS (P_ANONYMOUS | P_GROWSDOWN | P_COW | P_SHARED | P_CODE | P_LATE)
 
 int pt_set_flags(struct mem *mem, page_t start, pages_t pages, int flags) {
     for (page_t page = start; page < start + pages; page++) {
@@ -956,6 +964,14 @@ int pt_set_flags(struct mem *mem, page_t start, pages_t pages, int flags) {
                 continue;
             return _ENOMEM;
         }
+    }
+    // an executable page of a file whose protection changes: a shared
+    // asbestos is left first, or its blocks of the page go (see
+    // asbestos_page_changing)
+    for (page_t page = start; page < start + pages; page++) {
+        struct pt_entry *entry = mem_pt(mem, page);
+        if (entry != NULL && ((entry->flags | flags) & P_EXEC) && (entry->flags & P_RWX) != (flags & P_RWX))
+            asbestos_page_changing(mem, page, entry);
     }
     for (page_t page = start; page < start + pages; page++) {
         struct pt_entry *entry = mem_pt(mem, page);
@@ -1007,6 +1023,9 @@ int pt_set_flags(struct mem *mem, page_t start, pages_t pages, int flags) {
         }
         int old_flags = entry->flags;
         entry->flags = flags | (old_flags & P_META_FLAGS);
+        // writable, its bytes may be the file's no longer
+        if (flags & P_WRITE)
+            entry->code_tag = 0;
 #if ANON_MMAP_LIMIT_PAGES > 0
         // [T-ish-anon-count-mprotect] mprotect can flip the very predicate the
         // charge/uncharge pair is keyed on, so the count has to follow it.
@@ -1071,9 +1090,12 @@ int pt_copy_on_write(struct mem *src, struct mem *dst, page_t start, page_t page
         struct pt_entry *dst_entry = mem_pt_new(dst, page);
         dst_entry->data = entry->data;
         dst_entry->offset = entry->offset;
-        // Don't inherit P_CODE: the child's asbestos has no blocks for this
-        // page yet; it re-marks on its own first compile.
-        dst_entry->flags = entry->flags & ~P_CODE;
+        // P_CODE where the child uses the parent's asbestos (mm_copy): its
+        // stores to the page must find its blocks. Not otherwise: the child's
+        // asbestos has no blocks for this page yet; it re-marks on its own
+        // first compile.
+        dst_entry->flags = dst->mmu.asbestos == src->mmu.asbestos ? entry->flags : entry->flags & ~P_CODE;
+        dst_entry->code_tag = entry->code_tag;
 #if ANON_MMAP_LIMIT_PAGES > 0
         // [T-ish-anon-count-cow-predicate] Must mirror pt_unmap's decrement
         // condition EXACTLY, which is `P_ANONYMOUS && anon_page_is_charged`.
@@ -1408,9 +1430,10 @@ have_entry:
         if (type == MEM_WRITE_PTRACE) {
             // TODO: Is P_WRITE really correct? The page shouldn't be writable without ptrace.
             entry->flags |= P_WRITE | P_COW;
+            entry->code_tag = 0;
         }
         // get rid of any compiled blocks in this page
-        asbestos_invalidate_page(mem->mmu.asbestos, page);
+        mem_code_written(mem, entry, page);
         // W^X: the page holds compiled guest code. Unprotect it and bump
         // mmu->changes so every thread's cached writable TLB entry for the
         // page goes stale — later stores keep coming back through here while
@@ -1519,6 +1542,178 @@ uint32_t mem_watch_peek32(uint64_t addr) {
 // writable TLB entry for the page goes stale and the next store faults into
 // mem_ptr (which invalidates the page's blocks and unprotects it). Returns 0
 // if already marked, -1 if the page isn't mapped.
+// ---- An asbestos shared by forked address spaces (mm_copy)
+//
+// A forked child translated again all its parent had (a Pool worker of python
+// 13.5 MB of blocks, 35.8K of them). It uses its parent's asbestos instead,
+// while the code they run is the same. An asbestos shared holds blocks of
+// executable pages that are neither writable nor anonymous (the program's and
+// its libraries' code), each with what code it was translated from
+// (mmu_code_tag):
+//  - of a page mapped before the asbestos was shared (CODE_TAG_EARLY), which
+//    every address space using it has the same: one that would change such a
+//    page (unmap or reprotect it, dlclose among them: asbestos_page_changing;
+//    write it, ptrace: mem_code_written) leaves first, taking a new one of
+//    its own
+//  - of a page mapped since (P_LATE), a file's bytes there, private and never
+//    writable (code_tag): the same in another address space only if that one
+//    mapped the same (each worker of a pool dlopens the same modules at the
+//    same addresses). Such a block is looked up checked: an address space
+//    that has other code there (or none) leaves (INT_ASBESTOS_DIFFERS), and a
+//    block is chained to it only from a block of the same pages and code
+//    (fiber_chain_ok). One that unmaps or reprotects such a page leaves
+//    nothing: the page's blocks go.
+// One that is to translate a block of a page that is writable or anonymous
+// (code a JIT wrote) leaves first too (INT_ASBESTOS_DETACH from the
+// translator). A parent whose asbestos has had blocks of such pages
+// (private_content) gives none to its children: a JIT's process would have
+// to leave its own.
+static _Atomic uint64_t st_shared_forks, st_detach_mapping, st_detach_private, st_detach_written;
+
+static uint64_t mix64(uint64_t x) {
+    x ^= x >> 30;
+    x *= 0xbf58476d1ce4e5b9ULL;
+    x ^= x >> 27;
+    x *= 0x94d049bb133111ebULL;
+    return x ^ (x >> 31);
+}
+
+uint64_t mmu_code_tag(struct mmu *mmu, page_t page) {
+    struct mem *mem = container_of(mmu, struct mem, mmu);
+    struct pt_entry *entry = mem_pt(mem, page);
+    if (entry == NULL || !(entry->flags & P_EXEC) || (entry->flags & (P_WRITE | P_ANONYMOUS)))
+        return 0;
+    if (!(entry->flags & P_LATE))
+        return CODE_TAG_EARLY;
+    return entry->code_tag;
+}
+
+void mem_set_code_tags(struct mem *mem, page_t start, pages_t pages, struct fd *fd, size_t offset) {
+    struct statbuf stat;
+    if (fd->mount->fs->fstat(fd, &stat) < 0)
+        return;
+    // the file, and its contents as they were then: replaced or written, it
+    // is another (if its size or times changed)
+    uint64_t file = mix64(stat.dev);
+    file = mix64(file ^ stat.inode);
+    file = mix64(file ^ stat.size);
+    file = mix64(file ^ ((uint64_t) stat.mtime << 32 | stat.mtime_nsec));
+    file = mix64(file ^ ((uint64_t) stat.ctime << 32 | stat.ctime_nsec));
+    for (pages_t i = 0; i < pages; i++) {
+        struct pt_entry *entry = mem_pt(mem, start + i);
+        // bit 63: never 0 or CODE_TAG_EARLY
+        entry->code_tag = mix64(file ^ mix64((offset >> PAGE_BITS) + i)) | 1ULL << 63;
+    }
+}
+
+// Leaves a shared asbestos for a new one of its own; mem's lock held to
+// write. Whether it did.
+static bool asbestos_leave(struct mem *mem) {
+    atomic_store(&mem->mmu.detach_requested, false);
+    struct asbestos *old = mem->mmu.asbestos;
+    if (old == NULL || !asbestos_leave_shared(old))
+        return false;
+    // Its threads hold none of old's blocks running (mem's lock is held to
+    // write), but for the one whose store this is, if it is (a copy on
+    // write): it leaves old at its loop's next turn (cpu_step_to_interrupt,
+    // mmu->asbestos no longer its). One blocked in a call finds its caches
+    // stale when it comes back, the new asbestos's invalidate_gen being one
+    // no other has had. Another address space uses old still, so it is not
+    // freed here.
+    mem->mmu.asbestos = asbestos_new(&mem->mmu);
+    return true;
+}
+
+void mem_asbestos_detach(struct mem *mem, bool differs) {
+    bool requested = atomic_load(&mem->mmu.detach_requested);
+    if (asbestos_leave(mem))
+        atomic_fetch_add(requested ? &st_detach_written : differs ? &st_detach_mapping : &st_detach_private, 1);
+}
+
+// mem's lock held to write, before an executable page of the address space
+// goes or its protection changes
+static void asbestos_page_changing(struct mem *mem, page_t page, struct pt_entry *entry) {
+    struct asbestos *asbestos = mem->mmu.asbestos;
+    if (asbestos == NULL || !asbestos_shared(asbestos) || (entry->flags & P_ANONYMOUS))
+        return;
+    if (entry->flags & P_LATE) {
+        // Mapped since the asbestos was shared: a block of it is looked up
+        // checked (mmu_code_tag), chained to from blocks of its own pages only
+        // (fiber_chain_ok). Its blocks go; another address space that has the
+        // page translates it again.
+        asbestos_invalidate_page(asbestos, page);
+        return;
+    }
+    // Mapped before: the others have it, and their blocks chain to its blocks
+    // unchecked. This one leaves.
+    if (asbestos_leave(mem))
+        atomic_fetch_add(&st_detach_mapping, 1);
+}
+
+void mem_asbestos_page_unmapping(struct mem *mem, page_t page, struct pt_entry *entry) {
+    struct asbestos *asbestos = mem->mmu.asbestos;
+    if (asbestos == NULL || !asbestos_shared(asbestos)) {
+        asbestos_invalidate_page(asbestos, page);
+        return;
+    }
+    // Of a shared asbestos, only blocks of executable pages of a file are of
+    // this address space's code (a block of another page leaves it first:
+    // the translator's INT_ASBESTOS_DETACH); others' blocks of what it has
+    // not there stay
+    if (!(entry->flags & P_EXEC))
+        return;
+    asbestos_page_changing(mem, page, entry);
+    // and the page's blocks of the asbestos it uses now: none, if it left a
+    // shared one, but its own if the others left first (their blocks
+    // chained to unchecked)
+    asbestos_invalidate_page(mem->mmu.asbestos, page);
+}
+
+// A store to a page that may have blocks: they go. An address space that
+// shares its asbestos and writes an executable page of a file (ptrace), or
+// one it has blocks of (P_CODE), leaves it before it runs more of it (its
+// threads poked out of what they run, INT_ASBESTOS_DETACH); others' blocks
+// of what it has not there stay (see mem_asbestos_page_unmapping).
+static void mem_code_written(struct mem *mem, struct pt_entry *entry, page_t page) {
+    struct asbestos *asbestos = mem->mmu.asbestos;
+    if (asbestos == NULL || !asbestos_shared(asbestos)) {
+        asbestos_invalidate_page(asbestos, page);
+        return;
+    }
+    if (!(entry->flags & (P_CODE | P_EXEC)) || (entry->flags & P_ANONYMOUS))
+        return;
+    asbestos_invalidate_page(asbestos, page);
+    if (!atomic_exchange(&mem->mmu.detach_requested, true))
+        mmu_poke_tlbs(&mem->mmu);
+}
+
+void mmu_code_written(struct mmu *mmu, page_t page) {
+    struct mem *mem = container_of(mmu, struct mem, mmu);
+    struct pt_entry *entry = mem_pt(mem, page);
+    if (entry == NULL)
+        asbestos_invalidate_page(mmu->asbestos, page);
+    else
+        mem_code_written(mem, entry, page);
+}
+
+void mem_asbestos_share(struct mem *src, struct mem *dst) {
+    struct asbestos *asbestos = src->mmu.asbestos;
+    if (asbestos == NULL || asbestos->private_content || atomic_load(&src->mmu.detach_requested))
+        return;
+    asbestos_release(dst->mmu.asbestos);
+    dst->mmu.asbestos = asbestos_retain(asbestos);
+    // its blocks are looked up checked from now on (cpu_step_to_interrupt)
+    asbestos->ever_shared = true;
+    atomic_fetch_add(&st_shared_forks, 1);
+}
+
+void mem_asbestos_describe(uint64_t *shared_forks, uint64_t *mapping, uint64_t *private_blocks, uint64_t *written) {
+    *shared_forks = atomic_load(&st_shared_forks);
+    *mapping = atomic_load(&st_detach_mapping);
+    *private_blocks = atomic_load(&st_detach_private);
+    *written = atomic_load(&st_detach_written);
+}
+
 int mmu_mark_code_page(struct mmu *mmu, page_t page) {
     struct mem *mem = container_of(mmu, struct mem, mmu);
     struct pt_entry *entry = mem_pt(mem, page);

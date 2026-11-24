@@ -54,6 +54,19 @@ struct asbestos {
     // of CLOCK_MONOTONIC: how long the address space has been idle, for
     // asbestos_reclaim_idle
     _Atomic uint64_t last_active_ms;
+
+    // The address spaces using it. A forked child uses its parent's (mm_copy)
+    // while the code both run is the same; one whose code comes to differ
+    // takes a new one of its own (mem_asbestos_detach). Freed with the last.
+    _Atomic unsigned refs;
+    // It has had a block of a page that is writable or anonymous (code a JIT
+    // wrote, or that may change): not given to a child, whose such pages may
+    // come to differ unseen, and whose parent would then have to leave it
+    bool private_content;
+    // It has been shared: its blocks may be of other code than the address
+    // space looking one up has there (a page another mapped since), so each
+    // is looked up checked (fiber_block->tag)
+    bool ever_shared;
 };
 
 // this is roughly the average number of instructions in a basic block according to anonymous sources
@@ -81,6 +94,10 @@ struct fiber_block {
     // links for free list
     struct list jetsam;
     bool is_jetsam;
+    // What code it was translated from (mmu_code_tag, of both its pages): 0,
+    // the address space's own; CODE_TAG_EARLY, what all using its asbestos
+    // have; else bytes of a file only some may have there
+    uint64_t tag;
 
 #ifdef ISH_JIT
     // Native code (guest-arm64/jit.c). native_link[i]: the patchable
@@ -103,6 +120,18 @@ extern volatile bool g_trace_highbits;
 // Create a new asbestos
 struct asbestos *asbestos_new(struct mmu *mmu);
 void asbestos_free(struct asbestos *asbestos);
+// Another address space uses it (a forked child), or one leaves it; the last
+// frees it, when none of its threads runs its code (their mem locks held to
+// write, or they are gone)
+struct asbestos *asbestos_retain(struct asbestos *asbestos);
+void asbestos_release(struct asbestos *asbestos);
+// More than one address space uses it
+bool asbestos_shared(struct asbestos *asbestos);
+// An address space leaves it if another uses it still: never the last, so
+// never freeing it (a thread leaving it may be running its code, holding its
+// jetsam_lock, which freeing takes). False, and nothing done, if none other
+// does.
+bool asbestos_leave_shared(struct asbestos *asbestos);
 // Frees every translated block of an address space none of whose threads is
 // running translated code, nor has for idle_ms: what memory pressure can take
 // back from an idle process, which translates its blocks again when it runs.

@@ -7,10 +7,12 @@
 // 13.5 MB of it translated blocks, and iSH refused memory (the brake) where
 // Linux shares the code.
 //
-// Checked: four forked children that have run some code and wait, idle for
-// 3 seconds, give their blocks back (four address spaces at least, blocks
-// fewer); each then runs the same code again and gets the same answer; and
-// "reclaim" is the only word the file takes (EINVAL). Not a Linux case: an
+// Checked: four forked children that have run some code and wait, and their
+// parent waiting for a shell that, 3 seconds on, writes "reclaim": their blocks
+// are given back (forked, they share their parent's, mem_asbestos_share, which
+// is idle only when all of them are; the shell, a program of its own, does not
+// keep it busy); each then runs the same code again and gets the same answer;
+// and "reclaim" is the only word the file takes (EINVAL). Not a Linux case: an
 // iSH file.
 //
 // Build: aarch64-linux-musl-gcc -static -O0 -o regress_reclaim_translations regress_reclaim_translations.c
@@ -111,17 +113,23 @@ int main(void) {
         char c;
         read(ready[0], &c, 1);
     }
-    sleep(3);
 
     unsigned long long before, reclaimed0, spaces0, after, reclaimed1, spaces1;
     read_translations(&before, &reclaimed0, &spaces0);
-    int r = write_translations("reclaim\n");
-    int e = errno;
+    // the reclaim, by a program of its own, as this process waits for it
+    pid_t shell = fork();
+    if (shell == 0) {
+        execl("/bin/sh", "sh", "-c", "sleep 3; echo reclaim > /proc/ish/translations", (char *) NULL);
+        _exit(127);
+    }
+    int status;
+    waitpid(shell, &status, 0);
     read_translations(&after, &reclaimed1, &spaces1);
-    snprintf(detail, sizeof(detail), "write %d (%s); blocks %llu -> %llu, reclaimed +%llu blocks of +%llu spaces", r,
-             r < 0 ? strerror(e) : "ok", before, after, reclaimed1 - reclaimed0, spaces1 - spaces0);
-    check("idle children give their blocks back", r == 0 && spaces1 - spaces0 >= CHILDREN &&
-          reclaimed1 > reclaimed0 && after < before, detail);
+    snprintf(detail, sizeof(detail), "shell %d; blocks %llu -> %llu, reclaimed +%llu blocks of +%llu spaces",
+             WIFEXITED(status) ? WEXITSTATUS(status) : -1, before, after, reclaimed1 - reclaimed0,
+             spaces1 - spaces0);
+    check("idle children and their idle parent give their blocks back", WIFEXITED(status) &&
+          WEXITSTATUS(status) == 0 && spaces1 > spaces0 && reclaimed1 > reclaimed0, detail);
 
     for (int i = 0; i < CHILDREN; i++)
         write(go[i][1], "g", 1);
@@ -138,8 +146,8 @@ int main(void) {
     snprintf(detail, sizeof(detail), "%d of %d the same: '%s'", same, CHILDREN, buf);
     check("each runs the same code again, to the same answer", same == CHILDREN, detail);
 
-    r = write_translations("something else");
-    e = errno;
+    int r = write_translations("something else");
+    int e = errno;
     snprintf(detail, sizeof(detail), "%d (%s)", r, r < 0 ? strerror(e) : "ok");
     check("another word is EINVAL", r == -1 && e == EINVAL, detail);
 

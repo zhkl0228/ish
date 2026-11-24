@@ -14,6 +14,12 @@
 #define INT_TIMER 32
 #define INT_SYSCALL 0x80
 #define INT_JIT_CRASH 0x100  // JIT SIGSEGV recovery (stale TLB after CoW)
+// Its address space is to leave the asbestos it shares with others before it
+// runs or makes more blocks (handle_interrupt: mem_asbestos_detach)
+#define INT_ASBESTOS_DETACH 0x102
+// So, for a block it found was translated from other code than its address
+// space has there (another's mapping)
+#define INT_ASBESTOS_DIFFERS 0x103
 // A host fault in native code with no position to retry from: the process is
 // killed (asbestos/guest-arm64/jit.c, jit_native_fault())
 #define INT_JIT_NATIVE_FAULT 0x101

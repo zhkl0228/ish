@@ -291,6 +291,11 @@ static int proc_ish_show_translations(struct proc_entry *UNUSED(entry), struct p
     proc_printf(buf, "reclaimed: %llu blocks, %.1f MB, of %llu idle address spaces, in %llu reclaims\n",
                 (unsigned long long) blocks, bytes / 1048576.0, (unsigned long long) spaces,
                 (unsigned long long) runs);
+    uint64_t shared_forks, mapping, private_blocks, written;
+    mem_asbestos_describe(&shared_forks, &mapping, &private_blocks, &written);
+    proc_printf(buf, "shared with forks: %llu; left: %llu for a mapping, %llu for a block of their own, %llu for code "
+                "written\n", (unsigned long long) shared_forks, (unsigned long long) mapping,
+                (unsigned long long) private_blocks, (unsigned long long) written);
     return 0;
 }
 

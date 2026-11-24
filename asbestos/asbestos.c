@@ -373,6 +373,16 @@ static void fiber_block_disconnect(struct asbestos *asbestos, struct fiber_block
 static void fiber_block_free(struct asbestos *asbestos, struct fiber_block *block);
 static void fiber_free_jetsam(struct asbestos *asbestos);
 static uint64_t asbestos_now_ms(void);
+
+// Every asbestos's invalidate_gen comes from this, so that no two ever share
+// a value: a thread's caches (tlb->block_cache_gen) of an asbestos its address
+// space has left are stale against the one it uses now, though it was not
+// running then to be told (mem_asbestos_detach).
+static _Atomic unsigned asbestos_gens = 1;
+
+static unsigned asbestos_next_gen(void) {
+    return atomic_fetch_add_explicit(&asbestos_gens, 1, memory_order_relaxed) + 1;
+}
 static void fiber_resize_hash(struct asbestos *asbestos, size_t new_size);
 
 struct asbestos *asbestos_new(struct mmu *mmu) {
@@ -386,10 +396,40 @@ struct asbestos *asbestos_new(struct mmu *mmu) {
     atomic_init(&asbestos->jit_active_threads, 0);
     atomic_init(&asbestos->jetsam_gen, 0);
     atomic_init(&asbestos->last_active_ms, asbestos_now_ms());
+    atomic_init(&asbestos->refs, 1);
+    asbestos->invalidate_gen = asbestos_next_gen();
     return asbestos;
 }
 
+struct asbestos *asbestos_retain(struct asbestos *asbestos) {
+    atomic_fetch_add(&asbestos->refs, 1);
+    return asbestos;
+}
+
+void asbestos_release(struct asbestos *asbestos) {
+    if (atomic_fetch_sub(&asbestos->refs, 1) == 1)
+        asbestos_free(asbestos);
+}
+
+bool asbestos_shared(struct asbestos *asbestos) {
+    return atomic_load(&asbestos->refs) > 1;
+}
+
+bool asbestos_leave_shared(struct asbestos *asbestos) {
+    unsigned refs = atomic_load(&asbestos->refs);
+    while (refs > 1) {
+        if (atomic_compare_exchange_weak(&asbestos->refs, &refs, refs - 1))
+            return true;
+    }
+    return false;
+}
+
 void asbestos_free(struct asbestos *asbestos) {
+    // A thread whose address space left it as it ran its code (a store to
+    // code took a copy on write, mem_asbestos_page_changing) holds this to
+    // read till it leaves it: none other can, the last address space using
+    // it gone
+    write_wrlock(&asbestos->jetsam_lock);
     for (size_t i = 0; i < asbestos->hash_size; i++) {
         struct fiber_block *block, *tmp;
         if (list_null(&asbestos->hash[i]))
@@ -404,6 +444,7 @@ void asbestos_free(struct asbestos *asbestos) {
 #endif
     free(asbestos->page_hash);
     free(asbestos->hash);
+    write_wrunlock(&asbestos->jetsam_lock);
     free(asbestos);
 }
 
@@ -466,7 +507,7 @@ void asbestos_invalidate_range(struct asbestos *absestos, page_t start, page_t e
         }
     }
     if (did_invalidate)
-        absestos->invalidate_gen++;
+        absestos->invalidate_gen = asbestos_next_gen();
     unlock(&absestos->lock);
 }
 
@@ -508,7 +549,7 @@ void asbestos_invalidate_all(struct asbestos *asbestos) {
         }
     }
     if (did_invalidate)
-        asbestos->invalidate_gen++;
+        asbestos->invalidate_gen = asbestos_next_gen();
     unlock(&asbestos->lock);
 }
 
@@ -717,8 +758,11 @@ void dump_wx_stats(void) {
             (unsigned long long)st_wx_marks, (unsigned long long)st_wx_clears,
             (unsigned long long)st_wx_retries, (unsigned long long)st_wx_giveups);
 }
-static struct fiber_block *fiber_block_compile_protected(struct asbestos *asbestos, addr_t ip, struct tlb *tlb) {
-    struct mmu *mmu = asbestos->mmu;
+// The code pages are marked in the address space of the thread that
+// translates: an asbestos shared by forked address spaces (mm_copy) is not
+// any one's
+static struct fiber_block *fiber_block_compile_protected(addr_t ip, struct tlb *tlb) {
+    struct mmu *mmu = tlb->mmu;
     for (int attempt = 0; ; attempt++) {
         int marked = mmu_mark_code_page(mmu, PAGE(ip));
         if (marked < 0)
@@ -856,6 +900,33 @@ static void fiber_cpu_out(struct cpu_state *cpu, struct fiber_frame *frame) {
     cpu->fpsr = host_fpsr_read();
 }
 
+// What code a block of the address space is of, its pages' (mmu_code_tag): 0
+// if either is its own, and the block may not be in an asbestos others use
+static uint64_t fiber_block_code_tag(struct mmu *mmu, struct fiber_block *block) {
+    uint64_t first = mmu_code_tag(mmu, PAGE(block->addr));
+    if (PAGE(block->end_addr) == PAGE(block->addr))
+        return first;
+    uint64_t second = mmu_code_tag(mmu, PAGE(block->end_addr));
+    if (first == 0 || second == 0)
+        return 0;
+    if (first == CODE_TAG_EARLY && second == CODE_TAG_EARLY)
+        return CODE_TAG_EARLY;
+    // bit 63: never 0 or CODE_TAG_EARLY
+    return (first * 0x9e3779b97f4a7c15ULL ^ (second >> 7 | second << 57)) | 1ULL << 63;
+}
+
+// A block of a page mapped since its asbestos was shared may be of other code
+// than the address space running from has there: chained to only from a
+// block of its pages and code (whose lookup checked them). Every other block
+// is of what all address spaces using the asbestos have, or of an asbestos
+// only one uses.
+static bool fiber_chain_ok(struct fiber_block *from, struct fiber_block *to) {
+    if (to->tag == 0 || to->tag == CODE_TAG_EARLY)
+        return true;
+    return to->tag == from->tag && PAGE(to->addr) == PAGE(from->addr) &&
+        PAGE(to->end_addr) == PAGE(from->end_addr);
+}
+
 static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
     struct asbestos *asbestos = cpu->mmu->asbestos;
 
@@ -891,7 +962,6 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
     }
     frame->last_block = NULL;
     frame->cpu = *cpu;
-    assert(asbestos->mmu == cpu->mmu);
     host_fpsr_write(frame->cpu.fpsr);
 
     int interrupt = INT_NONE;
@@ -904,6 +974,17 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
             memset(cache, 0, sizeof(tlb->block_cache));
             tlb->block_cache_gen = asbestos->invalidate_gen;
             memset(frame->ret_cache, 0, sizeof(frame->ret_cache));
+        }
+        // This address space wrote code of a shared asbestos (mem_code_written):
+        // it leaves it before it runs any more of its blocks. Or it has left
+        // it already, as this thread ran (a store's copy on write,
+        // mem_asbestos_page_changing): no block is to be made in it more, and
+        // the thread comes back with the one it uses now.
+        if (tlb->mmu->asbestos != asbestos ||
+                (atomic_load_explicit(&tlb->mmu->detach_requested, memory_order_relaxed) &&
+                 asbestos_shared(asbestos))) {
+            interrupt = INT_ASBESTOS_DETACH;
+            break;
         }
 
         addr_t ip = CPU_IP(&frame->cpu);
@@ -1024,7 +1105,12 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
             }
             size_t cache_index = fiber_cache_hash(ip);
             block = cache[cache_index];
-            if (no_block_cache >= 2 ||
+            if ((no_block_cache >= 2 ||
+                    (no_jit_reuse && ip >= 0xc0000000ULL && ip < 0xe0000000ULL)) && asbestos_shared(asbestos)) {
+                // the diagnostic's blocks are not to be shared
+                interrupt = INT_ASBESTOS_DETACH;
+                break;
+            } else if (no_block_cache >= 2 ||
                     (no_jit_reuse && ip >= 0xc0000000ULL && ip < 0xe0000000ULL)) {
                 lock(&asbestos->lock);
                 block = fiber_block_compile(ip, tlb);
@@ -1035,6 +1121,8 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
                     frame->cpu.segfault_was_write = 0;
                     break;
                 }
+                block->tag = fiber_block_code_tag(tlb->mmu, block);
+                asbestos->private_content = true;
                 fiber_insert(asbestos, block);
                 unlock(&asbestos->lock);
             } else
@@ -1045,14 +1133,43 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
                     atomic_fetch_add_explicit(&st_block_cache_miss, 1, memory_order_relaxed);
                 lock(&asbestos->lock);
                 block = fiber_lookup(asbestos, ip);
+                if (block != NULL && asbestos->ever_shared &&
+                        fiber_block_code_tag(tlb->mmu, block) != block->tag) {
+                    // Translated from other code than this address space has
+                    // there (another's mapping since the asbestos was shared,
+                    // or its own before it changed): it leaves a shared
+                    // asbestos, and the block of one only it uses goes
+                    if (asbestos_shared(asbestos)) {
+                        unlock(&asbestos->lock);
+                        interrupt = INT_ASBESTOS_DIFFERS;
+                        break;
+                    }
+                    page_t first = PAGE(block->addr), last = PAGE(block->end_addr);
+                    unlock(&asbestos->lock);
+                    asbestos_invalidate_range(asbestos, first, last + 1);
+                    continue;
+                }
                 if (block == NULL) {
-                    block = fiber_block_compile_protected(asbestos, ip, tlb);
+                    block = fiber_block_compile_protected(ip, tlb);
                     if (block == NULL) {
                         unlock(&asbestos->lock);
                         interrupt = INT_GPF;
                         frame->cpu.segfault_addr = 0;
                         frame->cpu.segfault_was_write = 0;
                         break;
+                    }
+                    // A block of a page that is writable or anonymous: its
+                    // address space's own, so it leaves a shared asbestos
+                    // first, and the block is made again in its own
+                    block->tag = fiber_block_code_tag(tlb->mmu, block);
+                    if (block->tag == 0) {
+                        if (asbestos_shared(asbestos)) {
+                            fiber_block_free(NULL, block);
+                            unlock(&asbestos->lock);
+                            interrupt = INT_ASBESTOS_DETACH;
+                            break;
+                        }
+                        asbestos->private_content = true;
                     }
                     fiber_insert(asbestos, block);
                     if (stage_trace_on())
@@ -1083,7 +1200,7 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
             memset(frame->ret_cache, 0, sizeof(frame->ret_cache));
         struct fiber_block *last_block = no_chain ? NULL : frame->last_block;
         if (block != NULL && last_block != NULL &&
-                !last_block->is_jetsam && !block->is_jetsam &&
+                !last_block->is_jetsam && !block->is_jetsam && fiber_chain_ok(last_block, block) &&
                 (last_block->jump_ip[0] != NULL ||
                  last_block->jump_ip[1] != NULL)) {
             {
