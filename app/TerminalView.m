@@ -118,6 +118,15 @@ struct rowcol {
     pinch.delegate = self;
     [self addGestureRecognizer:pinch];
 
+    // Two fingers tapped twice: Ctrl-L (clearTapped:). One finger's taps are
+    // the page's clicks (a word or a line selected, a program's mouse), two
+    // fingers' are no one's.
+    UITapGestureRecognizer *clear = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(clearTapped:)];
+    clear.numberOfTouchesRequired = 2;
+    clear.numberOfTapsRequired = 2;
+    clear.delegate = self;
+    [self addGestureRecognizer:clear];
+
     UserPreferences *prefs = UserPreferences.shared;
     [prefs observe:@[@"capsLockMapping", @"optionMapping", @"backtickMapEscape", @"overrideControlSpace"]
            options:0 owner:self usingBlock:^(typeof(self) self) {
@@ -342,6 +351,13 @@ static const int kMaxFontSize = 72;
             self.pinchZooms = NO;
             break;
     }
+}
+
+// Ctrl-L, as typed: a shell's clear, the prompt drawn again at the top; a
+// full-screen program's redraw. Felt as it is sent.
+- (void)clearTapped:(UITapGestureRecognizer *)tap {
+    [self.pressFeedback impactOccurred];
+    [self insertControlChar:'l'];
 }
 
 // The font's size and the terminal's columns and rows, over the terminal for
