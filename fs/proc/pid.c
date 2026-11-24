@@ -319,6 +319,35 @@ out_free_task:
     return err;
 }
 
+// The environment the process was started with, NUL after each string, as
+// cmdline its arguments: there was no environ, and nothing could say what a
+// running process had been given (tr '\0' '\n' < /proc/<pid>/environ). Only its
+// owner reads it, as on Linux (mode 0400).
+static int proc_pid_environ_show(struct proc_entry *entry, struct proc_data *buf) {
+    struct task *task = proc_get_task(entry);
+    if (task == NULL)
+        return _ESRCH;
+    int err = 0;
+    lock(&task->general_lock);
+    if (task->mm == NULL)
+        goto out_free_task;
+
+    size_t size = task->mm->env_end - task->mm->env_start;
+    char *data = malloc(size);
+    if (data == NULL) {
+        err = _ENOMEM;
+        goto out_free_task;
+    }
+    if (user_read_task(task, task->mm->env_start, data, size) == 0)
+        proc_buf_append(buf, data, size);
+    free(data);
+
+out_free_task:
+    unlock(&task->general_lock);
+    proc_put_task(task);
+    return err;
+}
+
 static int proc_pid_mem_show(struct proc_entry *entry, struct proc_data *buf) {
     // mem_show does not need to do any data set-up. The /proc/mem read/write 
     // operations do not rely on this set-up as they call user_read/write 
@@ -838,6 +867,7 @@ struct proc_children proc_pid_children = PROC_CHILDREN({
     {"cmdline", .show = proc_pid_cmdline_show},
     {"comm", S_IFREG | 0644, .show = proc_pid_comm_show, .pwrite = proc_pid_comm_pwrite},
     {"cwd", S_IFLNK, .readlink = proc_pid_cwd_readlink},
+    {"environ", S_IFREG | 0400, .show = proc_pid_environ_show},
     {"exe", S_IFLNK, .readlink = proc_pid_exe_readlink},
     {"fd", S_IFDIR, .readdir = proc_pid_fd_readdir},
     {"map_files", S_IFDIR, .readdir = proc_pid_map_files_readdir, .lookup = proc_pid_map_files_lookup},
@@ -868,6 +898,7 @@ static struct proc_children proc_tid_children = PROC_CHILDREN({
     {"cmdline", .show = proc_pid_cmdline_show},
     {"comm", S_IFREG | 0644, .show = proc_pid_comm_show, .pwrite = proc_pid_comm_pwrite},
     {"cwd", S_IFLNK, .readlink = proc_pid_cwd_readlink},
+    {"environ", S_IFREG | 0400, .show = proc_pid_environ_show},
     {"exe", S_IFLNK, .readlink = proc_pid_exe_readlink},
     {"maps", .show = proc_pid_maps_show},
     {"smaps", .show = proc_pid_smaps_show},

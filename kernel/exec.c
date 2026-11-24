@@ -351,7 +351,14 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
     addr_t envp_addr = sp = args_copy(sp, envp);
     if (sp == 0)
         goto out_free_interp;
-    current->mm->argv_end = sp;
+    // The strings of the environment and of the arguments, as
+    // /proc/<pid>/environ and cmdline say them: each a NUL after it, and no
+    // more. args_copy copies the list's own NUL after them too, which ends
+    // either range here (cmdline said one NUL too many, and environ there was
+    // none of: env_start and env_end were never set).
+    current->mm->env_start = envp_addr;
+    current->mm->env_end = file_addr - 1;
+    current->mm->argv_end = sp - 1;
     addr_t argv_addr = sp = args_copy(sp, argv);
     if (sp == 0)
         goto out_free_interp;
