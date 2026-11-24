@@ -503,9 +503,16 @@ ssize_t generic_readlinkat(struct fd *at, const char *path_raw, char *buf, size_
     return err;
 }
 
+// mkdir and rmdir take the last component as it is, a symlink too, as
+// Linux's (filename_create, do_rmdir): what it names is made or removed, not
+// what it links to. Followed, mkdir of a symlink to what is not made that
+// (zipfile and tarfile extracted a directory through one: CPython's
+// test_overwrite_broken_dir_symlink_as_dir), and rmdir of a symlink to an
+// empty directory removed the directory, where Linux says ENOTDIR. The host
+// says EEXIST and ENOTDIR of the symlink, as Linux does.
 int generic_mkdirat(struct fd *at, const char *path_raw, mode_t_ mode) {
     char path[MAX_PATH];
-    int err = path_normalize(at, path_raw, path, N_SYMLINK_FOLLOW | N_PARENT_DIR_WRITE);
+    int err = path_normalize(at, path_raw, path, N_SYMLINK_NOFOLLOW | N_PARENT_DIR_WRITE);
     if (err < 0)
         return err;
     struct mount *mount = find_mount_and_trim_path(path);
@@ -521,7 +528,7 @@ int generic_mkdirat(struct fd *at, const char *path_raw, mode_t_ mode) {
 
 int generic_rmdirat(struct fd *at, const char *path_raw) {
     char path[MAX_PATH];
-    int err = path_normalize(at, path_raw, path, N_SYMLINK_FOLLOW | N_PARENT_DIR_WRITE);
+    int err = path_normalize(at, path_raw, path, N_SYMLINK_NOFOLLOW | N_PARENT_DIR_WRITE);
     if (err < 0)
         return err;
     if (contains_mount_point(path))
