@@ -19,7 +19,11 @@
 #include <sys/ucontext.h>
 #else
 #include <ucontext.h>
+// glibc's signal.h has no _aarch64_ctx or esr_context (the __reserved
+// records); musl's has them, and the kernel's header again is a redefinition
+#if defined(__GLIBC__)
 #include <asm/sigcontext.h>
+#endif
 #endif
 #include "asbestos/frame.h"
 #include "asbestos/guest-arm64/host_fault.h"

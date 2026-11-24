@@ -1,3 +1,6 @@
+// musl's netinet/tcp.h has struct tcp_info only with _GNU_SOURCE (glibc's by
+// default): a Linux host's TCP_INFO (sock_inet_list)
+#define _GNU_SOURCE
 #include "kernel/packet.h"
 #include "kernel/netcap.h"
 #include "kernel/inotify.h"
