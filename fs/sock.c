@@ -1522,10 +1522,12 @@ int_t sys_setsockopt(fd_t sock_fd, dword_t level, dword_t option, addr_t value_a
     // socket and gives up on the socket when that fails, so no DatagramSocket
     // could be made: Gradle died at its start, its file-lock listener being
     // one. On an IPv6 socket Java passes the same number at the IPv6 level,
-    // which is Linux's IPV6_RECVPKTINFO, and 0 is that option's default.
+    // which is Linux's IPV6_RECVPKTINFO, and 0 is that option's default; and
+    // then IPV6_MULTICAST_ALL 0, IP_MULTICAST_ALL's for IPv6 (JDK 25:
+    // IPV6_V6ONLY, 49, IPV6_MULTICAST_HOPS 1, IPV6_MULTICAST_ALL 0).
     static const int32_t off = 0;
     if (((level == IPPROTO_IP && option == IP_MULTICAST_ALL_) ||
-            (level == IPPROTO_IPV6 && option == IPV6_RECVPKTINFO_)) &&
+            (level == IPPROTO_IPV6 && (option == IPV6_RECVPKTINFO_ || option == IPV6_MULTICAST_ALL_))) &&
             value_len == sizeof(off) && memcmp(value, &off, sizeof(off)) == 0)
         return 0;
     // [STAGE-0 PROBE] SO_BINDTODEVICE: bind this socket to a named interface.

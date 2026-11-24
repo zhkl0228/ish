@@ -255,6 +255,7 @@ static inline int sock_flags_from_real(int real) {
 #define IPV6_MULTICAST_HOPS_ 18
 #define IPV6_RECVERR_ 25
 #define IPV6_V6ONLY_ 26
+#define IPV6_MULTICAST_ALL_ 29
 #define IPV6_RECVPKTINFO_ 49
 #define IPV6_TCLASS_ 67
 #define ICMP6_FILTER_ 1

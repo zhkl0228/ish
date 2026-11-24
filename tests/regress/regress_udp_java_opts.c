@@ -2,7 +2,8 @@
 //
 // OpenJDK's DatagramChannel clears IP_MULTICAST_ALL (level 0, option 49) on
 // an IPv4 socket; on an IPv6 one it passes the same number at the IPv6 level
-// (Linux's IPV6_RECVPKTINFO) and sets IPV6_MULTICAST_HOPS to 1. iSH knew none
+// (Linux's IPV6_RECVPKTINFO), sets IPV6_MULTICAST_HOPS to 1 and clears
+// IPV6_MULTICAST_ALL (option 29, JDK 25). iSH knew none
 // of them and failed each with EINVAL, and Java gives up on the socket when
 // any fails, so no DatagramSocket could be made: Gradle died at its start.
 //
@@ -47,6 +48,7 @@ int main(void) {
     // IP_MULTICAST_ALL's number at the IPv6 level, as Java passes it
     set_int("IPv6 UDP: option 49 (IPV6_RECVPKTINFO) 0", AF_INET6, IPPROTO_IPV6, IPV6_RECVPKTINFO, 0);
     set_int("IPv6 UDP: IPV6_MULTICAST_HOPS 1", AF_INET6, IPPROTO_IPV6, IPV6_MULTICAST_HOPS, 1);
+    set_int("IPv6 UDP: IPV6_MULTICAST_ALL 0", AF_INET6, IPPROTO_IPV6, IPV6_MULTICAST_ALL, 0);
 
     // A hop limit other than the default reaches the socket and reads back.
     char detail[200];
