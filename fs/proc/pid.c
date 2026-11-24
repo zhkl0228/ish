@@ -113,8 +113,12 @@ static int proc_stat_show(struct proc_entry *entry, struct proc_data *buf, bool 
     proc_printf(buf, "%ld ", timeval_ticks(children.utime));
     proc_printf(buf, "%ld ", timeval_ticks(children.stime));
 
-    proc_printf(buf, "%ld ", 20l); // priority (not adjustable)
-    proc_printf(buf, "%ld ", 0l); // nice (also not adjustable)
+    // the nice setpriority gave it (pids_lock held, as there), and the
+    // priority of a task with it, as Linux's for a task that is not real
+    // time: they were 20 and 0 of every task, and ps and top said NI 0 of
+    // what nice or renice had made 5
+    proc_printf(buf, "%d ", 20 + task->nice); // priority
+    proc_printf(buf, "%d ", task->nice); // nice
     proc_printf(buf, "%ld ", list_size(&task->group->threads));
     proc_printf(buf, "%ld ", 0l); // itimer value (deprecated, always 0)
     proc_printf(buf, "%llu ", (unsigned long long) task->start_ticks); // start, in ticks since boot

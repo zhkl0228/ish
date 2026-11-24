@@ -7,7 +7,8 @@
 //   (deleted)", F_GET_SEALS F_SEAL_SEAL and F_ADD_SEALS EPERM (no sealing
 //   here), MFD_ALLOW_SEALING and a name past 249 bytes EINVAL.
 // - getpriority and setpriority: 20 (nice 0) of anything, and success
-//   forgotten. A nice set is the nice got, a child's too; another pid is
+//   forgotten. A nice set is the nice got, a child's too, and /proc/self/stat
+//   says it (its priority 20 more), as ps and top read it; another pid is
 //   ESRCH, another which EINVAL.
 // - splice: EINVAL of anything. A file to a pipe, at its position or at an
 //   offset (which moves, the position not), a pipe to a file at an offset;
@@ -127,6 +128,21 @@ int main(void) {
     int now = getpriority(PRIO_PROCESS, 0);
     snprintf(detail, sizeof(detail), "base %d, setpriority %s, now %d", base, result(r, e), now);
     check("setpriority then getpriority", r == 0 && now == base + 3, detail);
+    // stat's fields 18 and 19, after the name's parentheses
+    long stat_prio = -100, stat_nice = -100;
+    FILE *statf = fopen("/proc/self/stat", "r");
+    char statbuf[1024] = "";
+    if (statf != NULL) {
+        fread(statbuf, 1, sizeof(statbuf) - 1, statf);
+        fclose(statf);
+    }
+    char *after = strrchr(statbuf, ')');
+    if (after != NULL)
+        sscanf(after + 2, "%*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %*u %*u %*d %*d %ld %ld", &stat_prio,
+               &stat_nice);
+    snprintf(detail, sizeof(detail), "priority %ld, nice %ld (the nice is %d)", stat_prio, stat_nice, now);
+    check("/proc/self/stat says the nice, and the priority 20 more", stat_nice == now && stat_prio == 20 + now,
+          detail);
     pid_t child = fork();
     if (child == 0)
         _exit(getpriority(PRIO_PROCESS, 0) == base + 3 ? 0 : 1);
