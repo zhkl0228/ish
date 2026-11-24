@@ -1,0 +1,91 @@
+# The app's AOT images: recorded and published again when they no longer serve
+# what the app runs (benchmark/aojit/ci_app_images.sh), then a pull request with
+# the new lock, app/AOTImages.xcconfig and ish-install's versions.
+#
+# Needs the secret AOT_SSH_KEY (the upload key of user ish-aot on hk.gzmtx.cn,
+# which can only rsync into the images' directory), and "Allow GitHub Actions to
+# create and approve pull requests" (Settings > Actions > General).
+name: AOT images
+
+on:
+  push:
+    branches: [master]
+    # what ish's abi depends on, and the recording itself
+    paths:
+      - 'asbestos/**'
+      - 'emu/**'
+      - 'kernel/**'
+      - 'meson.build'
+      - 'meson_options.txt'
+      - 'tools/jit_aot/**'
+      - 'benchmark/aojit/**'
+      - '.github/workflows/aot-images.yml'
+  schedule:
+    # new versions of Claude Code, Kimi Code and Alpine's packages: 04:00 in China
+    - cron: '0 20 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Record even if nothing changed
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: aot-images
+  cancel-in-progress: false
+
+jobs:
+  images:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq meson ninja-build pkg-config clang clang-20 libsqlite3-dev libarchive-dev \
+              python3-tqdm rsync xz-utils
+
+      - name: Upload key
+        env:
+          AOT_SSH_KEY: ${{ secrets.AOT_SSH_KEY }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$AOT_SSH_KEY" > ~/.ssh/ish_aot_ci
+          chmod 600 ~/.ssh/ish_aot_ci
+          echo 'hk.gzmtx.cn ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINf3KzmJXiuswc0NBcYZy3vGYF9/Rg2yJb/eLJItOWpp' >> ~/.ssh/known_hosts
+
+      - name: Record and publish if the images no longer serve the app
+        run: benchmark/aojit/ci_app_images.sh ${{ inputs.force && '--force' || '' }}
+
+      - name: Pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          files="benchmark/aojit/app-images.lock.json app/AOTImages.xcconfig app/RootfsPatch.bundle"
+          if git diff --quiet -- $files; then
+            echo "nothing published"
+            exit 0
+          fi
+          set=$(python3 -c "import json; print(json.load(open('benchmark/aojit/app-images.lock.json'))['set'])")
+          summary=$(python3 -c "
+          import json
+          d = json.load(open('benchmark/aojit/app-images.lock.json'))
+          r = d['recorded']
+          print('abi %s; ' % d['abi'] + ', '.join('%s %s' % i for i in sorted(r['npm'].items())) + '; ' +
+                ', '.join('%s %s' % i for i in sorted(r['apk'].items())))")
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c "aot/$set"
+          git add -A -- $files
+          git commit -q -m "aot: the app's images, set $set" -m "Recorded on $summary (benchmark/aojit/ci_app_images.sh)."
+          git push -q origin "aot/$set"
+          gh pr create --base master --head "aot/$set" --title "aot: the app's images, set $set" \
+              --body "Recorded on $summary, and published to hk.gzmtx.cn/ish-aot/$set. Merging makes the app link them and ish-install install those versions."

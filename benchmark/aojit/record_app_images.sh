@@ -22,6 +22,13 @@
 #      build and install the app from Xcode as always (on Linux, after the
 #      repository is the Mac's again: the paths are $(SRCROOT)'s).
 #
+# AOT_JIT_BUILD and AOT_ROOT put the recording ish and the root elsewhere (a
+# root on a share of the Mac's disk, as Docker Desktop's virtiofs, cannot
+# chmod a socket). AOT_NPM_PINS, as "<package>@<version> ...", installs those
+# versions of the npm packages of images-app.json in a new root (default: the
+# latest). AOT_NO_LOCAL_XCCONFIG=1 leaves app/AOTImages.local.xcconfig alone:
+# images published with publish_app_images.sh come in by app/AOTImages.xcconfig.
+#
 # Needs meson, ninja, clang, libarchive (fakefsify; on a Mac brew install
 # libarchive), python3 with tqdm, the network; on a Mac Xcode's command line
 # tools, on Linux clang 20 for the iOS objects (IOS_CC, default clang-20). JOBS: images recorded at once (default 1: the
@@ -29,8 +36,8 @@
 set -e
 cd "$(dirname "$0")/../.."
 repo=$PWD
-jit=$repo/build-arm64-jit
-root=$repo/build-aot-root
+jit=${AOT_JIT_BUILD:-$repo/build-arm64-jit}
+root=${AOT_ROOT:-$repo/build-aot-root}
 list=$repo/benchmark/aojit/images-app.json
 tarball=$repo/deps/rootfs/arm64-root.tar.gz
 if [ "$(uname -s)" != Darwin ]; then
@@ -56,13 +63,21 @@ if [ ! -f "$root.ready" ]; then
     guest /bin/sh -c 'cat > /etc/resolv.conf' < /etc/resolv.conf
     apk=$(python3 -c "import json; print(' '.join(json.load(open('$list'))['packages']['apk']))")
     guest /sbin/apk add --no-cache $apk
-    npm=$(python3 -c "import json; print(' '.join(json.load(open('$list'))['packages']['npm']))")
+    # an npm package of images-app.json at its version in AOT_NPM_PINS, if there
+    pin() {
+        python3 -c "
+import sys
+pins = dict(p.rsplit('@', 1) for p in sys.argv[1].split())
+print(' '.join(p + '@' + pins[p] if p in pins else p for p in sys.argv[2:]))" "$AOT_NPM_PINS" "$@"
+    }
+    # shellcheck disable=SC2046 # the packages, a word each
+    npm=$(pin $(python3 -c "import json; print(' '.join(json.load(open('$list'))['packages']['npm']))"))
     guest /bin/sh -c "npm install -g --no-audit --no-fund $npm" < /dev/null
     python3 -c "
 import json
 for prefix, packages in json.load(open('$list'))['packages']['npm_prefix'].items():
     print(prefix, ' '.join(packages))" | while read -r prefix packages; do
-        guest /bin/sh -c "npm install -g --prefix $prefix --no-audit --no-fund $packages" < /dev/null
+        guest /bin/sh -c "npm install -g --prefix $prefix --no-audit --no-fund $(pin $packages)" < /dev/null
     done
     touch "$root.ready"
 else
@@ -76,6 +91,7 @@ out=$repo/benchmark/aojit/images/$abi/app
 say "3. the images (abi $abi) -> $out"
 IMAGES=$list IOS=1 JOBS=${JOBS:-1} sh benchmark/aojit/record_images.sh "$jit/ish" "$root" "$out" "$@"
 
+[ "$AOT_NO_LOCAL_XCCONFIG" != 1 ] || { du -ch "$out"/aot_*_ios.o | tail -1; exit 0; }
 say "4. app/AOTImages.local.xcconfig"
 {
     printf 'ISH_AOT_OBJECTS ='

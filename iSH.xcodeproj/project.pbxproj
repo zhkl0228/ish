@@ -2240,7 +2240,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "\"$SRCROOT/app/xcode-meson.sh\"\ncd \"$MESON_BUILD_DIR\"\n\"$SRCROOT/app/xcode-ninja.sh\" $NINJA_TARGETS\n";
+			shellScript = "python3 \"$SRCROOT/app/fetch-aot.py\" || exit 1\n\"$SRCROOT/app/xcode-meson.sh\"\ncd \"$MESON_BUILD_DIR\"\n\"$SRCROOT/app/xcode-ninja.sh\" $NINJA_TARGETS\n";
 		};
 		AAF20023AF96D90D00FFB7A4 /* Build Meson (ARM64) */ = {
 			isa = PBXShellScriptBuildPhase;

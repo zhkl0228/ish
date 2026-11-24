@@ -8,7 +8,9 @@
 #
 # A group already installed is skipped. Packages come from Alpine's
 # repositories (apk), and Claude Code and Kimi Code from npm, so this needs the
-# network. --cn makes apk, npm, pip and go use Alibaba Cloud's mirrors from
+# network. Claude Code and Kimi Code at the versions in VERSIONS: the app's AOT
+# images serve those builds, and a tool of another version is installed again
+# at its own. --cn makes apk, npm, pip and go use Alibaba Cloud's mirrors from
 # then on: /etc/apk/repositories, and /etc/profile.d/ish-mirror-cn.sh for the
 # others.
 #
@@ -75,6 +77,31 @@ packages() {
     esac
 }
 
+# The npm tools' versions the app's AOT images serve, a package and its version
+# a line (benchmark/aojit/publish_app_images.py writes it; the app installs it
+# with this file)
+VERSIONS=/usr/local/share/ish-install/versions
+
+# The version VERSIONS gives package: nothing for a package it does not name
+pinned() {
+    awk -v p="$1" '!/^#/ && $1 == p { print $2 }' "$VERSIONS"
+}
+
+# The version of the tool has_tool found: its package.json's, in its directory or
+# npm's global one (npm -g installs into /usr/local); nothing for a tool found on
+# the PATH some other way
+tool_version() {
+    pj=${prefix:-/usr/local}/lib/node_modules/$package/package.json
+    [ -f "$pj" ] || return 0
+    sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' "$pj" | head -n 1
+}
+
+# Whether the tool has_tool found is the version VERSIONS gives, if it gives one
+tool_current() {
+    want=$(pinned "$package")
+    [ -z "$want" ] || [ "$(tool_version)" = "$want" ]
+}
+
 # The groups with a tool from npm: its command, its package and, for a tool
 # npm installs into a directory of its own (npm -g --prefix), that directory.
 # Installed with npm -g, the way the tool's own updater expects to update it.
@@ -103,12 +130,18 @@ installed() {
     # shellcheck disable=SC2046
     [ "$(apk info -e $(packages "$1") | wc -l)" -eq "$(packages "$1" | wc -w)" ] || return 1
     tool=$(npm_tool "$1")
-    [ -z "$tool" ] || has_tool "$tool"
+    [ -z "$tool" ] || { has_tool "$tool" && tool_current; }
 }
 
 list() {
     for group in $ALL_GROUPS; do
-        if installed "$group"; then state=installed; else state=; fi
+        if installed "$group"; then
+            state=installed
+        elif tool=$(npm_tool "$group") && [ -n "$tool" ] && has_tool "$tool"; then
+            state="installed $(tool_version), the app's AOT image is for $(pinned "$package")"
+        else
+            state=
+        fi
         printf '  %-8s %s  %s\n' "$group" "$(describe "$group")" "$state"
     done
 }
@@ -159,11 +192,15 @@ npm_installed=''
 for group in $todo; do
     tool=$(npm_tool "$group")
     [ -n "$tool" ] || continue
-    has_tool "$tool" && continue
+    if has_tool "$tool"; then
+        tool_current && continue
+        echo "$group: $package $(tool_version) is installed, the app's AOT image is for $(pinned "$package"): installing that"
+    fi
+    version=$(pinned "$package")
     if [ -n "$prefix" ]; then
-        npm install -g --prefix "$prefix" --no-audit --no-fund "$package"
+        npm install -g --prefix "$prefix" --no-audit --no-fund "$package${version:+@$version}"
     else
-        npm install -g --no-audit --no-fund "$package"
+        npm install -g --no-audit --no-fund "$package${version:+@$version}"
     fi
     npm_installed=1
 done
