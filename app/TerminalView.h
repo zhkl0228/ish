@@ -22,6 +22,8 @@ enum OverrideAppearance {
 // the terminal, ⌘+ and ⌘- change it, within the sizes it can be, and the
 // terminal shows the size and the columns and rows it makes
 - (void)changeFontSize:(int)size;
+// Puts the keyboard away (the bar's Hide Keyboard key, the View menu's)
+- (IBAction)loseFocus:(id)sender;
 @property (nonatomic) enum OverrideAppearance overrideAppearance;
 
 @property (nonatomic) UIKeyboardAppearance keyboardAppearance;
