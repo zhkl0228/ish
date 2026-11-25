@@ -436,6 +436,18 @@ else
         status=1
     fi
     echo
+    echo "########## a futex wait a signal interrupts, with no handler run, starts again ##########"
+    if "$CC_GUEST" -static -O0 -Wall -pthread -o "$GUEST_ROOT/tmp/regress_futex_restart" \
+            tests/regress/regress_futex_restart.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_futex_restart 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_futex_restart"
+    else
+        echo "failed to build regress_futex_restart" >&2
+        status=1
+    fi
+    echo
     echo "########## set_tid_address returns the caller's thread id ##########"
     if "$CC_GUEST" -static -O0 -Wall -pthread -o "$GUEST_ROOT/tmp/regress_set_tid_address" \
             tests/regress/regress_set_tid_address.c; then
