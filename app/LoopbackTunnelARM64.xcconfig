@@ -1,0 +1,20 @@
+// The loopback tunnel extension (app/LoopbackTunnel): the way the JIT helper
+// reaches the device's own services, started by the iSH-ARM64 app while the
+// helper works (app/BuiltinJIT.m). A packet tunnel provider: the app and it
+// need the Network Extensions capability of the signing account.
+#include "iOS.xcconfig"
+
+INFOPLIST_FILE = app/LoopbackTunnel/Info.plist
+CODE_SIGN_ENTITLEMENTS = app/LoopbackTunnel/LoopbackTunnel.entitlements
+PRODUCT_NAME = $(TARGET_NAME)
+SKIP_INSTALL = YES
+SWIFT_VERSION = 5.0
+
+// The app's identifier and one more component: the app names it as its
+// tunnel provider by that (app/BuiltinJIT.m)
+PRODUCT_BUNDLE_IDENTIFIER = $(ROOT_BUNDLE_IDENTIFIER).arm64.LoopbackTunnel
+
+// Must match the host app (AppARM64.xcconfig): iOS rejects an extension
+// whose version differs from its containing app.
+MARKETING_VERSION = 2.1.0
+CURRENT_PROJECT_VERSION = 806

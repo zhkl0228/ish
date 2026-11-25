@@ -56,7 +56,10 @@ jobs:
             submodules: true
       - name: Install dependencies
         run: |
-          brew install llvm lld ninja libarchive meson
+          brew install llvm lld ninja libarchive meson xcodegen
+      - name: StikJIT
+        # The JIT helper extension's framework (app/StikJIT/build.sh)
+        run: app/StikJIT/build.sh
       - name: Build
         run: |
           xcodebuild -project iSH.xcodeproj -scheme iSH-ARM64 -arch arm64 -sdk iphoneos \

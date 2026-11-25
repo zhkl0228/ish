@@ -236,6 +236,16 @@
 		BBC3863E276817A900CC8C2E /* UpgradeRootViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = BBA5D87D27536E7600B39D77 /* UpgradeRootViewController.m */; };
 		BBC3863F276817AD00CC8C2E /* CurrentRoot.m in Sources */ = {isa = PBXBuildFile; fileRef = BB565EA32734F1FB00C93EAE /* CurrentRoot.m */; };
 		BBECF3BC26913F1600DEC937 /* AppDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = BB792B541F96D90D00FFB7A4 /* AppDelegate.m */; };
+		1153F84ACAF9D723AFA4FBC8 /* BuiltinJITViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = CA402E70AC59D8E20131776C /* BuiltinJITViewController.m */; };
+		1954D0456295C3427AA05B16 /* UniformTypeIdentifiers.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9B799F3DE9FDA06A81F81E27 /* UniformTypeIdentifiers.framework */; };
+		3AA1C0A2816A2254775432E6 /* PacketTunnelProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEFC8C2CF0668418A1674AD6 /* PacketTunnelProvider.swift */; };
+		3E280507715D05CE850E06AC /* BuiltinJIT.m in Sources */ = {isa = PBXBuildFile; fileRef = 758923384E59FA379C751186 /* BuiltinJIT.m */; };
+		4794ABFE52E87A1897711640 /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9E65BF4861D9631B082A4A3C /* NetworkExtension.framework */; };
+		56E5FA57740186FA3C7A0901 /* iSHJITHelper ARM64.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 7784D4470E41B6E21AFA053B /* iSHJITHelper ARM64.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		8CA66945E30E7A5DAC590909 /* StikJIT.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 82757387CA4A501DB73121C2 /* StikJIT.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		9BB8E1ED09FF0CA5849B2B60 /* StikJIT.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 82757387CA4A501DB73121C2 /* StikJIT.xcframework */; };
+		C8BF293A5E1AAEDD6FA0CD21 /* iSHLoopbackTunnel ARM64.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 378263D49E2685E2E7005F65 /* iSHLoopbackTunnel ARM64.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		CBB7FAD71BCF0DCE56594538 /* JITHelperRequestHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F77181B7A04CE7F6E2AD5D9 /* JITHelperRequestHandler.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXBuildRule section */
@@ -324,6 +334,20 @@
 			remoteGlobalIDString = BB13F7D0200ACCA2003D1C4D;
 			remoteInfo = Ninja;
 		};
+		1E1C0EF7A7692AF504E7F0CF /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = BB792B461F96D8E000FFB7A4 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = B3731B17CA3FA382C2E3F908;
+			remoteInfo = "iSHJITHelper-ARM64";
+		};
+		4F9D66A41F456F59FD9A3B48 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = BB792B461F96D8E000FFB7A4 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 25AD929F0213D8255CB3601A;
+			remoteInfo = "iSHLoopbackTunnel-ARM64";
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -344,8 +368,21 @@
 			dstSubfolderSpec = 13;
 			files = (
 				AAF20050AF96D90D00FFB7A4 /* iSHFileProvider ARM64.appex in Embed Foundation Extensions */,
+				56E5FA57740186FA3C7A0901 /* iSHJITHelper ARM64.appex in Embed Foundation Extensions */,
+				C8BF293A5E1AAEDD6FA0CD21 /* iSHLoopbackTunnel ARM64.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		5DCC3660AA06533492E7CBEB /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				8CA66945E30E7A5DAC590909 /* StikJIT.xcframework in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXCopyFilesBuildPhase section */
@@ -641,6 +678,22 @@
 		BBFB5578215876CD00DFE6DE /* AboutViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = AboutViewController.m; sourceTree = "<group>"; };
 		BBFB557A215878C600DFE6DE /* UIApplication+OpenURL.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "UIApplication+OpenURL.h"; sourceTree = "<group>"; };
 		BBFB557B215878C600DFE6DE /* UIApplication+OpenURL.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "UIApplication+OpenURL.m"; sourceTree = "<group>"; };
+		06270B5829359D8FD9E3BF8B /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		0F77181B7A04CE7F6E2AD5D9 /* JITHelperRequestHandler.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = JITHelperRequestHandler.swift; sourceTree = "<group>"; };
+		34B281EF37C963402FBF789E /* LoopbackTunnel.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = LoopbackTunnel.entitlements; sourceTree = "<group>"; };
+		378263D49E2685E2E7005F65 /* iSHLoopbackTunnel ARM64.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = "iSHLoopbackTunnel ARM64.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
+		4E9A81525BCB45AF57647274 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		758923384E59FA379C751186 /* BuiltinJIT.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = BuiltinJIT.m; sourceTree = "<group>"; };
+		7784D4470E41B6E21AFA053B /* iSHJITHelper ARM64.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = "iSHJITHelper ARM64.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
+		82757387CA4A501DB73121C2 /* StikJIT.xcframework */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = wrapper.xcframework; name = StikJIT.xcframework; path = build/StikJIT/StikJIT.xcframework; sourceTree = SOURCE_ROOT; };
+		859E2D36EE8146A2CE1DE45D /* JITHelperARM64.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; path = JITHelperARM64.xcconfig; sourceTree = "<group>"; };
+		9B799F3DE9FDA06A81F81E27 /* UniformTypeIdentifiers.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UniformTypeIdentifiers.framework; path = System/Library/Frameworks/UniformTypeIdentifiers.framework; sourceTree = SDKROOT; };
+		9E65BF4861D9631B082A4A3C /* NetworkExtension.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = NetworkExtension.framework; path = System/Library/Frameworks/NetworkExtension.framework; sourceTree = SDKROOT; };
+		A1399BE30725580CC53DF76C /* LoopbackTunnelARM64.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; path = LoopbackTunnelARM64.xcconfig; sourceTree = "<group>"; };
+		A363AC070086D041E27266F3 /* BuiltinJITViewController.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = BuiltinJITViewController.h; sourceTree = "<group>"; };
+		CA402E70AC59D8E20131776C /* BuiltinJITViewController.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = BuiltinJITViewController.m; sourceTree = "<group>"; };
+		E97CAB48FD43955C01B4511E /* BuiltinJIT.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = BuiltinJIT.h; sourceTree = "<group>"; };
+		EEFC8C2CF0668418A1674AD6 /* PacketTunnelProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PacketTunnelProvider.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -654,6 +707,23 @@
 				AA000034AF96D90D00FFB7A4 /* libbz2.tbd in Frameworks */,
 				AA000035AF96D90D00FFB7A4 /* libiconv.tbd in Frameworks */,
 				AA000036AF96D90D00FFB7A4 /* libresolv.tbd in Frameworks */,
+				4794ABFE52E87A1897711640 /* NetworkExtension.framework in Frameworks */,
+				1954D0456295C3427AA05B16 /* UniformTypeIdentifiers.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		04752B004DF61215A8A8A3B5 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9BB8E1ED09FF0CA5849B2B60 /* StikJIT.xcframework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C82587C4F40F49CF1F26425F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -688,6 +758,8 @@
 				BB0B859B2586F13200208600 /* XcodeDebug.xcconfig */,
 				BB0B848E2586A4CF00208600 /* XcodeDefault.xcconfig */,
 				BB0B859C2586F19000208600 /* XcodeRelease.xcconfig */,
+				859E2D36EE8146A2CE1DE45D /* JITHelperARM64.xcconfig */,
+				A1399BE30725580CC53DF76C /* LoopbackTunnelARM64.xcconfig */,
 			);
 			name = Configs;
 			sourceTree = "<group>";
@@ -830,6 +902,8 @@
 				BBEF191E26806364001225BD /* libiSHApp.a */,
 				BB21A16F2689041500BD19B4 /* libfakefs.a */,
 				AA9C2BB72F44A3DD00F41633 /* iSH ARM64 ffmpeg.app */,
+				7784D4470E41B6E21AFA053B /* iSHJITHelper ARM64.appex */,
+				378263D49E2685E2E7005F65 /* iSHLoopbackTunnel ARM64.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -891,6 +965,9 @@
 				BB0B848D2586A4B100208600 /* Configs */,
 				BB88F4A4215476BA00A341FD /* iSH.entitlements */,
 				BB88F4912154760800A341FD /* FileProvider */,
+				14F250A88670631024F6C9C9 /* Built-in JIT */,
+				727351C6915144CC008E4E83 /* JITHelper */,
+				71C448D61854E3D4573A74FD /* LoopbackTunnel */,
 			);
 			path = app;
 			sourceTree = "<group>";
@@ -904,6 +981,9 @@
 				BB235536235D49B300139E00 /* CoreLocation.framework */,
 				BB6DB260216435330047A611 /* libiconv.tbd */,
 				BBFB55652158644C00DFE6DE /* libresolv.tbd */,
+				9E65BF4861D9631B082A4A3C /* NetworkExtension.framework */,
+				9B799F3DE9FDA06A81F81E27 /* UniformTypeIdentifiers.framework */,
+				82757387CA4A501DB73121C2 /* StikJIT.xcframework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -1133,6 +1213,36 @@
 			name = Bar;
 			sourceTree = "<group>";
 		};
+		14F250A88670631024F6C9C9 /* Built-in JIT */ = {
+			isa = PBXGroup;
+			children = (
+				E97CAB48FD43955C01B4511E /* BuiltinJIT.h */,
+				A363AC070086D041E27266F3 /* BuiltinJITViewController.h */,
+				758923384E59FA379C751186 /* BuiltinJIT.m */,
+				CA402E70AC59D8E20131776C /* BuiltinJITViewController.m */,
+			);
+			name = "Built-in JIT";
+			sourceTree = "<group>";
+		};
+		71C448D61854E3D4573A74FD /* LoopbackTunnel */ = {
+			isa = PBXGroup;
+			children = (
+				06270B5829359D8FD9E3BF8B /* Info.plist */,
+				34B281EF37C963402FBF789E /* LoopbackTunnel.entitlements */,
+				EEFC8C2CF0668418A1674AD6 /* PacketTunnelProvider.swift */,
+			);
+			path = LoopbackTunnel;
+			sourceTree = "<group>";
+		};
+		727351C6915144CC008E4E83 /* JITHelper */ = {
+			isa = PBXGroup;
+			children = (
+				4E9A81525BCB45AF57647274 /* Info.plist */,
+				0F77181B7A04CE7F6E2AD5D9 /* JITHelperRequestHandler.swift */,
+			);
+			path = JITHelper;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXLegacyTarget section */
@@ -1226,6 +1336,8 @@
 				AA000060AF96D90D00FFB7A4 /* PBXTargetDependency */,
 				AA000062AF96D90D00FFB7A4 /* PBXTargetDependency */,
 				AAF20060AF96D90D00FFB7A4 /* PBXTargetDependency */,
+				311BE065BEA6046E602B0918 /* PBXTargetDependency */,
+				8A8207AFB71DF59F301CF267 /* PBXTargetDependency */,
 			);
 			name = "iSH-ARM64";
 			productName = "iSH ARM64";
@@ -1314,6 +1426,41 @@
 			productReference = BBFB2C5B2590257E00545EAB /* libish_emu.a */;
 			productType = "com.apple.product-type.library.static";
 		};
+		25AD929F0213D8255CB3601A /* iSHLoopbackTunnel-ARM64 */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 07DF0FD5CBC5FC3B549C715A /* Build configuration list for PBXNativeTarget "iSHLoopbackTunnel-ARM64" */;
+			buildPhases = (
+				B548B779E5BDFF71A1E5EF0A /* Sources */,
+				C82587C4F40F49CF1F26425F /* Frameworks */,
+				45766647569BAD8E7F7D04F8 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "iSHLoopbackTunnel-ARM64";
+			productName = "iSHLoopbackTunnel ARM64";
+			productReference = 378263D49E2685E2E7005F65 /* iSHLoopbackTunnel ARM64.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		B3731B17CA3FA382C2E3F908 /* iSHJITHelper-ARM64 */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = ADE53343B3B22D6CFF93087E /* Build configuration list for PBXNativeTarget "iSHJITHelper-ARM64" */;
+			buildPhases = (
+				D8E62A727A430F82572EDACF /* Sources */,
+				04752B004DF61215A8A8A3B5 /* Frameworks */,
+				166B742AE7EAAAF0169332DE /* Resources */,
+				5DCC3660AA06533492E7CBEB /* Embed Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "iSHJITHelper-ARM64";
+			productName = "iSHJITHelper ARM64";
+			productReference = 7784D4470E41B6E21AFA053B /* iSHJITHelper ARM64.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -1386,6 +1533,8 @@
 				BB4A922324ED9402002F5A96 /* iSH pre */,
 				497F6CE3254E5E4C00C82F46 /* MakeXcodeAutoCompleteWork */,
 				74B674687BE68C2FE768F439 /* iSH-ARM64-ffmpeg */,
+				B3731B17CA3FA382C2E3F908 /* iSHJITHelper-ARM64 */,
+				25AD929F0213D8255CB3601A /* iSHLoopbackTunnel-ARM64 */,
 			);
 		};
 /* End PBXProject section */
@@ -1462,6 +1611,20 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		AAF20022AF96D90D00FFB7A4 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		166B742AE7EAAAF0169332DE /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		45766647569BAD8E7F7D04F8 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -1750,6 +1913,8 @@
 				952C466E473A17978DF08078 /* MainMenu.m in Sources */,
 				7F006745F3194A3B381E53E7 /* TabBarView.m in Sources */,
 				C498B6E73648245EDAFA3A38 /* TerminalSession.m in Sources */,
+				3E280507715D05CE850E06AC /* BuiltinJIT.m in Sources */,
+				1153F84ACAF9D723AFA4FBC8 /* BuiltinJITViewController.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1804,6 +1969,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B548B779E5BDFF71A1E5EF0A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3AA1C0A2816A2254775432E6 /* PacketTunnelProvider.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D8E62A727A430F82572EDACF /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CBB7FAD71BCF0DCE56594538 /* JITHelperRequestHandler.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -1840,6 +2021,18 @@
 			isa = PBXTargetDependency;
 			target = BB13F7D0200ACCA2003D1C4D /* Ninja */;
 			targetProxy = BBFB2C562590257E00545EAB /* PBXContainerItemProxy */;
+		};
+		311BE065BEA6046E602B0918 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = "iSHJITHelper-ARM64";
+			target = B3731B17CA3FA382C2E3F908 /* iSHJITHelper-ARM64 */;
+			targetProxy = 1E1C0EF7A7692AF504E7F0CF /* PBXContainerItemProxy */;
+		};
+		8A8207AFB71DF59F301CF267 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = "iSHLoopbackTunnel-ARM64";
+			target = 25AD929F0213D8255CB3601A /* iSHLoopbackTunnel-ARM64 */;
+			targetProxy = 4F9D66A41F456F59FD9A3B48 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -2047,6 +2240,38 @@
 			};
 			name = Release;
 		};
+		033F3103F9281F0E725F6414 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = A1399BE30725580CC53DF76C /* LoopbackTunnelARM64.xcconfig */;
+			buildSettings = {
+				DEVELOPMENT_TEAM = K8Q74NT2BG;
+			};
+			name = Release;
+		};
+		7275D8027866C332532A98E3 /* Debug-ApplePleaseFixFB19282108 */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 859E2D36EE8146A2CE1DE45D /* JITHelperARM64.xcconfig */;
+			buildSettings = {
+				DEVELOPMENT_TEAM = K8Q74NT2BG;
+			};
+			name = "Debug-ApplePleaseFixFB19282108";
+		};
+		73E0BCC20EE91A6E8EB2689C /* Debug-ApplePleaseFixFB19282108 */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = A1399BE30725580CC53DF76C /* LoopbackTunnelARM64.xcconfig */;
+			buildSettings = {
+				DEVELOPMENT_TEAM = K8Q74NT2BG;
+			};
+			name = "Debug-ApplePleaseFixFB19282108";
+		};
+		A67DA9FC72FADCF626401FBF /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 859E2D36EE8146A2CE1DE45D /* JITHelperARM64.xcconfig */;
+			buildSettings = {
+				DEVELOPMENT_TEAM = K8Q74NT2BG;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -2154,6 +2379,24 @@
 			buildConfigurations = (
 				BBFB2C592590257E00545EAB /* Debug-ApplePleaseFixFB19282108 */,
 				BBFB2C5A2590257E00545EAB /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		07DF0FD5CBC5FC3B549C715A /* Build configuration list for PBXNativeTarget "iSHLoopbackTunnel-ARM64" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				73E0BCC20EE91A6E8EB2689C /* Debug-ApplePleaseFixFB19282108 */,
+				033F3103F9281F0E725F6414 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		ADE53343B3B22D6CFF93087E /* Build configuration list for PBXNativeTarget "iSHJITHelper-ARM64" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7275D8027866C332532A98E3 /* Debug-ApplePleaseFixFB19282108 */,
+				A67DA9FC72FADCF626401FBF /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

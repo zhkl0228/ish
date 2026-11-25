@@ -23,6 +23,7 @@
 #import "MainMenu.h"
 #import "ClipboardStore.h"
 #import "BackgroundKeepAlive.h"
+#import "BuiltinJIT.h"
 #import "NSObject+SaneKVO.h"
 #import "Roots.h"
 #import "TerminalViewController.h"
@@ -347,7 +348,10 @@ static void ish_install_anon_cap(void) {
         return YES;
 
     bootError = [self boot];
-
+    // iSH runs from here as it does without the JIT; it translates once the
+    // built-in JIT, if enabled in Settings, has its code region
+    if (bootError == 0)
+        [BuiltinJIT.shared startIfEnabled];
 
     return YES;
 }

@@ -236,6 +236,20 @@ ninja -C build-arm64-release
 ./build-arm64-release/ish -f ./alpine-arm64-fakefs /bin/sh
 ```
 
+### Built-in JIT
+
+The iSH-ARM64 app embeds two extensions for it: `iSHJITHelper-ARM64` (`app/JITHelper`), which
+attaches StikJIT's debugger to iSH, gives it its code region and lets it go, and
+`iSHLoopbackTunnel-ARM64` (`app/LoopbackTunnel`), the loopback tunnel StikJIT reaches the device's
+own services through. StikJIT is built from source with `app/StikJIT/patches`: run
+`app/StikJIT/build.sh` once before building the app in Xcode (it needs `xcodegen`; CI runs it).
+
+In Settings → JIT, import the device's pairing file (made once on a computer with `idevice_pair`)
+and enable it, now or as iSH starts. iSH starts without it, and the programs compiled once the
+helper has given the JIT its code region run as native code (`/proc/ish/jit` says where the region
+came from, or why there is none). It needs Developer Mode, the app signed with a development
+profile (`get-task-allow`), and the Network Extensions capability for the app and its tunnel.
+
 ### Tests
 
 ```bash

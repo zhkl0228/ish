@@ -7,6 +7,8 @@
 
 #import "AboutViewController.h"
 #import "AppDelegate.h"
+#import "BuiltinJIT.h"
+#import "BuiltinJITViewController.h"
 #import "CurrentRoot.h"
 #import "AppGroup.h"
 #import "Roots.h"
@@ -24,6 +26,7 @@
 @property (weak, nonatomic) IBOutlet UITextField *claudeProxyField;
 @property (weak, nonatomic) IBOutlet UITableViewCell *claudeMemoryCell;
 @property (weak, nonatomic) IBOutlet UITableViewCell *removeClaudeMemoryCell;
+@property (weak, nonatomic) IBOutlet UITableViewCell *jitCell;
 
 @property (weak, nonatomic) IBOutlet UITableViewCell *sendFeedback;
 @property (weak, nonatomic) IBOutlet UITableViewCell *openGithub;
@@ -75,6 +78,7 @@
         });
     }];
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(_updateUI:) name:FsUpdatedNotification object:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(_updateUI:) name:BuiltinJITChangedNotification object:nil];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -108,6 +112,7 @@
     self.claudeProxyField.text = UserPreferences.shared.claudeProxy;
     self.claudeMemoryCell.detailTextLabel.text = UserPreferences.shared.claudeMemory[@"name"] ?: @"Not imported";
     self.removeClaudeMemoryCell.hidden = UserPreferences.shared.claudeMemory == nil;
+    self.jitCell.detailTextLabel.text = BuiltinJIT.shared.translating ? @"Translating" : BuiltinJIT.shared.status;
 
     self.upgradeApkCell.userInteractionEnabled = FsNeedsRepositoryUpdate();
     self.upgradeApkLabel.enabled = FsNeedsRepositoryUpdate();
@@ -130,6 +135,8 @@
         [self importClaudeMemory];
     } else if (cell == self.removeClaudeMemoryCell) {
         [self confirmRemoveClaudeMemory];
+    } else if (cell == self.jitCell) {
+        [self.navigationController pushViewController:[BuiltinJITViewController new] animated:YES];
     } else if (cell == self.exportContainerCell) {
         // copy the files to the app container so they can be extracted from iTunes file sharing
         NSURL *container = ContainerURL();
