@@ -5,7 +5,9 @@
 //  What the meters show (MonitorStripView) and their details
 //  (MonitorDetailViewController): the device's CPUs and load, the app's
 //  memory and the kernel's brake on it, how hot the device runs. Read once a
-//  second while started, each reading told (MonitorSamplerDidReadNotification).
+//  second while one of its views has it started, each reading told
+//  (MonitorSamplerDidReadNotification): the meters in the terminal's margin
+//  and in the window's column right of it read one sampler, and say the same.
 //
 
 #import <Foundation/Foundation.h>
@@ -44,14 +46,21 @@ NS_ASSUME_NONNULL_BEGIN
 @end
 
 extern NSNotificationName const MonitorSamplerDidReadNotification;
+// Readings in cpuHistory: a minute's
+extern const NSUInteger kMonitorHistoryLength;
 
 @interface MonitorSampler : NSObject
 
 // The last reading; nil before the first
 @property (readonly, nullable) MonitorReading *reading;
+// The CPUs' busy share of the last minute's counted readings, oldest first
+// (at most kMonitorHistoryLength): the column's line (MonitorColumnView).
+// Emptied when the sampler stops.
+@property (readonly) NSArray<NSNumber *> *cpuHistory;
 
-// Reads now, then once a second until stopped; started again, the CPUs are
-// counted from its first reading, not across the time it was stopped
+// Reads now, then once a second, while any of its users has it started: each
+// start is paired with a stop, the last stop stops it. Started again, the CPUs
+// are counted from its first reading, not across the time it was stopped.
 - (void)start;
 - (void)stop;
 

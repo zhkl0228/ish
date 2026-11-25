@@ -32,17 +32,35 @@ extern const double kMonitorMemoryBrake;
 @property (readonly) UIView *fill;
 @end
 
-@interface MonitorStripView : UIView
+// A view of a sampler's readings: the meters in the terminal's margin
+// (MonitorStripView), and in the window's column right of the terminal
+// (MonitorColumnView), which read one sampler. It has the sampler read while
+// it is not hidden, in a window whose scene is in the foreground (not behind
+// another app, or the app in the background, where it may run on: Keep
+// Running in Background), and shows each reading (showReading:).
+@interface MonitorView : UIView
+
+- (instancetype)initWithSampler:(MonitorSampler *)sampler;
 
 // The theme's foreground, which the meters are drawn in, as the tab strip is
 @property (nonatomic) UIColor *foregroundColor;
 @property (readonly) MonitorSampler *sampler;
 // Where the meters are, in its own points: what their details point at
 @property (readonly) CGRect metersFrame;
-// VoiceOver's activation of it (a tap is the terminal's: TerminalView's
-// marginTapped)
+// Its details asked for: VoiceOver's activation of it, and a tap
 @property (copy, nullable) void (^activated)(void);
 
+// For its subclasses: a reading to show, each as the sampler reads and the
+// last one as it starts reading; and its colors, as the reading and
+// foregroundColor have them
+- (void)showReading:(MonitorReading *)reading;
+- (void)applyColors;
+
+@end
+
+// Touches go through it to the terminal, whose tap on it is its activation
+// (TerminalView's marginTapped)
+@interface MonitorStripView : MonitorView
 @end
 
 NS_ASSUME_NONNULL_END

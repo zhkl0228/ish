@@ -8,6 +8,7 @@
 #include "kernel/mm.h"
 
 NSNotificationName const MonitorSamplerDidReadNotification = @"MonitorSamplerDidReadNotification";
+const NSUInteger kMonitorHistoryLength = 60;
 
 // The most CPUs counted one by one
 #define MAX_CORES 64
@@ -47,6 +48,9 @@ static struct ticks_between TicksBetween(struct cpu_usage last, struct cpu_usage
 
 @implementation MonitorSampler {
     NSTimer *_timer;
+    // Its users that have it started (start and stop in pairs)
+    unsigned _users;
+    NSMutableArray<NSNumber *> *_cpuHistory;
     // The last reading's ticks, all the CPUs' and each one's; none counted
     // yet while _hasTicks is NO and _lastCoreCount 0
     BOOL _hasTicks;
@@ -55,12 +59,22 @@ static struct ticks_between TicksBetween(struct cpu_usage last, struct cpu_usage
     unsigned _lastCoreCount;
 }
 
+- (instancetype)init {
+    if (self = [super init])
+        _cpuHistory = [NSMutableArray new];
+    return self;
+}
+
 - (void)dealloc {
     [_timer invalidate];
 }
 
+- (NSArray<NSNumber *> *)cpuHistory {
+    return [_cpuHistory copy];
+}
+
 - (void)start {
-    if (_timer != nil)
+    if (_users++ > 0)
         return;
     [self read];
     __weak typeof(self) weakSelf = self;
@@ -73,10 +87,15 @@ static struct ticks_between TicksBetween(struct cpu_usage last, struct cpu_usage
 }
 
 - (void)stop {
+    if (_users == 0)
+        [NSException raise:NSInternalInconsistencyException format:@"MonitorSampler stopped more often than started"];
+    if (--_users > 0)
+        return;
     [_timer invalidate];
     _timer = nil;
     _hasTicks = NO;
     _lastCoreCount = 0;
+    [_cpuHistory removeAllObjects];
 }
 
 - (void)read {
@@ -101,6 +120,9 @@ static struct ticks_between TicksBetween(struct cpu_usage last, struct cpu_usage
         reading.cpuUser = (double) all.user / total;
         reading.cpuSystem = (double) all.system / total;
         reading.cpuBusy = (double) (all.user + all.system) / total;
+        [_cpuHistory addObject:@(reading.cpuBusy)];
+        if (_cpuHistory.count > kMonitorHistoryLength)
+            [_cpuHistory removeObjectAtIndex:0];
     }
     _lastTicks = ticks;
     _hasTicks = YES;

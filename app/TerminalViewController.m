@@ -24,6 +24,7 @@
 #import "ClipboardSettingsViewController.h"
 #import "ClipboardUI.h"
 #import "MonitorStripView.h"
+#import "MonitorColumnView.h"
 #import "MonitorDetailViewController.h"
 #include "kernel/init.h"
 #include "kernel/task.h"
@@ -80,8 +81,18 @@
 // Find (⌘F), created the first time it is shown; hidden while not finding
 @property (nullable) FindBar *findBar;
 
-// The meters, in what the terminal leaves right of its last column
+// The meters, in what the terminal leaves right of its last column, and in
+// the window's column right of the terminal where there is one; one sampler
+// reads for both
+@property MonitorSampler *monitorSampler;
 @property MonitorStripView *monitorStrip;
+@property MonitorColumnView *monitorColumn;
+// The column's meters under the status bar (top), or at the column's bottom
+// where it is not known where the status bar ends (updateMonitorColumn)
+@property NSLayoutConstraint *monitorColumnTop;
+@property NSLayoutConstraint *monitorColumnBottom;
+// The layout updateMonitorColumn last logged
+@property (nullable) NSString *monitorColumnLayout;
 
 @property BOOL ignoreKeyboardMotion;
 // How much of the view's bottom the keyboard and the keys over it cover (0
@@ -293,12 +304,32 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
     ]];
     [self tabsDidChange];
 
-    // The meters, while Settings or the View menu have them shown; a tap on
-    // them (VoiceOver's activation) shows their details
-    self.monitorStrip = [[MonitorStripView alloc] initWithFrame:CGRectZero];
+    // The meters, while Settings or the View menu have them shown: in what
+    // the terminal leaves right of its last column, and in the column right
+    // of the terminal where the window has one (updateMonitorColumn). A tap
+    // on them (VoiceOver's activation) shows their details.
+    self.monitorSampler = [MonitorSampler new];
+    self.monitorStrip = [[MonitorStripView alloc] initWithSampler:self.monitorSampler];
+    MonitorColumnView *column = [[MonitorColumnView alloc] initWithSampler:self.monitorSampler];
+    column.translatesAutoresizingMaskIntoConstraints = NO;
+    column.hidden = YES;
+    [self.view addSubview:column];
+    self.monitorColumn = column;
+    UILayoutGuide *safe = self.view.safeAreaLayoutGuide;
+    self.monitorColumnTop = [column.topAnchor constraintEqualToAnchor:self.view.topAnchor];
+    self.monitorColumnBottom = [column.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor constant:-8];
+    [NSLayoutConstraint activateConstraints:@[
+        [column.leadingAnchor constraintEqualToAnchor:safe.trailingAnchor],
+        [column.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [column.bottomAnchor constraintLessThanOrEqualToAnchor:safe.bottomAnchor constant:-8],
+        self.monitorColumnTop,
+    ]];
     __weak typeof(self) weakSelf = self;
     self.termView.marginTapped = self.monitorStrip.activated = ^{
-        [weakSelf showMeterDetails];
+        [weakSelf showMeterDetailsFrom:weakSelf.monitorStrip];
+    };
+    column.activated = ^{
+        [weakSelf showMeterDetailsFrom:weakSelf.monitorColumn];
     };
     [self applyShowMeters];
 
@@ -383,6 +414,10 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
     [UserPreferences.shared observe:@[@"hideStatusBar"] options:0 owner:self usingBlock:^(typeof(self) self) {
         dispatch_async(dispatch_get_main_queue(), ^{
             [self setNeedsStatusBarAppearanceUpdate];
+            // the column's meters under the status bar, or at its top
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self updateMonitorColumn];
+            });
         });
     }];
     [UserPreferences.shared observe:@[@"showMeters"] options:0 owner:self usingBlock:^(typeof(self) self) {
@@ -444,6 +479,8 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
 - (void)viewDidAppear:(BOOL)animated {
     [AppDelegate maybeOfferRootResetOnViewController:self];
     [super viewDidAppear:animated];
+    // the status bar's frame is the window's scene's, which it has now
+    [self updateMonitorColumn];
 }
 
 - (void)startNewSession {
@@ -837,6 +874,7 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
                       textColor:foreground];
         }
         self.monitorStrip.foregroundColor = foreground;
+        self.monitorColumn.foregroundColor = foreground;
         // the gaps between the keys and the rest of the row
         self.barView.backgroundColor = self.view.backgroundColor;
     }];
@@ -979,6 +1017,7 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
 - (void)viewSafeAreaInsetsDidChange {
     [super viewSafeAreaInsetsDidChange];
     [self applyBottomPad];
+    [self updateMonitorColumn];
 }
 
 - (void)setHasExternalKeyboard:(BOOL)hasExternalKeyboard {
@@ -999,6 +1038,8 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
 }
 
 - (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    [super traitCollectionDidChange:previousTraitCollection];
+    [self updateMonitorColumn];
     // Hack to resolve a layering mismatch between the UI and preferences.
     if (@available(iOS 12.0, *)) {
         if (previousTraitCollection.userInterfaceStyle != self.traitCollection.userInterfaceStyle) {
@@ -1553,14 +1594,59 @@ static NSString *ShellQuoted(NSString *string) {
 // room they had stays the scroll bar's: the terminal keeps its columns.
 - (void)applyShowMeters {
     self.termView.marginView = UserPreferences.shared.showMeters ? self.monitorStrip : nil;
+    [self updateMonitorColumn];
 }
 
-// In a popover pointing at them, as they read
-- (void)showMeterDetails {
-    MonitorStripView *strip = self.monitorStrip;
-    MonitorDetailViewController *details = [[MonitorDetailViewController alloc] initWithSampler:strip.sampler
-                                                                                     sourceView:strip
-                                                                                     sourceRect:strip.metersFrame];
+// A phone that folds has the window leave a column right of the terminal for
+// its status bar, folded or not, its room under the status bar empty: the
+// safe area's right inset, wide, with little or none on the left (a phone on
+// its side leaves the same room on both sides, round its camera). The meters
+// there go under the status bar, as its frame (the window's) says where it
+// ends; with it hidden, at the column's top, under the tab bar; with a frame
+// that is not in the column, at its bottom, clear of what may be at its top
+// (logged with the rest, to place them by). Called as the safe area, the
+// traits and the status bar change, never from a layout pass: a change it
+// made laid out again, which called it again.
+- (void)updateMonitorColumn {
+    UIView *view = self.view;
+    UIEdgeInsets insets = view.safeAreaInsets;
+    CGSize size = view.bounds.size;
+    BOOL column = UserPreferences.shared.showMeters && insets.right >= 44 && insets.left < insets.right / 2;
+
+    UIStatusBarManager *statusBar = view.window.windowScene.statusBarManager;
+    BOOL statusHidden = statusBar == nil || statusBar.statusBarHidden;
+    CGRect status = statusHidden ? CGRectNull : [view convertRect:statusBar.statusBarFrame fromView:nil];
+    BOOL statusInColumn = !statusHidden && CGRectGetMinX(status) >= size.width - insets.right - 1 &&
+        CGRectGetMaxY(status) > 0 && CGRectGetMaxY(status) < size.height / 2;
+    BOOL atBottom = column && !statusHidden && !statusInColumn;
+    CGFloat top = statusInColumn ? CGRectGetMaxY(status) : MAX(insets.top, CGRectGetMaxY(self.tabBar.frame));
+
+    NSString *layout = [NSString stringWithFormat:@"%@: safe area insets %@, view %@, status bar %@%@",
+                        !column ? @"none" : atBottom ? @"at the column's bottom" : [NSString stringWithFormat:@"from %.0f", top + 8],
+                        NSStringFromUIEdgeInsets(insets), NSStringFromCGSize(size),
+                        statusHidden ? @"hidden" : NSStringFromCGRect(status), statusInColumn ? @" (in the column)" : @""];
+    if (![layout isEqualToString:self.monitorColumnLayout]) {
+        self.monitorColumnLayout = layout;
+        NSLog(@"Meters' column: %@", layout);
+    }
+
+    if (self.monitorColumn.hidden != !column)
+        self.monitorColumn.hidden = !column;
+    if (!column)
+        return;
+    if (self.monitorColumnTop.constant != top + 8)
+        self.monitorColumnTop.constant = top + 8;
+    if (self.monitorColumnTop.active != !atBottom)
+        self.monitorColumnTop.active = !atBottom;
+    if (self.monitorColumnBottom.active != atBottom)
+        self.monitorColumnBottom.active = atBottom;
+}
+
+// In a popover pointing at the meters it was asked from, as they read
+- (void)showMeterDetailsFrom:(MonitorView *)meters {
+    MonitorDetailViewController *details = [[MonitorDetailViewController alloc] initWithSampler:self.monitorSampler
+                                                                                     sourceView:meters
+                                                                                     sourceRect:meters.metersFrame];
     [self presentViewController:details animated:YES completion:nil];
 }
 

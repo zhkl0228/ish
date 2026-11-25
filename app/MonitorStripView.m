@@ -69,6 +69,107 @@ NSString *MonitorThermalName(NSProcessInfoThermalState state) {
 
 @end
 
+@implementation MonitorView {
+    // The sampler started for it (updateSampling)
+    BOOL _sampling;
+    // Its window's scene in the foreground, as the scene's notifications say
+    BOOL _sceneForeground;
+}
+
+- (instancetype)initWithSampler:(MonitorSampler *)sampler {
+    if (self = [super initWithFrame:CGRectZero]) {
+        _sampler = sampler;
+        _foregroundColor = UIColor.labelColor;
+        [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(samplerDidRead:)
+                                                   name:MonitorSamplerDidReadNotification object:sampler];
+    }
+    return self;
+}
+
+- (void)dealloc {
+    if (_sampling)
+        [_sampler stop];
+}
+
+- (void)setForegroundColor:(UIColor *)foregroundColor {
+    _foregroundColor = foregroundColor;
+    [self applyColors];
+}
+
+- (void)showReading:(MonitorReading *)reading {
+}
+
+- (void)applyColors {
+}
+
+- (CGRect)metersFrame {
+    return self.bounds;
+}
+
+- (BOOL)accessibilityActivate {
+    self.activated();
+    return YES;
+}
+
+#pragma mark Reading
+
+- (void)didMoveToWindow {
+    [super didMoveToWindow];
+    NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
+    [center removeObserver:self name:UISceneWillEnterForegroundNotification object:nil];
+    [center removeObserver:self name:UISceneDidEnterBackgroundNotification object:nil];
+    // (a scene's activationState of nil would be 0: ForegroundActive)
+    UIWindowScene *scene = self.window.windowScene;
+    _sceneForeground = scene != nil && (scene.activationState == UISceneActivationStateForegroundActive ||
+                                        scene.activationState == UISceneActivationStateForegroundInactive);
+    if (scene != nil) {
+        [center addObserver:self selector:@selector(sceneWillEnterForeground:)
+                       name:UISceneWillEnterForegroundNotification object:scene];
+        [center addObserver:self selector:@selector(sceneDidEnterBackground:)
+                       name:UISceneDidEnterBackgroundNotification object:scene];
+    }
+    [self updateSampling];
+}
+
+- (void)setHidden:(BOOL)hidden {
+    [super setHidden:hidden];
+    [self updateSampling];
+}
+
+- (void)sceneWillEnterForeground:(NSNotification *)notification {
+    _sceneForeground = YES;
+    [self updateSampling];
+}
+
+- (void)sceneDidEnterBackground:(NSNotification *)notification {
+    _sceneForeground = NO;
+    [self updateSampling];
+}
+
+// Started and stopped in pairs (MonitorSampler's start): one start while it
+// shows, in the foreground
+- (void)updateSampling {
+    BOOL sampling = self.window != nil && _sceneForeground && !self.hidden;
+    if (sampling == _sampling)
+        return;
+    _sampling = sampling;
+    if (!sampling) {
+        [self.sampler stop];
+        return;
+    }
+    [self.sampler start];
+    // the last reading at once, where another view had the sampler reading
+    MonitorReading *reading = self.sampler.reading;
+    if (reading != nil)
+        [self showReading:reading];
+}
+
+- (void)samplerDidRead:(NSNotification *)notification {
+    [self showReading:self.sampler.reading];
+}
+
+@end
+
 @interface MonitorStripView ()
 
 @property UIStackView *stack;
@@ -84,17 +185,13 @@ NSString *MonitorThermalName(NSProcessInfoThermalState state) {
 
 @implementation MonitorStripView
 
-- (instancetype)initWithFrame:(CGRect)frame {
-    if (self = [super initWithFrame:frame]) {
+- (instancetype)initWithSampler:(MonitorSampler *)sampler {
+    if (self = [super initWithSampler:sampler]) {
         self.userInteractionEnabled = NO;
         self.clipsToBounds = YES;
         self.isAccessibilityElement = YES;
         self.accessibilityTraits = UIAccessibilityTraitButton | UIAccessibilityTraitUpdatesFrequently;
         self.accessibilityHint = @"Shows the CPUs, the memory and the heat in detail.";
-        _foregroundColor = UIColor.labelColor;
-        _sampler = [MonitorSampler new];
-        [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(samplerDidRead:)
-                                                   name:MonitorSamplerDidReadNotification object:_sampler];
 
         UIStackView *stack = [UIStackView new];
         stack.axis = UILayoutConstraintAxisVertical;
@@ -172,16 +269,6 @@ NSString *MonitorThermalName(NSProcessInfoThermalState state) {
     return self.stack.frame;
 }
 
-- (BOOL)accessibilityActivate {
-    self.activated();
-    return YES;
-}
-
-- (void)setForegroundColor:(UIColor *)foregroundColor {
-    _foregroundColor = foregroundColor;
-    [self applyColors];
-}
-
 // As the last reading has them (none before the first: nominal, empty)
 - (void)applyColors {
     MonitorReading *reading = self.sampler.reading;
@@ -195,38 +282,7 @@ NSString *MonitorThermalName(NSProcessInfoThermalState state) {
     self.heatIcon.tintColor = MonitorThermalColor(reading.thermalState, [foreground colorWithAlphaComponent:0.35]);
 }
 
-#pragma mark Reading
-
-// Read while the window's scene is in the foreground, not behind another app
-// or with the app in the background (where it may run on, Keep Running in
-// Background)
-- (void)didMoveToWindow {
-    [super didMoveToWindow];
-    NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
-    [center removeObserver:self name:UISceneWillEnterForegroundNotification object:nil];
-    [center removeObserver:self name:UISceneDidEnterBackgroundNotification object:nil];
-    UIWindowScene *scene = self.window.windowScene;
-    if (scene == nil) {
-        [self.sampler stop];
-        return;
-    }
-    [center addObserver:self selector:@selector(sceneWillEnterForeground:) name:UISceneWillEnterForegroundNotification object:scene];
-    [center addObserver:self selector:@selector(sceneDidEnterBackground:) name:UISceneDidEnterBackgroundNotification object:scene];
-    if (scene.activationState == UISceneActivationStateForegroundActive ||
-        scene.activationState == UISceneActivationStateForegroundInactive)
-        [self.sampler start];
-}
-
-- (void)sceneWillEnterForeground:(NSNotification *)notification {
-    [self.sampler start];
-}
-
-- (void)sceneDidEnterBackground:(NSNotification *)notification {
-    [self.sampler stop];
-}
-
-- (void)samplerDidRead:(NSNotification *)notification {
-    MonitorReading *reading = self.sampler.reading;
+- (void)showReading:(MonitorReading *)reading {
     int cpu = (int) round(reading.cpuBusy * 100);
     int memory = (int) round(reading.memoryFraction * 100);
     // the CPUs as they were until counted again
