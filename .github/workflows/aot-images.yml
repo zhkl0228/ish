@@ -1,7 +1,8 @@
 # The app's AOT images: recorded and published again when they no longer serve
 # what the app runs (benchmark/aojit/ci_app_images.sh), then the new lock,
-# app/AOTImages.xcconfig and ish-install's versions committed to master, and the
-# app's build (ci.yml) run on it. A pull request instead only when that commit
+# app/AOTImages.xcconfig and ish-install's versions committed to master with the
+# app's build number one more, and the app's build (ci.yml) run on it, which
+# publishes its ipa as a new build. A pull request instead only when that commit
 # cannot go onto master as it is now (a conflict, or master protected).
 #
 # Needs the secret AOT_SSH_KEY (the upload key of user ish-aot on hk.gzmtx.cn,
@@ -79,6 +80,12 @@ jobs:
             echo "nothing published"
             exit 0
           fi
+          # the app that links them is a new build: its number (the extension's
+          # with it) one more, so that ci.yml publishes its ipa, ipa-<version>-<build>
+          build=$(($(sed -n 's/^CURRENT_PROJECT_VERSION = //p' app/AppARM64.xcconfig) + 1))
+          sed -i "s/^CURRENT_PROJECT_VERSION = .*/CURRENT_PROJECT_VERSION = $build/" \
+              app/AppARM64.xcconfig app/FileProviderARM64.xcconfig
+          files="$files app/AppARM64.xcconfig app/FileProviderARM64.xcconfig"
           set=$(python3 -c "import json; print(json.load(open('benchmark/aojit/app-images.lock.json'))['set'])")
           summary=$(python3 -c "
           import json
@@ -89,7 +96,8 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A -- $files
-          git commit -q -m "aot: the app's images, set $set" -m "Recorded on $summary (benchmark/aojit/ci_app_images.sh)."
+          git commit -q -m "aot: the app's images, set $set" \
+              -m "Recorded on $summary (benchmark/aojit/ci_app_images.sh). The app's build $build links them."
           # master may have moved in the hours the recording took. A commit onto
           # it as it is now, or else a pull request: nothing recorded is lost
           if git pull -q --rebase origin master && git push -q origin HEAD:master; then
@@ -101,4 +109,4 @@ jobs:
           git switch -c "aot/$set"
           git push -q origin "aot/$set"
           gh pr create --base master --head "aot/$set" --title "aot: the app's images, set $set" \
-              --body "Recorded on $summary, and published to hk.gzmtx.cn/ish-aot/$set. Not committed to master, which it could not go onto as it is now: merging makes the app link them and ish-install install those versions."
+              --body "Recorded on $summary, and published to hk.gzmtx.cn/ish-aot/$set. Not committed to master, which it could not go onto as it is now: merging makes the app's build $build link them and ish-install install those versions."

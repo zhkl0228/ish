@@ -249,7 +249,9 @@ minirootfs. A push to master publishes the ipa and its dSYMs as a release,
 `ipa-<version>-<build>`, when that version is not published yet (`MARKETING_VERSION` and
 `CURRENT_PROJECT_VERSION` in `app/AppARM64.xcconfig`, which `app/FileProviderARM64.xcconfig`
 must match), or again, replacing it, when a commit of the push has `[ipa]` in its message
-(or the workflow is run by hand with `force`); the newest five are kept, and the newest is at
+(or the workflow is run by hand with `force`). A set of AOT images CI commits
+(`.github/workflows/aot-images.yml`) raises the build by one, so its app is published as a new
+build. The newest five are kept, and the newest is at
 `releases/latest/download/iSH-ARM64-unsigned.ipa`. It is unsigned: sign it with your own
 developer account to install it.
 
