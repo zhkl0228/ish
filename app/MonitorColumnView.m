@@ -77,6 +77,11 @@
 
 static const CGFloat kGaugeSize = 44;
 static const CGFloat kGaugeLine = 4;
+// How far left of the column's middle the status bar's battery is: the gauges
+// centered in the column were 5.7 points right of it folded and 5.8 unfolded
+// (the phone's screenshots, gauges and battery side by side): the screen's
+// rounded edge keeps the status bar off its right
+static const CGFloat kStatusInset = 6;
 
 @implementation MonitorGaugeView {
     CAShapeLayer *_track;
@@ -181,9 +186,9 @@ static UIColor *GaugeColor(double fraction) {
         [self addSubview:stack];
         self.stack = stack;
 
-        self.cpuGauge = [self addGauge:@"CPU"];
-        // The line gives way first where the column has not the room (the
-        // keyboard up under it), to nothing; the clip keeps the rest off the keys
+        // The CPU's last minute over its gauge, first under the status bar. The
+        // line gives way first where the column has not the room (the keyboard
+        // up under it), to nothing; the clip keeps the rest off the keys.
         MonitorSparkView *line = [MonitorSparkView new];
         line.translatesAutoresizingMaskIntoConstraints = NO;
         NSLayoutConstraint *lineHeight = [line.heightAnchor constraintEqualToConstant:14];
@@ -193,8 +198,10 @@ static UIColor *GaugeColor(double fraction) {
             lineHeight,
         ]];
         [stack addArrangedSubview:line];
-        [stack setCustomSpacing:12 afterView:line];
+        [stack setCustomSpacing:6 afterView:line];
         self.cpuLine = line;
+        self.cpuGauge = [self addGauge:@"CPU"];
+        [stack setCustomSpacing:10 afterView:self.cpuGauge];
         self.memoryGauge = [self addGauge:@"MEM"];
         [stack setCustomSpacing:8 afterView:self.memoryGauge];
 
@@ -216,14 +223,15 @@ static UIColor *GaugeColor(double fraction) {
         self.heatIcon = icon;
         self.heatLabel = heat;
 
-        // centered in the column; as tall as the meters are, which the column's
-        // constraints keep under the status bar and above the keys
+        // Under the status bar's battery, kStatusInset left of the column's
+        // middle as the status bar is; as tall as the meters are, which the
+        // column's constraints keep under the status bar and above the keys
         // (TerminalViewController)
         [NSLayoutConstraint activateConstraints:@[
             [stack.topAnchor constraintEqualToAnchor:self.topAnchor],
             [stack.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
             [stack.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
-            [stack.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
+            [stack.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-2 * kStatusInset],
         ]];
         [self applyColors];
     }

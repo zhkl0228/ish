@@ -1611,12 +1611,18 @@ static NSString *ShellQuoted(NSString *string) {
 // frame (the window's) says where it ends, where that is the column's: from
 // at most 8 points left of the column to the screen's right edge, and not most
 // of its height. With the status bar hidden, at the column's top, under the
-// tab bar. With a frame that says nothing of where it ends, kMetersStatusEnd
-// down. Each layout is logged, and kept for /proc/ish/defaults/meters_column,
+// tab bar. With a frame that says nothing of where it ends, where the phone's
+// screenshots have it end (kMetersStatusEndFolded, kMetersStatusEndUnfolded).
+// Each layout is logged, and kept for /proc/ish/defaults/meters_column,
 // with what it was laid out by, to place them by on the phone. Called as the
 // safe area, the traits and the status bar change, never from a layout pass: a
 // change it made laid out again, which called it again.
-static const CGFloat kMetersStatusEnd = 160;
+// Where the status bar's dots under its battery end, as the phone's
+// screenshots have them: 151 points down folded (the screen 466 wide), where
+// its camera keeps the status bar lower, and 108 unfolded (951 wide)
+static const CGFloat kMetersStatusEndFolded = 151;
+static const CGFloat kMetersStatusEndUnfolded = 108;
+static const CGFloat kMetersUnfoldedWidth = 700;
 - (void)updateMonitorColumn {
     UIView *view = self.view;
     UIEdgeInsets insets = view.safeAreaInsets;
@@ -1637,8 +1643,10 @@ static const CGFloat kMetersStatusEnd = 160;
         top = CGRectGetMaxY(status);
         by = @"under the status bar";
     } else {
-        top = kMetersStatusEnd;
-        by = @"the status bar's frame not the column's: an estimate";
+        BOOL unfolded = size.width >= kMetersUnfoldedWidth;
+        top = unfolded ? kMetersStatusEndUnfolded : kMetersStatusEndFolded;
+        by = unfolded ? @"the status bar's frame not the column's: as measured unfolded"
+                      : @"the status bar's frame not the column's: as measured folded";
     }
 
     NSString *layout = [NSString stringWithFormat:@"%@ (%@); safe area insets %@, view %@, status bar %@",

@@ -8,8 +8,8 @@
 //  battery, room for more than the terminal's margin has (MonitorStripView),
 //  whose sampler it reads. The CPU and the memory, each a gauge (a ring open
 //  at its bottom, in green, orange past 75%, red past 90%, the percent in its
-//  middle, its name in the opening), the CPU's last minute as a line under
-//  its gauge; the heat, by name, while it is more than nominal. A tap
+//  middle, its name in the opening), the CPU's last minute as a line over
+//  them; the heat, by name, while it is more than nominal. A tap
 //  (VoiceOver's activation) shows their details (MonitorDetailViewController).
 //
 
