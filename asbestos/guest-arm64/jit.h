@@ -31,6 +31,14 @@
 // into an image that a target links in (aot.h). A build with -Djit_emit=false
 // runs only such images and never maps executable memory; ISH_JIT_AOT_ONLY=1
 // does the same in a JIT build.
+//
+// iOS runs the code region only for a process a debugger has had
+// (CS_DEBUGGED). From iOS 26, on TXM devices (A15 and M2 and later), only one
+// the debugger allocated: with a debugger attached as it starts, iSH asks for
+// it by iOS 26's JIT protocol (jit.c, "JIT26": StikDebug's scripts answer
+// it), then lets the debugger go. ISH_JIT_ASK_DEBUGGER=0 does not ask (lldb,
+// which does not answer: Xcode's schemes set it). /proc/ish/jit says where
+// the region came from, or why there is none.
 
 #ifdef ISH_JIT
 

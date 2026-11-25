@@ -8,6 +8,10 @@
 #include <TargetConditionals.h>
 #include <libkern/OSCacheControl.h>
 #include <mach/mach.h>
+#include <mach/mach_error.h>
+#if !TARGET_OS_OSX
+#include <sys/sysctl.h>
+#endif
 #else
 // Linux maps the code region twice from one memfd, writable and executable
 // (map_dual), as iOS does with vm_remap: no MAP_JIT, no debugger to ask.
@@ -15,6 +19,7 @@
 #define TARGET_OS_OSX 0
 #endif
 #include <errno.h>
+#include <stdarg.h>
 #include <unistd.h>
 #include <dlfcn.h>
 #include <fnmatch.h>
@@ -107,6 +112,17 @@ static intptr_t rw_delta; // writable view - executable view
 static bool dual_map;
 static _Atomic size_t region_used;
 static _Atomic bool region_full;   // an allocation failed: what came after runs as gadgets
+// Where the region came from, or why there is none: /proc/ish/jit says it
+static char region_how[320];
+
+static void region_none(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+static void region_none(const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(region_how, sizeof(region_how), fmt, args);
+    va_end(args);
+    fprintf(stderr, "⚠️  JIT: no code region: %s\n", region_how);
+}
 
 #ifndef ISH_JIT_NO_EMIT   // AOT-only builds never map executable memory
 #if defined(__APPLE__) && !TARGET_OS_OSX
@@ -124,23 +140,123 @@ extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 static bool may_run_written_code(void) {
     uint32_t flags = 0;
     if (csops(getpid(), CS_OPS_STATUS, &flags, sizeof(flags)) != 0) {
-        fprintf(stderr, "⚠️  JIT: csops: %s, taken for no debugger\n", strerror(errno));
+        region_none("csops: %s, taken for no debugger", strerror(errno));
         return false;
     }
     if (!(flags & CS_DEBUGGED)) {
-        fprintf(stderr, "⚠️  JIT: no debugger attached: iOS runs no code written at run time\n");
+        region_none("no debugger has had iSH (CS_DEBUGGED): iOS runs no code written at run time");
         return false;
     }
     return true;
+}
+
+// Whether a debugger has the process now (P_TRACED), where CS_DEBUGGED says
+// one had it: it stays once the debugger detached
+static bool debugger_attached(void) {
+    struct kinfo_proc info;
+    size_t size = sizeof(info);
+    int mib[] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()};
+    if (sysctl(mib, 4, &info, &size, NULL, 0) != 0) {
+        fprintf(stderr, "⚠️  JIT: sysctl kern.proc.pid: %s, taken for no debugger attached\n", strerror(errno));
+        return false;
+    }
+    return (info.kp_proc.p_flag & P_TRACED) != 0;
+}
+
+// The protection all of [addr, addr + size) has, as vm_region reads it back:
+// what an mprotect left, which TXM (iOS 26 and later, on A15 and M2 and
+// later) does not make executable however it answers. VM_PROT_NONE where
+// some of the range is not mapped.
+static vm_prot_t range_protection(vm_address_t addr, vm_size_t size) {
+    vm_prot_t prot = VM_PROT_ALL;
+    vm_address_t at = addr;
+    while (at < addr + size) {
+        vm_address_t start = at;
+        vm_size_t len = 0;
+        vm_region_basic_info_data_64_t info;
+        mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
+        mach_port_t object;
+        if (vm_region_64(mach_task_self(), &start, &len, VM_REGION_BASIC_INFO_64, (vm_region_info_t) &info, &count,
+                         &object) != KERN_SUCCESS || start > at)
+            return VM_PROT_NONE;
+        prot &= info.protection;
+        at = start + len;
+    }
+    return prot;
+}
+
+// iOS 26's JIT protocol, which the debugger iSH is launched under answers
+// (StikDebug's scripts, universal.js; StikJIT): brk #0xf00d, the command in
+// x16, its arguments in x0 and x1, the answer in x0; the debugger goes on
+// past the brk. One without a debugger to answer kills the process (SIGTRAP).
+#define JIT26_DETACH 0
+#define JIT26_PREPARE_REGION 1
+static uint64_t jit26(uint64_t command, uint64_t arg0, uint64_t arg1) {
+    register uint64_t x0 __asm__("x0") = arg0;
+    register uint64_t x1 __asm__("x1") = arg1;
+    register uint64_t x16 __asm__("x16") = command;
+    __asm__ volatile("brk #0xf00d" : "+r"(x0) : "r"(x1), "r"(x16) : "memory");
+    return x0;
+}
+
+// The region the debugger answered PrepareRegion with, executable, and a
+// writable view of it mapped here
+static bool map_prepared(uint64_t answer) {
+    vm_address_t rx = (vm_address_t) answer;
+    vm_prot_t prot = rx != 0 && rx % vm_page_size == 0 ? range_protection(rx, REGION_SIZE) : VM_PROT_NONE;
+    if (!(prot & VM_PROT_EXECUTE)) {
+        region_none("the debugger answered JIT26 PrepareRegion (%u MB) with %#llx: not an executable region "
+                    "(vm_region: %#x)", REGION_SIZE >> 20, (unsigned long long) answer, prot);
+        return false;
+    }
+    vm_address_t rw = 0;
+    vm_prot_t cur, max;
+    kern_return_t kr = vm_remap(mach_task_self(), &rw, REGION_SIZE, 0, VM_FLAGS_ANYWHERE, mach_task_self(), rx,
+                                false, &cur, &max, VM_INHERIT_NONE);
+    if (kr != KERN_SUCCESS) {
+        vm_deallocate(mach_task_self(), rx, REGION_SIZE);
+        region_none("vm_remap of the debugger's region at %#llx: %s", (unsigned long long) answer,
+                    mach_error_string(kr));
+        return false;
+    }
+    kr = vm_protect(mach_task_self(), rw, REGION_SIZE, false, VM_PROT_READ | VM_PROT_WRITE);
+    if (kr != KERN_SUCCESS) {
+        vm_deallocate(mach_task_self(), rw, REGION_SIZE);
+        vm_deallocate(mach_task_self(), rx, REGION_SIZE);
+        region_none("vm_protect read-write of a view of the debugger's region: %s (its most: %#x)",
+                    mach_error_string(kr), max);
+        return false;
+    }
+    region = (uint8_t *) rx;
+    rw_delta = (intptr_t) rw - (intptr_t) rx;
+    dual_map = true;
+    snprintf(region_how, sizeof(region_how), "allocated by the debugger iSH was launched under (JIT26), "
+             "a writable view of it mapped by iSH");
+    return true;
+}
+
+// Under TXM no process makes a page executable itself: the debugger allocates
+// the region (asked with no address; given one the process mapped, it
+// answers that address back and leaves it unusable: Play--CodeGen #34) and
+// writes a byte in each of its 16 KB pages, which lets them run. Then it
+// detaches, success or not: the pages run for the life of the process, and
+// the host faults iSH takes are its own again, not the debugger's.
+static bool map_from_debugger(void) {
+    bool mapped = map_prepared(jit26(JIT26_PREPARE_REGION, 0, REGION_SIZE));
+    jit26(JIT26_DETACH, 0, 0);
+    return mapped;
 }
 #endif
 
 static bool map_dual(void) {
 #ifndef __APPLE__
     int fd = memfd_create("ish-jit", MFD_CLOEXEC);
-    if (fd < 0)
+    if (fd < 0) {
+        region_none("memfd_create: %s", strerror(errno));
         return false;
+    }
     if (ftruncate(fd, REGION_SIZE) < 0) {
+        region_none("ftruncate of the memfd: %s", strerror(errno));
         close(fd);
         return false;
     }
@@ -148,6 +264,7 @@ static bool map_dual(void) {
     void *rx = mmap(NULL, REGION_SIZE, PROT_READ | PROT_EXEC, MAP_SHARED, fd, 0);
     close(fd);
     if (rw == MAP_FAILED || rx == MAP_FAILED) {
+        region_none("mmap of the memfd: %s", strerror(errno));
         if (rw != MAP_FAILED)
             munmap(rw, REGION_SIZE);
         if (rx != MAP_FAILED)
@@ -157,31 +274,56 @@ static bool map_dual(void) {
     region = rx;
     rw_delta = (intptr_t) rw - (intptr_t) rx;
     dual_map = true;
+    snprintf(region_how, sizeof(region_how), "mapped by iSH: a writable and an executable view of a memfd");
     return true;
 #else
 #if !TARGET_OS_OSX
     if (!may_run_written_code())
         return false;
+    // A debugger has iSH now: on iOS 26 it is one that answers JIT26 (it
+    // waits for the requests, and holds the process's faults until the
+    // detach). ISH_JIT_ASK_DEBUGGER=0 is for lldb, which does not: Xcode's
+    // scheme sets it.
+    if (__builtin_available(iOS 26.0, *)) {
+        if (debugger_attached() && !env_off("ISH_JIT_ASK_DEBUGGER"))
+            return map_from_debugger();
+    }
 #endif
     void *rw = mmap(NULL, REGION_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
-    if (rw == MAP_FAILED)
+    if (rw == MAP_FAILED) {
+        region_none("mmap: %s", strerror(errno));
         return false;
+    }
     vm_address_t rx = 0;
     vm_prot_t cur, max;
     kern_return_t kr = vm_remap(mach_task_self(), &rx, REGION_SIZE, 0, VM_FLAGS_ANYWHERE, mach_task_self(),
                                 (vm_address_t) rw, false, &cur, &max, VM_INHERIT_NONE);
     if (kr != KERN_SUCCESS) {
+        region_none("vm_remap: %s", mach_error_string(kr));
         munmap(rw, REGION_SIZE);
         return false;
     }
     if (mprotect((void *) rx, REGION_SIZE, PROT_READ | PROT_EXEC) != 0) {
+        region_none("mprotect read-execute: %s", strerror(errno));
         munmap((void *) rx, REGION_SIZE);
         munmap(rw, REGION_SIZE);
         return false;
     }
+#if !TARGET_OS_OSX
+    vm_prot_t prot = range_protection(rx, REGION_SIZE);
+    if (!(prot & VM_PROT_EXECUTE)) {
+        region_none("iOS left the region iSH made executable without execute (vm_region: %#x), as TXM does "
+                    "(iOS 26 and later, on A15 and M2 and later): there only a debugger that answers JIT26 as iSH "
+                    "starts gives one (StikDebug, its universal.js)", prot);
+        munmap((void *) rx, REGION_SIZE);
+        munmap(rw, REGION_SIZE);
+        return false;
+    }
+#endif
     region = (uint8_t *) rx;
     rw_delta = (intptr_t) rw - (intptr_t) rx;
     dual_map = true;
+    snprintf(region_how, sizeof(region_how), "mapped by iSH: a writable and an executable view (vm_remap)");
     return true;
 #endif
 }
@@ -191,9 +333,12 @@ static bool map_jit(void) {
     // MAP_JIT memory is placed by the kernel (hints are ignored).
     void *p = mmap(NULL, REGION_SIZE, PROT_READ | PROT_WRITE | PROT_EXEC,
                    MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
-    if (p == MAP_FAILED)
+    if (p == MAP_FAILED) {
+        region_none("mmap MAP_JIT: %s", strerror(errno));
         return false;
+    }
     region = p;
+    snprintf(region_how, sizeof(region_how), "MAP_JIT");
     return true;
 #else
     return false;
@@ -3583,9 +3728,11 @@ size_t jit_describe(char *buf, size_t size) {
                        pic_on ? "JIT, position-independent" : "JIT";
     OUT("mode: %s\n", mode);
     if (jit_on && !aot_only)
-        OUT("code region: %.1f of %u MB used%s\n",
+        OUT("code region: %.1f of %u MB used%s; %s\n",
             (region_full ? REGION_SIZE : (size_t) region_used) / 1048576.0, REGION_SIZE >> 20,
-            region_full ? " (full: blocks compiled since run as gadgets)" : "");
+            region_full ? " (full: blocks compiled since run as gadgets)" : "", region_how);
+    else if (region == NULL && region_how[0] != '\0')
+        OUT("code region: none: %s\n", region_how);
     OUT("AOT: %s (echo on|off > /proc/ish/jit; affects blocks compiled afterwards, i.e. new processes)\n",
         aot_off ? "off" : "on");
     OUT("blocks translated or looked up: %llu, AOT installs: %llu (moved: %llu, with pc-relative immediates "
@@ -3721,11 +3868,13 @@ static void jit_init(void) {
     bool dual = !TARGET_OS_OSX || getenv("ISH_JIT_DUALMAP") != NULL;
 #ifndef ISH_JIT_NO_EMIT
     have_region = dual ? map_dual() : map_jit();
+#else
+    (void) dual;
+    region_none("this build maps none (-Djit_emit=false)");
 #endif
     bool have_images = aot_nregistered > 0;
     if (!have_region && !have_images) {
-        fprintf(stderr, "⚠️  JIT: no executable code region (%s), running gadgets only\n",
-                dual ? "dual mapping" : "MAP_JIT");
+        fprintf(stderr, "⚠️  JIT: no code region and no AOT images, running gadgets only\n");
         return;
     }
     link_off = env_off("ISH_JIT_LINK");

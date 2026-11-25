@@ -11,9 +11,12 @@ GCC_PREPROCESSOR_DEFINITIONS[config=Debug-ApplePleaseFixFB19282108] = DEBUG=1
 // (aot_<name>.S from tools/jit_aot/gen.py, see asbestos/guest-arm64/aot.h),
 // and everything else in gadgets. ISH_JIT_EMIT = YES translates the rest at
 // run time too, into executable memory, which iOS lets a process run only
-// while a debugger has it (CS_DEBUGGED: Xcode, or StikDebug on the device):
-// without one the JIT maps none and runs as a build with NO does, which never
-// maps it (meson -Djit_emit=false).
+// once a debugger has had it (CS_DEBUGGED: Xcode, or StikDebug on the
+// device), and from iOS 26 on TXM devices (A15 and M2 and later) only if the
+// debugger allocated it, asked by iOS 26's JIT protocol (StikDebug's
+// universal.js answers it; see asbestos/guest-arm64/jit.h). Without one the
+// JIT maps none and runs as a build with NO does, which never maps it (meson
+// -Djit_emit=false).
 ISH_ENABLE_JIT = YES
 ISH_JIT_EMIT = YES
 

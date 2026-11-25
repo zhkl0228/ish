@@ -91,8 +91,10 @@ to pre-compiled ARM64 gadget functions with inline operands. Execution is a chai
 calls — each gadget loads the next pointer from the program stream and branches to it
 (`br x8`). No executable memory is allocated, no machine code is generated at runtime.
 (The native JIT on top of it, `asbestos/guest-arm64/jit.c`, runs the AOT images the app links
-in, and translates at run time only while a debugger is attached, which iOS requires for it:
-Xcode, or StikDebug on the device.)
+in, and translates at run time only when a debugger has had the app, which iOS requires for it:
+Xcode, or StikDebug on the device. From iOS 26 on A15/M2 and later (TXM) the debugger must also
+allocate the code region, which iSH asks for by iOS 26's JIT protocol as it starts: StikDebug
+with its `universal.js`. `/proc/ish/jit` says where the region came from, or why there is none.)
 The host-code overhead per guest instruction is a few ARM64 instructions inside the
 corresponding gadget.
 

@@ -83,8 +83,10 @@ guest 只支持 AArch64。结果是一个性能和兼容性大幅提升的 Linux
 改写了每条指令的成本模型：每个 guest 基本块被编译成一个 **gadget 程序** —— 一个
 `unsigned long` 数组，交替存放预编译 ARM64 gadget 函数指针和内联操作数。执行流程是一串尾调用 ——
 每个 gadget 从程序流读取下一条指针并 `br` 跳过去。**不分配可执行内存，不在运行时生成任何机器码**。
-（其上的原生 JIT，`asbestos/guest-arm64/jit.c`，运行 App 链接进来的 AOT 镜像；只有挂着调试器时
-才在运行时翻译，这是 iOS 的要求：Xcode，或设备上的 StikDebug。）
+（其上的原生 JIT，`asbestos/guest-arm64/jit.c`，运行 App 链接进来的 AOT 镜像；只有被调试器挂过
+才在运行时翻译，这是 iOS 的要求：Xcode，或设备上的 StikDebug。iOS 26 起在 A15/M2 及以后的机型上
+（TXM），代码区还必须由调试器分配，iSH 启动时用 iOS 26 的 JIT 协议去要：StikDebug 配它的
+`universal.js`。`/proc/ish/jit` 会说明代码区从哪来，或者为什么没有。）
 每条 guest 指令的 host 指令开销就是对应 gadget 中的几条 ARM64 指令。
 
 **关键文件:**
