@@ -75,16 +75,90 @@
 
 @end
 
+static const CGFloat kGaugeSize = 44;
+static const CGFloat kGaugeLine = 4;
+
+@implementation MonitorGaugeView {
+    CAShapeLayer *_track;
+    CAShapeLayer *_arc;
+}
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    if (self = [super initWithFrame:frame]) {
+        _track = [CAShapeLayer layer];
+        _arc = [CAShapeLayer layer];
+        for (CAShapeLayer *layer in @[_track, _arc]) {
+            layer.fillColor = NULL;
+            layer.lineWidth = kGaugeLine;
+            layer.lineCap = kCALineCapRound;
+            [self.layer addSublayer:layer];
+        }
+        _arc.strokeEnd = 0;
+
+        _valueLabel = [UILabel new];
+        _valueLabel.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightBold];
+        _valueLabel.textAlignment = NSTextAlignmentCenter;
+        _valueLabel.adjustsFontSizeToFitWidth = YES;
+        _valueLabel.minimumScaleFactor = 0.6;
+        _valueLabel.text = @"–";
+        [self addSubview:_valueLabel];
+        _nameLabel = [UILabel new];
+        _nameLabel.font = [UIFont systemFontOfSize:8 weight:UIFontWeightSemibold];
+        _nameLabel.textAlignment = NSTextAlignmentCenter;
+        [self addSubview:_nameLabel];
+    }
+    return self;
+}
+
+- (void)setFraction:(double)fraction {
+    _fraction = fraction;
+    _arc.strokeEnd = MIN(MAX(fraction, 0), 1);
+}
+
+- (void)setColor:(UIColor *)color {
+    _color = color;
+    _arc.strokeColor = color.CGColor;
+}
+
+- (void)setTrackColor:(UIColor *)trackColor {
+    _trackColor = trackColor;
+    _track.strokeColor = trackColor.CGColor;
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CGRect bounds = self.bounds;
+    CGFloat side = MIN(bounds.size.width, bounds.size.height);
+    CGPoint center = CGPointMake(CGRectGetMidX(bounds), CGRectGetMidY(bounds));
+    // From the bottom left (135 degrees, y down) clockwise over the top to the
+    // bottom right (45): the opening is the bottom's quarter
+    UIBezierPath *ring = [UIBezierPath bezierPathWithArcCenter:center radius:(side - kGaugeLine) / 2
+                                                    startAngle:M_PI * 3 / 4 endAngle:M_PI * 9 / 4 clockwise:YES];
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    _track.frame = _arc.frame = bounds;
+    _track.path = _arc.path = ring.CGPath;
+    [CATransaction commit];
+    CGFloat inset = kGaugeLine + 3;
+    self.valueLabel.frame = CGRectMake(inset, center.y - 9, bounds.size.width - 2 * inset, 18);
+    self.nameLabel.frame = CGRectMake(0, CGRectGetMaxY(bounds) - 10, bounds.size.width, 10);
+}
+
+@end
+
+// A gauge's color: green, then as the memory's (orange past 75%, red past 90%)
+static UIColor *GaugeColor(double fraction) {
+    return MonitorMemoryColor(fraction, UIColor.systemGreenColor);
+}
+
 @interface MonitorColumnView ()
 
 @property UIStackView *stack;
-@property NSArray<UIImageView *> *icons;
-@property NSArray<UILabel *> *titles;
-@property UILabel *cpuLabel;
-@property MeterBar *cpuBar;
+@property MonitorGaugeView *cpuGauge;
 @property MonitorSparkView *cpuLine;
-@property UILabel *memoryLabel;
-@property MeterBar *memoryBar;
+@property MonitorGaugeView *memoryGauge;
+@property UIStackView *heatRow;
+@property UIImageView *heatIcon;
 @property UILabel *heatLabel;
 
 @end
@@ -101,97 +175,71 @@
 
         UIStackView *stack = [UIStackView new];
         stack.axis = UILayoutConstraintAxisVertical;
-        stack.alignment = UIStackViewAlignmentFill;
-        stack.spacing = 3;
+        stack.alignment = UIStackViewAlignmentCenter;
+        stack.spacing = 4;
         stack.translatesAutoresizingMaskIntoConstraints = NO;
         [self addSubview:stack];
         self.stack = stack;
 
-        NSMutableArray<UIImageView *> *icons = [NSMutableArray new];
-        NSMutableArray<UILabel *> *titles = [NSMutableArray new];
-        [self addTitle:@"CPU" symbol:@"cpu" icons:icons titles:titles];
-        self.cpuLabel = [self addValue];
-        self.cpuBar = [self addBar];
+        self.cpuGauge = [self addGauge:@"CPU"];
         // The line gives way first where the column has not the room (the
         // keyboard up under it), to nothing; the clip keeps the rest off the keys
         MonitorSparkView *line = [MonitorSparkView new];
         line.translatesAutoresizingMaskIntoConstraints = NO;
-        NSLayoutConstraint *lineHeight = [line.heightAnchor constraintEqualToConstant:24];
+        NSLayoutConstraint *lineHeight = [line.heightAnchor constraintEqualToConstant:14];
         lineHeight.priority = UILayoutPriorityDefaultLow;
-        lineHeight.active = YES;
+        [NSLayoutConstraint activateConstraints:@[
+            [line.widthAnchor constraintEqualToConstant:kGaugeSize],
+            lineHeight,
+        ]];
         [stack addArrangedSubview:line];
+        [stack setCustomSpacing:12 afterView:line];
         self.cpuLine = line;
-        [stack setCustomSpacing:14 afterView:line];
+        self.memoryGauge = [self addGauge:@"MEM"];
+        [stack setCustomSpacing:8 afterView:self.memoryGauge];
 
-        [self addTitle:@"Memory" symbol:@"memorychip" icons:icons titles:titles];
-        self.memoryLabel = [self addValue];
-        self.memoryBar = [self addBar];
-        [stack setCustomSpacing:14 afterView:self.memoryBar];
-
-        [self addTitle:@"Heat" symbol:@"thermometer.medium" icons:icons titles:titles];
+        // The heat while more than nominal: a thermometer and its name
+        UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:9 weight:UIImageSymbolWeightSemibold];
+        UIImageView *icon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"thermometer.medium" withConfiguration:config]];
+        icon.contentMode = UIViewContentModeScaleAspectFit;
         UILabel *heat = [UILabel new];
-        heat.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
+        heat.font = [UIFont systemFontOfSize:10 weight:UIFontWeightSemibold];
         heat.adjustsFontSizeToFitWidth = YES;
         heat.minimumScaleFactor = 0.7;
-        heat.text = MonitorThermalName(NSProcessInfoThermalStateNominal);
-        [stack addArrangedSubview:heat];
+        UIStackView *heatRow = [[UIStackView alloc] initWithArrangedSubviews:@[icon, heat]];
+        heatRow.axis = UILayoutConstraintAxisHorizontal;
+        heatRow.alignment = UIStackViewAlignmentCenter;
+        heatRow.spacing = 2;
+        heatRow.hidden = YES;
+        [stack addArrangedSubview:heatRow];
+        self.heatRow = heatRow;
+        self.heatIcon = icon;
         self.heatLabel = heat;
-        self.icons = icons;
-        self.titles = titles;
 
-        // 8 points from the column's left, 6 from the screen's edge; as tall
-        // as the meters are, which the column's constraints keep clear of the
-        // status bar and the home indicator (TerminalViewController)
+        // centered in the column; as tall as the meters are, which the column's
+        // constraints keep under the status bar and above the keys
+        // (TerminalViewController)
         [NSLayoutConstraint activateConstraints:@[
             [stack.topAnchor constraintEqualToAnchor:self.topAnchor],
             [stack.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
-            [stack.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:8],
-            [stack.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-6],
+            [stack.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
+            [stack.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
         ]];
         [self applyColors];
     }
     return self;
 }
 
-// A meter's title: its symbol and its name, in the foreground's fainter color
-- (void)addTitle:(NSString *)title symbol:(NSString *)symbol
-           icons:(NSMutableArray<UIImageView *> *)icons titles:(NSMutableArray<UILabel *> *)titles {
-    UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:10 weight:UIImageSymbolWeightSemibold];
-    UIImageView *icon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:symbol withConfiguration:config]];
-    icon.contentMode = UIViewContentModeScaleAspectFit;
-    [icon setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
-    UILabel *label = [UILabel new];
-    label.font = [UIFont systemFontOfSize:10 weight:UIFontWeightSemibold];
-    label.adjustsFontSizeToFitWidth = YES;
-    label.minimumScaleFactor = 0.7;
-    label.text = title;
-    UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:@[icon, label]];
-    row.axis = UILayoutConstraintAxisHorizontal;
-    row.alignment = UIStackViewAlignmentCenter;
-    row.spacing = 3;
-    [self.stack addArrangedSubview:row];
-    [icons addObject:icon];
-    [titles addObject:label];
-}
-
-// A percent, 17-point digits, smaller where the column is narrow
-- (UILabel *)addValue {
-    UILabel *label = [UILabel new];
-    label.font = [UIFont monospacedDigitSystemFontOfSize:17 weight:UIFontWeightSemibold];
-    label.adjustsFontSizeToFitWidth = YES;
-    label.minimumScaleFactor = 0.6;
-    label.text = @"–";
-    [self.stack addArrangedSubview:label];
-    return label;
-}
-
-- (MeterBar *)addBar {
-    MeterBar *bar = [MeterBar new];
-    bar.horizontal = YES;
-    bar.translatesAutoresizingMaskIntoConstraints = NO;
-    [bar.heightAnchor constraintEqualToConstant:4].active = YES;
-    [self.stack addArrangedSubview:bar];
-    return bar;
+- (MonitorGaugeView *)addGauge:(NSString *)name {
+    MonitorGaugeView *gauge = [MonitorGaugeView new];
+    gauge.nameLabel.text = name;
+    gauge.translatesAutoresizingMaskIntoConstraints = NO;
+    [NSLayoutConstraint activateConstraints:@[
+        [gauge.widthAnchor constraintEqualToConstant:kGaugeSize],
+        [gauge.heightAnchor constraintEqualToConstant:kGaugeSize],
+    ]];
+    [self.stack addArrangedSubview:gauge];
+    return gauge;
 }
 
 - (CGRect)metersFrame {
@@ -202,24 +250,24 @@
     self.activated();
 }
 
-// As the last reading has them (none before the first: nominal, empty)
+// As the last reading has them (none before the first: empty, nominal)
 - (void)applyColors {
     MonitorReading *reading = self.sampler.reading;
     UIColor *foreground = self.foregroundColor;
-    UIColor *faint = [foreground colorWithAlphaComponent:0.6];
-    UIColor *fill = [foreground colorWithAlphaComponent:0.55];
-    UIColor *track = [foreground colorWithAlphaComponent:0.12];
-    for (UIImageView *icon in self.icons)
-        icon.tintColor = faint;
-    for (UILabel *title in self.titles)
-        title.textColor = faint;
-    self.cpuLabel.textColor = self.memoryLabel.textColor = foreground;
-    self.cpuBar.backgroundColor = self.memoryBar.backgroundColor = track;
-    self.cpuBar.fill.backgroundColor = fill;
-    self.memoryBar.fill.backgroundColor = MonitorMemoryColor(reading.memoryFraction, fill);
-    self.cpuLine.lineColor = fill;
-    self.cpuLine.areaColor = track;
-    self.heatLabel.textColor = MonitorThermalColor(reading.thermalState, [foreground colorWithAlphaComponent:0.75]);
+    UIColor *track = [foreground colorWithAlphaComponent:0.15];
+    UIColor *cpu = GaugeColor(reading.cpuBusy);
+    self.cpuGauge.color = cpu;
+    self.memoryGauge.color = GaugeColor(reading.memoryFraction);
+    for (MonitorGaugeView *gauge in @[self.cpuGauge, self.memoryGauge]) {
+        gauge.trackColor = track;
+        gauge.valueLabel.textColor = foreground;
+        gauge.nameLabel.textColor = [foreground colorWithAlphaComponent:0.6];
+    }
+    self.cpuLine.lineColor = cpu;
+    self.cpuLine.areaColor = [cpu colorWithAlphaComponent:0.15];
+    UIColor *heat = MonitorThermalColor(reading.thermalState, foreground);
+    self.heatIcon.tintColor = heat;
+    self.heatLabel.textColor = heat;
 }
 
 - (void)showReading:(MonitorReading *)reading {
@@ -227,17 +275,18 @@
     int memory = (int) round(reading.memoryFraction * 100);
     // the CPUs as they were until counted again
     if (reading.counted) {
-        self.cpuLabel.text = [NSString stringWithFormat:@"%d%%", cpu];
-        self.cpuBar.fraction = reading.cpuBusy;
+        self.cpuGauge.valueLabel.text = [NSString stringWithFormat:@"%d", cpu];
+        self.cpuGauge.fraction = reading.cpuBusy;
     }
     self.cpuLine.values = self.sampler.cpuHistory;
-    self.memoryLabel.text = [NSString stringWithFormat:@"%d%%", memory];
-    self.memoryBar.fraction = reading.memoryFraction;
+    self.memoryGauge.valueLabel.text = [NSString stringWithFormat:@"%d", memory];
+    self.memoryGauge.fraction = reading.memoryFraction;
+    BOOL hot = reading.thermalState != NSProcessInfoThermalStateNominal;
     self.heatLabel.text = MonitorThermalName(reading.thermalState);
+    if (self.heatRow.hidden == hot)
+        self.heatRow.hidden = !hot;
     [UIView animateWithDuration:0.3 animations:^{
         [self applyColors];
-        [self.cpuBar layoutIfNeeded];
-        [self.memoryBar layoutIfNeeded];
     }];
 
     NSString *cpuText = reading.counted ? [NSString stringWithFormat:@"CPU %d%%, ", cpu] : @"";
