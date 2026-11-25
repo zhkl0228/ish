@@ -193,7 +193,9 @@ fakefs_bind_mount("/host/path/to/data", "/mnt/data", /*read_only=*/true);
 
 - **Alpine 3.24 aarch64**，自带完整 apk 包管理器（`tools/build-rootfs.sh`），只预装日常工具；
   开发工具需要时用 `ish-install` 安装（Python、Node.js 和 Claude Code、Go、Java、C/C++、clang、
-  Redis 和 MariaDB），可以全装，也可以按组装（`ish-install go python`；`ish-install -l` 列出分组）
+  Redis 和 MariaDB），可以全装，也可以按组装（`ish-install go python`；`ish-install -l` 列出分组）。
+  App 更新带来按新版本录制的 AOT 镜像后，每个登录 shell 都会列出版本对不上、镜像只能部分命中的程序，
+  `ish-install -u` 把它们装成镜像的版本（Claude Code、Kimi Code 装回原位置，较旧的 apk 包升级）
 - **RootfsPatch.bundle**: 增量 rootfs 更新的版本化 overlay 系统
 - **Polyfills**: undici/llhttp 的 WebAssembly polyfill、HTTP 下载的 fetch polyfill
 - 不注入任何环境变量：程序看到的就是启动它时给的环境

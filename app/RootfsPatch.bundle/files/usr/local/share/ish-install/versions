@@ -1,4 +1,14 @@
-# The versions of the npm tools ish-install installs: the app's AOT images serve these
-# builds (benchmark/aojit/app-images.lock.json). Written by publish_app_images.py.
-@anthropic-ai/claude-code 2.1.332
-@moonshot-ai/kimi-code 2.7.3
+# The versions the app's AOT images were recorded on, whose builds they serve
+# (benchmark/aojit/app-images.lock.json): of the npm tools, which ish-install installs at
+# them, and of the apk packages of whose code an image is, an older one of which every
+# login shell names (ish-install --outdated). Written by publish_app_images.py.
+npm @anthropic-ai/claude-code 2.1.332
+npm @moonshot-ai/kimi-code 2.7.3
+apk bash 5.3.9-r1
+apk busybox 1.37.0-r31
+apk libcrypto3 3.5.9-r1
+apk musl 1.2.6-r3
+apk nodejs 24.22.3-r0
+apk openjdk25-jdk 25.0.5.1_p2-r0
+apk openssh-client-default 10.3_p1-r2
+apk python3 3.14.10-r2

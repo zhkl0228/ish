@@ -74,6 +74,13 @@ from `https://hk.gzmtx.cn/ish-aot/<set>/` into `build/aot/<set>/` (and the root,
 checking every sha256. `ish-install` installs Claude Code and Kimi Code at the versions the set was
 recorded on (`app/RootfsPatch.bundle/files/usr/local/share/ish-install/versions`), which is what
 makes their images serve the phone's: a new version comes with an app whose set was recorded on it.
+That file has the apk packages' versions too (those of whose code an image is): an app updated
+with a set of newer versions leaves what is installed as it was, which the images then serve only
+in part (claude.exe: half its blocks), so every login shell names what is of another version than
+the set's, Claude Code or Kimi Code, or an apk package older than its (`ish-install --outdated`),
+and `ish-install -u` installs the set's (the npm tools again, Claude Code with `--prefix
+/opt/claude-code`; `apk upgrade -U` of the older packages); Claude Code's wrapper says it too as
+it starts.
 
 CI keeps the set current (`.github/workflows/aot-images.yml`, `ci_app_images.sh`): on a push that
 changes ish's abi or what the images are recorded from (a workload, `images-app.json`, the

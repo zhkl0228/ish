@@ -40,8 +40,14 @@ jobs:
     # aot-images.yml raises the build with each set of images it commits), or
     # again, replacing it, when a commit of the push says [ipa] in its message
     # (or a run by hand says force); the newest five kept. To install it, sign
-    # it with one's own developer account
-    runs-on: macos-26
+    # it with one's own developer account. Built with Xcode 27.2 (the xcode-27
+    # image, macOS 27, whose default is 27.1), as on a Mac: built with
+    # macos-26's Xcode 26.6 (the iOS 26.5 SDK), the app stayed the size of a
+    # folded phone when the phone unfolded, where a Mac's build with Xcode 27
+    # fills the screen
+    runs-on: xcode-27
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
     permissions:
       contents: write
     steps:
