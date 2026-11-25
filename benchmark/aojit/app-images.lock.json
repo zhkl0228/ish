@@ -11,65 +11,65 @@
     "bash": {
       "module": "/bin/bash",
       "object": "aot_bash_ios.o",
-      "sha256": "834caf0a95e58dcd5ecdaafe40522a349b377ed6e7c01f1dc17b033221a80f91",
+      "sha256": "46f3ff44c24cb0032aefdc734319231745cc9b11be9e7d7663b3c01469f8a2cb",
       "size": 6760296,
-      "xz_size": 968904
+      "xz_size": 968472
     },
     "busybox": {
       "module": "/bin/busybox",
       "object": "aot_busybox_ios.o",
-      "sha256": "9b5623890730cf8e41908b258c84663d4e681f88b53c3d5a341f8cfa6fb7bcd7",
-      "size": 4430088,
-      "xz_size": 656972
+      "sha256": "37220ca1bef16ed0c6d300966691ae7639f2dd9e67159b6eca4c42b130f512c2",
+      "size": 4428408,
+      "xz_size": 655844
     },
     "claude": {
       "module": "claude.exe",
       "object": "aot_claude_ios.o",
-      "sha256": "ea31875b0b1bb7aa0bb94e97160463e79d1693eb18beb94e33ce2b13aeafea81",
-      "size": 136008344,
-      "xz_size": 16140012
+      "sha256": "7fddbb5de8bb3dbd07fec10365033a461b8b800c0baeeeadfab31e04e5b28f9d",
+      "size": 132718704,
+      "xz_size": 15936868
     },
     "crypto": {
       "module": "libcrypto.so",
       "object": "aot_crypto_ios.o",
-      "sha256": "71974eb3947172b44c291f497870c90179c0dc5b9d6771ae14588feeb7a0b517",
-      "size": 18622160,
-      "xz_size": 2450844
+      "sha256": "2284535b1893626f5035523e3fba8c2b7245c1d24d9a43d1d6176faf80bb8340",
+      "size": 18628480,
+      "xz_size": 2461232
     },
     "jvm": {
       "module": "libjvm.so",
       "object": "aot_jvm_ios.o",
-      "sha256": "766cedfa4da73e3d77c93a0714cd7b291e987b49e402b18408e82c7d72bf246d",
-      "size": 168034040,
-      "xz_size": 20626340
+      "sha256": "288a86e578c72c7738513d7fb5c111ac540a7673da2ce0df8d4e1ba358613e76",
+      "size": 168347896,
+      "xz_size": 20725028
     },
     "musl": {
       "module": "ld-musl",
       "object": "aot_musl_ios.o",
-      "sha256": "f242f4dac43ebbadcab1db78d40212485e442c5dedcfe0a0b6e42e6214e3adcb",
-      "size": 4816592,
-      "xz_size": 733752
+      "sha256": "80e0a182f64260d62cf823a4f024a37267e5931df0b3384e4c7e09fdd43791b9",
+      "size": 4815800,
+      "xz_size": 730080
     },
     "node": {
       "module": "/usr/bin/node",
       "object": "aot_node_ios.o",
-      "sha256": "6e67b6bb60cfadf568ffa44c7d9efc38e6713ff00dae0c566c345151b70722d3",
-      "size": 150368168,
-      "xz_size": 18678520
+      "sha256": "5534b6cd2a0a4c0151fee5a2c9bb603a56cb00f3276851fb43e9592ce00cb193",
+      "size": 150606720,
+      "xz_size": 18664936
     },
     "python": {
       "module": "libpython3",
       "object": "aot_python_ios.o",
-      "sha256": "386b5eb01e26ee28ed06dae93eac58fd8e5b24e8ec466bbeafdae1964f24c51a",
-      "size": 38092240,
-      "xz_size": 4878860
+      "sha256": "8ca901ede241b2500abd47ae3ee1697990d5dea5c9d1c00377135b73e6b6758d",
+      "size": 38101808,
+      "xz_size": 4905396
     },
     "ssh": {
       "module": "/usr/bin/ssh",
       "object": "aot_ssh_ios.o",
-      "sha256": "b78b6cd7bc1242ceafddac814e8ad87c6639d45d3e2e341359aca4aaef4e3f3c",
-      "size": 6296800,
-      "xz_size": 873816
+      "sha256": "2f133617b9d693fff64d454d399a9974730451886965f0d726ea37cd59efc655",
+      "size": 6296816,
+      "xz_size": 871236
     }
   },
   "recorded": {
@@ -86,7 +86,7 @@
     },
     "inputs": "020207715bd2672d",
     "npm": {
-      "@anthropic-ai/claude-code": "2.1.331",
+      "@anthropic-ai/claude-code": "2.1.332",
       "@moonshot-ai/kimi-code": "2.7.3"
     }
   },
@@ -95,5 +95,5 @@
     "sha256": "6d6ee01668af8c120ce44bd8ec3da1b42e6301a9eb090783fc7ed232da3aeded",
     "size": 30239249
   },
-  "set": "6b04c691-20261124-393e7bf0"
+  "set": "6b04c691-20261125-50ef79a3"
 }
