@@ -28,6 +28,7 @@ bool (*get_user_default)(const char *name, char **buffer, size_t *size);
 bool (*set_user_default)(const char *name, char *buffer, size_t size);
 bool (*remove_user_default)(const char *name);
 char *(*get_documents_directory)(void);
+int (*open_url)(const char *url, size_t size);
 
 static int proc_ish_show_colors(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
     proc_printf(buf,
@@ -321,6 +322,15 @@ static ssize_t proc_ish_write_poll_spin(struct proc_entry *UNUSED(entry), struct
     return poll_spin_control(data->data, data->size) == 0 ? (ssize_t) data->size : _EINVAL;
 }
 
+// A URL to open (xdg-open writes it), one write for the whole of it. The
+// write returns once the app has asked and been answered.
+static ssize_t proc_ish_write_open_url(struct proc_entry *UNUSED(entry), struct proc_data *data, off_t UNUSED(off)) {
+    if (open_url == NULL)
+        return _ENODEV;
+    int err = open_url(data->data, data->size);
+    return err < 0 ? err : (ssize_t) data->size;
+}
+
 struct proc_children proc_ish_children = PROC_CHILDREN({
     {"colors", .show = proc_ish_show_colors},
     {".defaults", S_IFDIR, .readdir = proc_ish_underlying_defaults_readdir},
@@ -330,6 +340,7 @@ struct proc_children proc_ish_children = PROC_CHILDREN({
 #ifdef ISH_JIT
     {"jit", .show = proc_ish_show_jit, .pwrite = proc_ish_write_jit},
 #endif
+    {"open_url", S_IFREG | 0222, .pwrite = proc_ish_write_open_url},
     {"poll_spin", .show = proc_ish_show_poll_spin, .pwrite = proc_ish_write_poll_spin},
     {"translations", S_IFREG | 0644, .show = proc_ish_show_translations, .pwrite = proc_ish_write_translations},
     {"version", .show = proc_ish_show_version},

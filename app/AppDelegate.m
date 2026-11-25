@@ -26,6 +26,7 @@
 #import "NSObject+SaneKVO.h"
 #import "Roots.h"
 #import "TerminalViewController.h"
+#import "UIApplication+OpenURL.h"
 #import "UserPreferences.h"
 #include "kernel/init.h"
 #include "kernel/calls.h"
@@ -35,6 +36,7 @@
 #include "fs/dyndev.h"
 #include "fs/devices.h"
 #include "fs/path.h"
+#include "fs/proc/ish.h"
 #include "asbestos/guest-arm64/host_fault.h"
 #if defined(DEBUG)
 #include "DebugServer.h"
@@ -382,8 +384,9 @@ void NetworkReachabilityCallback(SCNetworkReachabilityRef target, SCNetworkReach
     NSString *ishVersion = [NSString stringWithFormat:@"iSH %@ (%@)",
                          [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"],
                          [NSBundle.mainBundle objectForInfoDictionaryKey:(NSString *) kCFBundleVersionKey]];
-    extern const char *proc_ish_version;
     proc_ish_version = strdup(ishVersion.UTF8String);
+    // A program's URL (xdg-open) opens once the person allows it
+    open_url = ask_to_open_url;
     // this defaults key is set when taking app store screenshots
     extern const char *uname_hostname_override;
     // iOS hides the device's own hostname (hostname obfuscation), so the name

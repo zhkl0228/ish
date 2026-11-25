@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>version</key>
-    <integer>27</integer>
+    <integer>28</integer>
     <key>files</key>
     <array>
         <dict>
@@ -58,6 +58,13 @@
             <key>dst</key>
             <string>/etc/profile.d/ish-claude-memory.sh</string>
         </dict>
+        <!-- BROWSER: xdg-open, for the programs that open one -->
+        <dict>
+            <key>src</key>
+            <string>files/etc/profile.d/ish-browser.sh</string>
+            <key>dst</key>
+            <string>/etc/profile.d/ish-browser.sh</string>
+        </dict>
         <!-- says how to install them, until one is installed -->
         <dict>
             <key>src</key>
@@ -109,6 +116,16 @@
             <string>files/usr/local/bin/ish-install</string>
             <key>dst</key>
             <string>/usr/local/bin/ish-install</string>
+            <!-- 0755 -->
+            <key>mode</key>
+            <integer>493</integer>
+        </dict>
+        <!-- opens a URL once you allow it in the app (/proc/ish/open_url) -->
+        <dict>
+            <key>src</key>
+            <string>files/usr/local/bin/xdg-open</string>
+            <key>dst</key>
+            <string>/usr/local/bin/xdg-open</string>
             <!-- 0755 -->
             <key>mode</key>
             <integer>493</integer>

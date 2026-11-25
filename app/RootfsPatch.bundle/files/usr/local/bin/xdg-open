@@ -1,0 +1,16 @@
+#!/bin/sh
+# Installed by the iSH app, which rewrites this file when it updates the root.
+# xdg-open: the app asks, in the terminal window in front, whether to open the
+# URL, and opens it if you allow it (/proc/ish/open_url). http and https URLs
+# only. gh auth login runs it, and Claude Code's /login by way of $BROWSER
+# (/etc/profile.d/ish-browser.sh).
+if [ $# -ne 1 ]; then
+    echo 'usage: xdg-open URL' >&2
+    exit 1
+fi
+# busybox's echo writes it in one write, which the file takes as the whole
+# URL; the write returns once you have answered
+if ! echo -n "$1" > /proc/ish/open_url; then
+    echo "xdg-open: $1 not opened" >&2
+    exit 4
+fi
