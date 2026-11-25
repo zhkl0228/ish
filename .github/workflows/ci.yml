@@ -36,7 +36,8 @@ jobs:
     # The app as it is built for a phone (archived, unsigned) and its ipa. On
     # master the ipa is published as a release, ipa-<version>-<build>, when
     # its version is not (app/AppARM64.xcconfig's MARKETING_VERSION and
-    # CURRENT_PROJECT_VERSION, which FileProviderARM64.xcconfig's match), or
+    # CURRENT_PROJECT_VERSION, which FileProviderARM64.xcconfig's match;
+    # aot-images.yml raises the build with each set of images it commits), or
     # again, replacing it, when a commit of the push says [ipa] in its message
     # (or a run by hand says force); the newest five kept. To install it, sign
     # it with one's own developer account
