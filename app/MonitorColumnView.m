@@ -93,6 +93,7 @@
 
 - (instancetype)initWithSampler:(MonitorSampler *)sampler {
     if (self = [super initWithSampler:sampler]) {
+        self.clipsToBounds = YES;
         self.isAccessibilityElement = YES;
         self.accessibilityTraits = UIAccessibilityTraitButton | UIAccessibilityTraitUpdatesFrequently;
         self.accessibilityHint = @"Shows the CPUs, the memory and the heat in detail.";
@@ -111,9 +112,13 @@
         [self addTitle:@"CPU" symbol:@"cpu" icons:icons titles:titles];
         self.cpuLabel = [self addValue];
         self.cpuBar = [self addBar];
+        // The line gives way first where the column has not the room (the
+        // keyboard up under it), to nothing; the clip keeps the rest off the keys
         MonitorSparkView *line = [MonitorSparkView new];
         line.translatesAutoresizingMaskIntoConstraints = NO;
-        [line.heightAnchor constraintEqualToConstant:24].active = YES;
+        NSLayoutConstraint *lineHeight = [line.heightAnchor constraintEqualToConstant:24];
+        lineHeight.priority = UILayoutPriorityDefaultLow;
+        lineHeight.active = YES;
         [stack addArrangedSubview:line];
         self.cpuLine = line;
         [stack setCustomSpacing:14 afterView:line];

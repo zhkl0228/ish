@@ -87,10 +87,11 @@
 @property MonitorSampler *monitorSampler;
 @property MonitorStripView *monitorStrip;
 @property MonitorColumnView *monitorColumn;
-// The column's meters under the status bar (top), or at the column's bottom
-// where it is not known where the status bar ends (updateMonitorColumn)
+// The column's meters under the status bar (top: updateMonitorColumn), and
+// above the keyboard and the keys over it (the paste key's row), or the home
+// indicator (aboveKeys: applyBottomPad)
 @property NSLayoutConstraint *monitorColumnTop;
-@property NSLayoutConstraint *monitorColumnBottom;
+@property NSLayoutConstraint *monitorColumnAboveKeys;
 // The layout updateMonitorColumn last logged
 @property (nullable) NSString *monitorColumnLayout;
 
@@ -317,11 +318,11 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
     self.monitorColumn = column;
     UILayoutGuide *safe = self.view.safeAreaLayoutGuide;
     self.monitorColumnTop = [column.topAnchor constraintEqualToAnchor:self.view.topAnchor];
-    self.monitorColumnBottom = [column.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor constant:-8];
+    self.monitorColumnAboveKeys = [column.bottomAnchor constraintLessThanOrEqualToAnchor:self.view.bottomAnchor];
     [NSLayoutConstraint activateConstraints:@[
         [column.leadingAnchor constraintEqualToAnchor:safe.trailingAnchor],
         [column.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
-        [column.bottomAnchor constraintLessThanOrEqualToAnchor:safe.bottomAnchor constant:-8],
+        self.monitorColumnAboveKeys,
         self.monitorColumnTop,
     ]];
     __weak typeof(self) weakSelf = self;
@@ -1004,9 +1005,14 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
 
 // The terminal's bottom: above the keyboard, and with it away (put down, or
 // none on screen) above the home indicator, whose bar would be over the last
-// line. Whether that moved it.
+// line. Whether that moved it. The column's meters are 8 points above the same
+// (the keyboard's window over them hid them), the last minute's line giving
+// way first where they have not the room (MonitorColumnView); they move with
+// the terminal, in the layout pass that moves it.
 - (BOOL)applyBottomPad {
     CGFloat pad = MAX(self.keyboardPad, self.view.safeAreaInsets.bottom);
+    if (self.monitorColumnAboveKeys.constant != -(pad + 8))
+        self.monitorColumnAboveKeys.constant = -(pad + 8);
     if (self.bottomConstraint.constant == pad)
         return NO;
     self.bottomConstraint.constant = pad;
@@ -1601,12 +1607,16 @@ static NSString *ShellQuoted(NSString *string) {
 // its status bar, folded or not, its room under the status bar empty: the
 // safe area's right inset, wide, with little or none on the left (a phone on
 // its side leaves the same room on both sides, round its camera). The meters
-// there go under the status bar, as its frame (the window's) says where it
-// ends; with it hidden, at the column's top, under the tab bar; with a frame
-// that is not in the column, at its bottom, clear of what may be at its top
-// (logged with the rest, to place them by). Called as the safe area, the
-// traits and the status bar change, never from a layout pass: a change it
-// made laid out again, which called it again.
+// there go right under the status bar (its Wi-Fi and its battery), as its
+// frame (the window's) says where it ends, where that is the column's: from
+// at most 8 points left of the column to the screen's right edge, and not most
+// of its height. With the status bar hidden, at the column's top, under the
+// tab bar. With a frame that says nothing of where it ends, kMetersStatusEnd
+// down. Each layout is logged, and kept for /proc/ish/defaults/meters_column,
+// with what it was laid out by, to place them by on the phone. Called as the
+// safe area, the traits and the status bar change, never from a layout pass: a
+// change it made laid out again, which called it again.
+static const CGFloat kMetersStatusEnd = 160;
 - (void)updateMonitorColumn {
     UIView *view = self.view;
     UIEdgeInsets insets = view.safeAreaInsets;
@@ -1616,30 +1626,35 @@ static NSString *ShellQuoted(NSString *string) {
     UIStatusBarManager *statusBar = view.window.windowScene.statusBarManager;
     BOOL statusHidden = statusBar == nil || statusBar.statusBarHidden;
     CGRect status = statusHidden ? CGRectNull : [view convertRect:statusBar.statusBarFrame fromView:nil];
-    BOOL statusInColumn = !statusHidden && CGRectGetMinX(status) >= size.width - insets.right - 1 &&
-        CGRectGetMaxY(status) > 0 && CGRectGetMaxY(status) < size.height / 2;
-    BOOL atBottom = column && !statusHidden && !statusInColumn;
-    CGFloat top = statusInColumn ? CGRectGetMaxY(status) : MAX(insets.top, CGRectGetMaxY(self.tabBar.frame));
+    BOOL statusInColumn = !statusHidden && CGRectGetMinX(status) >= size.width - insets.right - 8 &&
+        CGRectGetMaxX(status) >= size.width - 1 && CGRectGetMaxY(status) > 0 && CGRectGetMaxY(status) < size.height / 2;
+    CGFloat top;
+    NSString *by;
+    if (statusHidden) {
+        top = MAX(insets.top, CGRectGetMaxY(self.tabBar.frame));
+        by = @"the status bar hidden: under the tab bar";
+    } else if (statusInColumn) {
+        top = CGRectGetMaxY(status);
+        by = @"under the status bar";
+    } else {
+        top = kMetersStatusEnd;
+        by = @"the status bar's frame not the column's: an estimate";
+    }
 
-    NSString *layout = [NSString stringWithFormat:@"%@: safe area insets %@, view %@, status bar %@%@",
-                        !column ? @"none" : atBottom ? @"at the column's bottom" : [NSString stringWithFormat:@"from %.0f", top + 8],
+    NSString *layout = [NSString stringWithFormat:@"%@ (%@); safe area insets %@, view %@, status bar %@",
+                        column ? [NSString stringWithFormat:@"from %.0f", top + 8] : @"none", by,
                         NSStringFromUIEdgeInsets(insets), NSStringFromCGSize(size),
-                        statusHidden ? @"hidden" : NSStringFromCGRect(status), statusInColumn ? @" (in the column)" : @""];
+                        statusHidden ? @"hidden" : NSStringFromCGRect(status)];
     if (![layout isEqualToString:self.monitorColumnLayout]) {
         self.monitorColumnLayout = layout;
         NSLog(@"Meters' column: %@", layout);
+        [NSUserDefaults.standardUserDefaults setObject:layout forKey:kMetersColumnLayoutKey];
     }
 
     if (self.monitorColumn.hidden != !column)
         self.monitorColumn.hidden = !column;
-    if (!column)
-        return;
-    if (self.monitorColumnTop.constant != top + 8)
+    if (column && self.monitorColumnTop.constant != top + 8)
         self.monitorColumnTop.constant = top + 8;
-    if (self.monitorColumnTop.active != !atBottom)
-        self.monitorColumnTop.active = !atBottom;
-    if (self.monitorColumnBottom.active != atBottom)
-        self.monitorColumnBottom.active = atBottom;
 }
 
 // In a popover pointing at the meters it was asked from, as they read

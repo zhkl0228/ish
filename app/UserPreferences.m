@@ -26,6 +26,7 @@ static NSString *const kPreferenceCursorStyleKey = @"Cursor Style";
 static NSString *const kPreferenceBlinkCursorKey = @"Blink Cursor";
 NSString *const kPreferenceHideStatusBarKey = @"Status Bar";
 static NSString *const kPreferenceShowMetersKey = @"Show Meters";
+NSString *const kMetersColumnLayoutKey = @"Meters Column Layout";
 static NSString *const kPreferenceColorSchemeKey = @"Color Scheme";
 // This key has a different naming scheme because it's used in UI tests as a
 // CLI argument.
@@ -200,6 +201,7 @@ bool remove_user_default_impl(const char *name) {
             @"blink_cursor": kPreferenceBlinkCursorKey,
             @"hide_status_bar": kPreferenceHideStatusBarKey,
             @"show_meters": kPreferenceShowMetersKey,
+            @"meters_column": kMetersColumnLayoutKey,
             @"color_scheme": kPreferenceColorSchemeKey,
             @"theme": kPreferenceThemeKey,
             @"hostname_override": kHostnameOverrideKey,
