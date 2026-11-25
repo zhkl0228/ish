@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>version</key>
-    <integer>28</integer>
+    <integer>29</integer>
     <key>files</key>
     <array>
         <dict>
@@ -64,6 +64,21 @@
             <string>files/etc/profile.d/ish-browser.sh</string>
             <key>dst</key>
             <string>/etc/profile.d/ish-browser.sh</string>
+        </dict>
+        <!-- the login shells ish-install zsh and ish-install fish make root's:
+             zsh set up for a phone's keyboard; fish given /etc/profile's
+             environment and directory, which it does not read -->
+        <dict>
+            <key>src</key>
+            <string>files/etc/zsh/zshrc.d/ish.zsh</string>
+            <key>dst</key>
+            <string>/etc/zsh/zshrc.d/ish.zsh</string>
+        </dict>
+        <dict>
+            <key>src</key>
+            <string>files/etc/fish/conf.d/ish.fish</string>
+            <key>dst</key>
+            <string>/etc/fish/conf.d/ish.fish</string>
         </dict>
         <!-- says how to install them, until one is installed -->
         <dict>

@@ -5,6 +5,9 @@
 #   ish-install go python    install those groups
 #   ish-install --cn ...     the same, from Alibaba Cloud's mirrors (in China)
 #   ish-install -l           list the groups, and which are installed
+#   ish-install zsh          zsh, set up for typing on a phone, as root's login
+#                            shell (fish the same; bash: bash again). Only
+#                            when named, one of them.
 #
 # A group already installed is skipped. Packages come from Alpine's
 # repositories (apk), and Claude Code and Kimi Code from npm, so this needs the
@@ -19,6 +22,9 @@
 set -e
 
 ALL_GROUPS="python node claude kimi go java c clang db tools svn"
+# The login shells: root's, whom the app's launch command (login -f root) logs
+# in, is the one last installed. Not among ALL_GROUPS: only when named.
+SHELL_GROUPS="bash zsh fish"
 
 # --cn: apk's repositories on mirrors.aliyun.com, and for login shells (and
 # what they start: Claude Code's own updates too) npm on npmmirror, pip and go
@@ -55,6 +61,9 @@ describe() {
         db)     echo "Redis, MariaDB server and client         ~230 MB" ;;
         tools)  echo "GitHub CLI, ShellCheck, 7-Zip            ~65 MB" ;;
         svn)    echo "Subversion (svn)                         ~6 MB" ;;
+        bash)   echo "bash, the root's own                     ~0 MB" ;;
+        zsh)    echo "zsh, suggestions and highlighting        ~6 MB" ;;
+        fish)   echo "fish                                     ~13 MB" ;;
     esac
 }
 
@@ -74,7 +83,25 @@ packages() {
         db)     echo "redis mariadb mariadb-client" ;;
         tools)  echo "github-cli shellcheck 7zip" ;;
         svn)    echo "subversion" ;;
+        bash)   echo "bash" ;;
+        zsh)    echo "zsh zsh-autosuggestions zsh-syntax-highlighting" ;;
+        fish)   echo "fish" ;;
     esac
+}
+
+# The login shell of a group of SHELL_GROUPS; nothing for another group. Its
+# settings are the app's: /etc/zsh/zshrc.d/ish.zsh, /etc/fish/conf.d/ish.fish.
+login_shell() {
+    case $1 in
+        bash) echo /bin/bash ;;
+        zsh)  echo /bin/zsh ;;
+        fish) echo /usr/bin/fish ;;
+    esac
+}
+
+# root's login shell, as /etc/passwd has it
+root_shell() {
+    awk -F: '$1 == "root" { print $7 }' /etc/passwd
 }
 
 # The npm tools' versions the app's AOT images serve, a package and its version
@@ -129,14 +156,17 @@ EOF
 installed() {
     # shellcheck disable=SC2046
     [ "$(apk info -e $(packages "$1") | wc -l)" -eq "$(packages "$1" | wc -w)" ] || return 1
+    shell=$(login_shell "$1")
+    [ -z "$shell" ] || [ "$(root_shell)" = "$shell" ] || return 1
     tool=$(npm_tool "$1")
     [ -z "$tool" ] || { has_tool "$tool" && tool_current; }
 }
 
 list() {
-    for group in $ALL_GROUPS; do
+    for group in $ALL_GROUPS $SHELL_GROUPS; do
         if installed "$group"; then
             state=installed
+            [ -z "$(login_shell "$group")" ] || state="root's login shell"
         elif tool=$(npm_tool "$group") && [ -n "$tool" ] && has_tool "$tool"; then
             state="installed $(tool_version), the app's AOT image is for $(pinned "$package")"
         else
@@ -153,24 +183,30 @@ case $1 in
     -h|--help)
         echo "usage: ish-install [--cn] [group...]   (every group if none is given;"
         echo "                                        --cn: from Alibaba Cloud's mirrors, from then on)"
+        echo "       ish-install zsh|fish|bash       (that one as root's login shell; only when named)"
         echo "       ish-install -l                  (the groups, and which are installed)"
         echo
         list
         exit 0 ;;
 esac
 
-wanted='' cn=''
+wanted='' cn='' shells=''
 for arg in "$@"; do
     if [ "$arg" = --cn ]; then
         cn=1
         continue
     fi
     if [ -z "$(packages "$arg")" ]; then
-        echo "ish-install: no group $arg; groups: $ALL_GROUPS" >&2
+        echo "ish-install: no group $arg; groups: $ALL_GROUPS $SHELL_GROUPS" >&2
         exit 2
     fi
+    [ -z "$(login_shell "$arg")" ] || shells="$shells $arg"
     wanted="$wanted $arg"
 done
+if [ "$(echo $shells | wc -w)" -gt 1 ]; then
+    echo "ish-install:$shells: root has one login shell; name one" >&2
+    exit 2
+fi
 [ -n "$wanted" ] || wanted=$ALL_GROUPS
 [ -z "$cn" ] || use_cn_mirrors
 
@@ -205,6 +241,18 @@ for group in $todo; do
     npm_installed=1
 done
 [ -z "$npm_installed" ] || npm cache clean --force 2> /dev/null
+for group in $todo; do
+    shell=$(login_shell "$group")
+    [ -n "$shell" ] || continue
+    sed -i "s|^\(root:\([^:]*:\)\{5\}\).*|\1$shell|" /etc/passwd
+    if [ "$(root_shell)" != "$shell" ]; then
+        echo "ish-install: root's line in /etc/passwd does not end in $shell: $(grep '^root:' /etc/passwd)" >&2
+        exit 1
+    fi
+    back='; bash again: ish-install bash'
+    [ "$group" != bash ] || back=''
+    echo "root logs in to $group from the next tab (this one: exec $shell -l$back)"
+done
 echo "installed:$todo"
 case " $todo " in
     *" java "*)
