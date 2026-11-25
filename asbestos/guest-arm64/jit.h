@@ -140,8 +140,17 @@ void jit_report(void);
 // Human-readable state for /proc/ish/jit (mode, AOT images, hits per module).
 size_t jit_describe(char *buf, size_t size);
 // Writes to /proc/ish/jit: "off" / "on" stop / resume installing AOT images
-// in blocks compiled afterwards (for A/B timing on a device). -1: unknown.
+// in blocks compiled afterwards (for A/B timing on a device); "region" maps
+// the code region now, if the JIT has none (jit_region_now(false)). -1: an
+// unknown command; -2: no code region (/proc/ish/jit says why).
 int jit_control(const char *cmd, size_t len);
+
+// The code region, for a JIT that started without one (iOS: no debugger then):
+// from the debugger that has iSH now, by iOS 26's JIT protocol (JIT26, which
+// the caller knows it answers: StikJIT's, where TXM is), or mapped here (iOS:
+// a debugger has had iSH, and there is no TXM). Blocks compiled from then on
+// are translated. Whether the JIT translates now; /proc/ish/jit says why not.
+bool jit_region_now(bool from_debugger);
 
 // Whether an AOT image in use was recorded from the guest module at path
 // (exec.c: node's JS stays in V8's interpreter, which node's image runs as

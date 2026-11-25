@@ -67,6 +67,13 @@ static bool pin_on;       // ISH_JIT_PIN=0: no guest registers pinned in host re
 static bool pic_on;       // ISH_JIT_PIC=1: position-independent code (see "PIC" below)
 static bool aot_only;     // ISH_JIT_AOT_ONLY=1: install AOT translations, translate nothing
                           // (what a build without the JIT would run)
+static bool aot_only_forced;   // by ISH_JIT_AOT_ONLY=1, not by having no code region
+// jit_on and aot_only change once after the start, when a code region comes
+// (jit_region_now()): read with acquire, they say the region and its stubs
+// are there
+static inline bool flag(const bool *f) {
+    return __atomic_load_n(f, __ATOMIC_ACQUIRE);
+}
 
 static bool env_off(const char *name) {
     const char *v = getenv(name);
@@ -248,8 +255,17 @@ static bool map_from_debugger(void) {
 }
 #endif
 
-static bool map_dual(void) {
+// Where the code region is to come from: as at a start (iOS 26 asks a
+// debugger attached then), from the debugger that has iSH now (JIT26, iOS),
+// or mapped here
+enum region_from { REGION_AS_AT_START, REGION_FROM_DEBUGGER, REGION_MAPPED_HERE };
+
+static bool map_dual(enum region_from from) {
 #ifndef __APPLE__
+    if (from == REGION_FROM_DEBUGGER) {
+        region_none("only iOS asks a debugger for the code region");
+        return false;
+    }
     int fd = memfd_create("ish-jit", MFD_CLOEXEC);
     if (fd < 0) {
         region_none("memfd_create: %s", strerror(errno));
@@ -280,13 +296,22 @@ static bool map_dual(void) {
 #if !TARGET_OS_OSX
     if (!may_run_written_code())
         return false;
-    // A debugger has iSH now: on iOS 26 it is one that answers JIT26 (it
-    // waits for the requests, and holds the process's faults until the
+    if (from == REGION_FROM_DEBUGGER)
+        return map_from_debugger();
+    // A debugger has iSH as it starts: on iOS 26 it is one that answers JIT26
+    // (it waits for the requests, and holds the process's faults until the
     // detach). ISH_JIT_ASK_DEBUGGER=0 is for lldb, which does not: Xcode's
     // scheme sets it.
-    if (__builtin_available(iOS 26.0, *)) {
-        if (debugger_attached() && !env_off("ISH_JIT_ASK_DEBUGGER"))
-            return map_from_debugger();
+    if (from == REGION_AS_AT_START) {
+        if (__builtin_available(iOS 26.0, *)) {
+            if (debugger_attached() && !env_off("ISH_JIT_ASK_DEBUGGER"))
+                return map_from_debugger();
+        }
+    }
+#else
+    if (from == REGION_FROM_DEBUGGER) {
+        region_none("only iOS asks a debugger for the code region");
+        return false;
     }
 #endif
     void *rw = mmap(NULL, REGION_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
@@ -3046,15 +3071,16 @@ static void jit_translate(struct fiber_block *b, const struct jit_units *U, stru
     struct asbestos *a = cm_tlb ? cm_tlb->mmu->asbestos : NULL;
     if (mod < 0 || !a || !U->n || !one_mapping(U, mod, base))
         return;
+    bool images_only = flag(&aot_only);
     // This process's own translations need a context with room for CTX_MAX
     // indices (8MB of address space, per module mapping of every guest
     // process, all in this one host process): not made when only images run.
     struct jit_ctx *ctx = NULL;
-    if (!aot_only && !(ctx = ctx_get(a, mod, base, NULL)))
+    if (!images_only && !(ctx = ctx_get(a, mod, base, NULL)))
         return;
     unsigned nkey = reg_key(b, U, mod, off, key);
     // for the registry (images are found by offset; aot_lookup() hashes for its memo)
-    uint64_t h2 = 0, h = aot_only ? 0 : reg_hash(key, nkey, &h2);
+    uint64_t h2 = 0, h = images_only ? 0 : reg_hash(key, nkey, &h2);
     pthread_mutex_lock(&reg_lock);
     const struct aot_module *img = mod_image(mod);
     struct aot_place place = {a, mod, base, NULL, NULL};
@@ -3090,7 +3116,7 @@ static void jit_translate(struct fiber_block *b, const struct jit_units *U, stru
         pthread_mutex_unlock(&reg_lock);
         return;
     }
-    if (aot_only) {
+    if (images_only) {
         pthread_mutex_unlock(&reg_lock);
         return;
     }
@@ -3716,6 +3742,8 @@ int jit_control(const char *cmd, size_t len) {
         aot_off = true;
         return 0;
     }
+    if (len == 6 && !memcmp(cmd, "region", 6))
+        return jit_region_now(false) ? 0 : -2;
     return -1;
 }
 
@@ -3723,11 +3751,12 @@ int jit_control(const char *cmd, size_t len) {
 size_t jit_describe(char *buf, size_t size) {
     size_t n = 0;
 #define OUT(...) do { if (n < size) n += (size_t) snprintf(buf + n, size - n, __VA_ARGS__); } while (0)
-    const char *mode = !jit_on ? "off (gadgets only)" :
-                       aot_only ? "AOT images only (no executable memory)" :
+    bool on = flag(&jit_on), images_only = flag(&aot_only);
+    const char *mode = !on ? "off (gadgets only)" :
+                       images_only ? "AOT images only (no executable memory)" :
                        pic_on ? "JIT, position-independent" : "JIT";
     OUT("mode: %s\n", mode);
-    if (jit_on && !aot_only)
+    if (on && !images_only)
         OUT("code region: %.1f of %u MB used%s; %s\n",
             (region_full ? REGION_SIZE : (size_t) region_used) / 1048576.0, REGION_SIZE >> 20,
             region_full ? " (full: blocks compiled since run as gadgets)" : "", region_how);
@@ -3821,7 +3850,7 @@ size_t jit_describe(char *buf, size_t size) {
 void jit_report(void) {
     // ISH_JIT_DUMP=<file>: [u64 region base][u64 bytes][code], for attributing
     // host PC samples to generated code.
-    if (!jit_on)
+    if (!flag(&jit_on))
         return;
     const char *dump = getenv("ISH_JIT_DUMP");
     if (dump) {
@@ -3859,24 +3888,30 @@ void jit_report(void) {
 
 static pthread_once_t init_once = PTHREAD_ONCE_INIT;
 
+// Whether the options are set (jit_init() got past ISH_JIT=0): a code region
+// may come after the start only then
+static bool jit_configured;
+
 static void jit_init(void) {
     if (env_off("ISH_JIT"))
         return;
     // Without a code region (-Djit_emit=false, or no executable memory at
-    // run time) only AOT images run: PIC conventions, nothing translated.
+    // run time) only AOT images run: PIC conventions, nothing translated,
+    // until one comes (jit_region_now()). ISH_JIT_REGION_LATE=1 maps none
+    // here, as iOS without a debugger has none: to try that on Linux and macOS.
     bool have_region = false;
     bool dual = !TARGET_OS_OSX || getenv("ISH_JIT_DUALMAP") != NULL;
 #ifndef ISH_JIT_NO_EMIT
-    have_region = dual ? map_dual() : map_jit();
+    const char *late = getenv("ISH_JIT_REGION_LATE");
+    if (late && late[0] == '1')
+        region_none("none mapped at the start (ISH_JIT_REGION_LATE=1)");
+    else
+        have_region = dual ? map_dual(REGION_AS_AT_START) : map_jit();
 #else
     (void) dual;
     region_none("this build maps none (-Djit_emit=false)");
 #endif
     bool have_images = aot_nregistered > 0;
-    if (!have_region && !have_images) {
-        fprintf(stderr, "⚠️  JIT: no code region and no AOT images, running gadgets only\n");
-        return;
-    }
     link_off = env_off("ISH_JIT_LINK");
     loop_off = env_off("ISH_JIT_LOOP");
     simd_on = !env_off("ISH_JIT_SIMD");
@@ -3901,15 +3936,66 @@ static void jit_init(void) {
     const char *fam = getenv("ISH_AOT_FAMILY");
     aot_family = !(fam && fam[0] == '0');
     const char *ao = getenv("ISH_JIT_AOT_ONLY");
-    aot_only = pic_on && (!have_region || (ao && ao[0] == '1'));
+    aot_only_forced = ao && ao[0] == '1';
+    aot_only = pic_on && (!have_region || aot_only_forced);
+    jit_configured = true;
+    if (!have_region && !have_images) {
+        fprintf(stderr, "⚠️  JIT: no code region and no AOT images, running gadgets only\n");
+        return;
+    }
     if (aot_only && !aot_nimages)
         return;
     jit_on = true;
 }
 
+// The code region, for a JIT that started without one (iOS: no debugger
+// then): from the debugger that has iSH now (JIT26; the caller knows it
+// answers, as StikJIT's does where TXM is), or mapped here (iOS: a debugger
+// has had iSH, where there is no TXM). Blocks compiled from then on are
+// translated; those before stay as they were. False, and /proc/ish/jit says
+// why, if there is none.
+static pthread_mutex_t region_lock = PTHREAD_MUTEX_INITIALIZER;
+
+bool jit_region_now(bool from_debugger) {
+    pthread_once(&init_once, jit_init);
+    pthread_mutex_lock(&region_lock);
+    bool translating = false;
+    if (!jit_configured) {
+        region_none("the JIT is off (ISH_JIT=0)");
+    } else if (region != NULL) {
+        translating = !aot_only;
+    } else if (aot_only_forced) {
+        region_none("AOT images only (ISH_JIT_AOT_ONLY=1)");
+    } else {
+#ifndef ISH_JIT_NO_EMIT
+        bool dual = !TARGET_OS_OSX || getenv("ISH_JIT_DUALMAP") != NULL;
+        enum region_from from = from_debugger ? REGION_FROM_DEBUGGER : REGION_MAPPED_HERE;
+        if (dual ? map_dual(from) : !from_debugger && map_jit()) {
+            make_exit_stub();
+            if (pic_on && n_pinned && !env_off("ISH_JIT_STUBS"))
+                make_stubs();
+            jit_exec_ready();
+            // The region and its stubs first: a thread that reads either flag
+            // set finds them
+            __atomic_store_n(&aot_only, false, __ATOMIC_RELEASE);
+            __atomic_store_n(&jit_on, true, __ATOMIC_RELEASE);
+            fprintf(stderr, "🛠  JIT: code region now: %s\n", region_how);
+            translating = true;
+        } else if (!dual && from_debugger) {
+            region_none("only iOS asks a debugger for the code region");
+        }
+#else
+        (void) from_debugger;
+        region_none("this build maps none (-Djit_emit=false)");
+#endif
+    }
+    pthread_mutex_unlock(&region_lock);
+    return translating;
+}
+
 bool jit_aot_serves(const char *path) {
     pthread_once(&init_once, jit_init);
-    if (!jit_on)
+    if (!flag(&jit_on))
         return false;
     for (unsigned i = 0; i < aot_nimages; i++)
         if (strcmp(aot_images[i]->path, path) == 0)
@@ -3943,7 +4029,7 @@ static struct jit_scratch *get_scratch(void) {
 
 struct jit_units *jit_units_begin(void) {
     pthread_once(&init_once, jit_init);
-    if (!jit_on)
+    if (!flag(&jit_on))
         return NULL;
     struct jit_scratch *s = get_scratch();
     if (!s)
