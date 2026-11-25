@@ -85,4 +85,13 @@ export DISABLE_AUTOUPDATER=1
 # CPU -> 6.1 s, a session with tools 5.0 -> 4.5 s, in the same wall time or
 # less. As kernel/exec.c runs node: in V8's interpreter.
 export BUN_JSC_useJIT="${BUN_JSC_useJIT:-0}"
+# Of another version than the image was recorded on (an app updated since it
+# was installed), the image serves it only in part (half its blocks): said,
+# with what installs that version where it is (ish-install -u: npm -g --prefix
+# /opt/claude-code)
+want=$(awk '$1 == "npm" && $2 == "@anthropic-ai/claude-code" { print $3 }' /usr/local/share/ish-install/versions)
+have=$(jq -r .version /opt/claude-code/lib/node_modules/@anthropic-ai/claude-code/package.json)
+if [ "$have" != "$want" ]; then
+    echo "claude: Claude Code $have; the app's AOT image is of $want, and serves this one only in part: ish-install -u installs it" >&2
+fi
 exec "$claude" "$@"

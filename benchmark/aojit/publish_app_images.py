@@ -23,9 +23,11 @@ changes once published. Then, in the repository:
   app/AOTImages.xcconfig                 the objects the app links (ISH_AOT_OBJECTS), in
                                          build/aot/<set>/, where app/fetch-aot.py puts them
   app/RootfsPatch.bundle/files/usr/local/share/ish-install/versions
-                                         the npm tools' versions, which ish-install installs
-                                         (the images serve those builds); the patch's
-                                         version goes up when they change
+                                         the versions of what the images serve: the npm
+                                         tools', which ish-install installs, and the apk
+                                         packages', of which every login shell names an
+                                         older one installed (ish-install --outdated); the
+                                         patch's version goes up when they change
 """
 
 import datetime
@@ -56,6 +58,9 @@ HOST = 'ish-aot@hk.gzmtx.cn'
 # libcrypto3 with the root, python3 from ish-install, openssh-client-default's ssh from apk)
 APK = ['musl', 'nodejs', 'openjdk25-jdk', 'maven', 'bash', 'python3', 'busybox', 'openssh-client-default',
        'libcrypto3']
+# Of them, those of whose code an image is: maven is Java's, which the JVM runs (openjdk25-jdk's
+# libjvm, whose image it is)
+APK_SERVED = [p for p in APK if p != 'maven']
 
 
 def sha256(path):
@@ -110,11 +115,14 @@ def master_set():
     return json.loads(out.stdout)['set']
 
 
-def write_versions(npm):
+def write_versions(npm, apk):
     path = os.path.join(PATCH, VERSIONS)
-    text = ('# The versions of the npm tools ish-install installs: the app\'s AOT images serve these\n'
-            '# builds (benchmark/aojit/app-images.lock.json). Written by publish_app_images.py.\n')
-    text += ''.join('%s %s\n' % (p, v) for p, v in sorted(npm.items()))
+    text = ('# The versions the app\'s AOT images were recorded on, whose builds they serve\n'
+            '# (benchmark/aojit/app-images.lock.json): of the npm tools, which ish-install installs at\n'
+            '# them, and of the apk packages of whose code an image is, an older one of which every\n'
+            '# login shell names (ish-install --outdated). Written by publish_app_images.py.\n')
+    text += ''.join('npm %s %s\n' % (p, v) for p, v in sorted(npm.items()))
+    text += ''.join('apk %s %s\n' % (p, apk[p]) for p in sorted(APK_SERVED))
     old = open(path).read() if os.path.exists(path) else None
     if old == text:
         return False
@@ -212,9 +220,10 @@ def main():
                 'ISH_AOT_SET = %s\n' % set_name)
         f.write('ISH_AOT_OBJECTS =' + ''.join(' $(SRCROOT)/build/aot/$(ISH_AOT_SET)/%s' % images[n]['object']
                                               for n in names) + '\n')
-    if write_versions(npm):
+    if write_versions(npm, apk):
         print('ish-install versions: %s; RootfsPatch version %d' % (
-            ', '.join('%s %s' % i for i in sorted(npm.items())), bump_patch_version()))
+            ', '.join('%s %s' % i for i in sorted(npm.items()) + [(p, apk[p]) for p in sorted(APK_SERVED)]),
+            bump_patch_version()))
     print('set %s (abi %s): %s' % (set_name, abi, ', '.join('%s %.1f MB (%.1f MB xz)' % (
         n, images[n]['size'] / 1e6, images[n]['xz_size'] / 1e6) for n in names)))
 

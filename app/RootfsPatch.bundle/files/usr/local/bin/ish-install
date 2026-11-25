@@ -8,6 +8,12 @@
 #   ish-install zsh          zsh, set up for typing on a phone, as root's login
 #                            shell (fish the same; bash: bash again). Only
 #                            when named, one of them.
+#   ish-install -u           what the app's AOT images serve, installed at
+#                            another version: theirs installed (Claude Code and
+#                            Kimi Code at the images' versions, where they are;
+#                            an older apk package upgraded)
+#   ish-install --outdated   only says what -u would install (every login
+#                            shell asks)
 #
 # A group already installed is skipped. Packages come from Alpine's
 # repositories (apk), and Claude Code and Kimi Code from npm, so this needs the
@@ -104,14 +110,15 @@ root_shell() {
     awk -F: '$1 == "root" { print $7 }' /etc/passwd
 }
 
-# The npm tools' versions the app's AOT images serve, a package and its version
-# a line (benchmark/aojit/publish_app_images.py writes it; the app installs it
-# with this file)
+# The versions the app's AOT images serve, of npm tools and apk packages: a
+# line "npm <package> <version>" or "apk <package> <version>"
+# (benchmark/aojit/publish_app_images.py writes it; the app installs it with
+# this file)
 VERSIONS=/usr/local/share/ish-install/versions
 
-# The version VERSIONS gives package: nothing for a package it does not name
+# The version VERSIONS gives npm package: nothing for a package it does not name
 pinned() {
-    awk -v p="$1" '!/^#/ && $1 == p { print $2 }' "$VERSIONS"
+    awk -v p="$1" '$1 == "npm" && $2 == p { print $3 }' "$VERSIONS"
 }
 
 # The version of the tool has_tool found: its package.json's, in its directory or
@@ -138,6 +145,7 @@ npm_tool() {
         kimi)   echo "kimi @moonshot-ai/kimi-code" ;;
     esac
 }
+NPM_GROUPS="claude kimi"
 
 # Whether npm_tool's tool is there: in its directory, or on the PATH. Sets
 # cmd, package and prefix from it.
@@ -168,7 +176,7 @@ list() {
             state=installed
             [ -z "$(login_shell "$group")" ] || state="root's login shell"
         elif tool=$(npm_tool "$group") && [ -n "$tool" ] && has_tool "$tool"; then
-            state="installed $(tool_version), the app's AOT image is for $(pinned "$package")"
+            state="installed $(tool_version), the app's AOT image is for $(pinned "$package") (ish-install -u)"
         else
             state=
         fi
@@ -176,15 +184,114 @@ list() {
     done
 }
 
+# What the app's AOT images serve at another version than is installed: the
+# groups of npm tools of another version (outdated_groups), the apk packages
+# older than the images' (older_apk), and each with its version and the
+# images' (outdated_lines); all empty when none is. And the apk packages newer
+# than the images' (newer_lines), as -u leaves one where apk's repositories
+# have moved on since the images were recorded: they have only a package's
+# newest, which the app's next images are of. An app updated with images
+# of newer versions leaves the tools as they were, which they then serve only
+# in part (Claude Code's claude.exe: half its blocks). -u installs the images'
+# versions: an npm tool's again (npm_install), an apk package's with apk
+# upgrade (the repositories have that version, or a newer one, of which the
+# next images are). Every login shell asks (/etc/profile.d/ish-install.sh).
+find_outdated() {
+    outdated_lines='' outdated_groups='' older_apk='' newer_lines=''
+    for group in $NPM_GROUPS; do
+        if has_tool "$(npm_tool "$group")" && ! tool_current; then
+            outdated_lines="$outdated_lines  $package $(tool_version), the images' $(pinned "$package")
+"
+            outdated_groups="$outdated_groups $group"
+        fi
+    done
+    # A package's V: line follows its P: line in apk's database: grep is
+    # quick, where awk reading all of it is not (1.8MB, 0.4s)
+    set --
+    for package in $(awk '$1 == "apk" { print $2 }' "$VERSIONS"); do
+        set -- "$@" -e "P:$package"
+    done
+    differ=$(grep -A1 -x -F "$@" /lib/apk/db/installed |
+        awk -v versions="$VERSIONS" '
+            BEGIN { while ((getline line < versions) > 0) { split(line, f, " "); if (f[1] == "apk") want[f[2]] = f[3] } }
+            /^P:/ { package = substr($0, 3) }
+            /^V:/ { have = substr($0, 3); if (have != want[package]) print package, have, want[package] }')
+    [ -n "$differ" ] || return 0
+    while read -r package have want; do
+        case $(apk version -t "$have" "$want") in
+            '<')
+                outdated_lines="$outdated_lines  $package $have, the images' $want
+"
+                older_apk="$older_apk $package" ;;
+            '>')
+                newer_lines="$newer_lines  $package $have, the images' $want
+" ;;
+        esac
+    done <<EOF
+$differ
+EOF
+}
+
+# Install group's npm tool at the version VERSIONS gives, where it goes: npm -g,
+# into the tool's own directory if it has one (npm -g --prefix /opt/claude-code)
+npm_install() {
+    read -r cmd package prefix <<EOF
+$(npm_tool "$1")
+EOF
+    version=$(pinned "$package")
+    if [ -n "$prefix" ]; then
+        npm install -g --prefix "$prefix" --no-audit --no-fund "$package${version:+@$version}"
+    else
+        npm install -g --no-audit --no-fund "$package${version:+@$version}"
+    fi
+}
+
 case $1 in
     -l|--list)
         list
+        exit 0 ;;
+    --outdated)
+        find_outdated
+        [ -n "$outdated_lines" ] || exit 0
+        printf "The app's AOT images are of other versions of these, which they serve only in part:\n%s" "$outdated_lines"
+        echo "To install theirs: ish-install -u"
+        echo
+        exit 0 ;;
+    -u|--upgrade)
+        find_outdated
+        if [ -z "$outdated_lines" ]; then
+            echo "ish-install: nothing to upgrade for the app's AOT images"
+            exit 0
+        fi
+        printf "The app's AOT images are of other versions of these, which they serve only in part:\n%s" "$outdated_lines"
+        # shellcheck disable=SC2086
+        [ -z "$older_apk" ] || apk upgrade -U $older_apk
+        for group in $outdated_groups; do
+            npm_install "$group"
+        done
+        [ -z "$outdated_groups" ] || npm cache clean --force 2> /dev/null
+        upgraded_groups=$outdated_groups upgraded="$older_apk$outdated_groups"
+        find_outdated
+        if [ -n "$outdated_lines" ]; then
+            printf "Still of other versions than the images' (apk's repositories have not theirs yet):\n%s" "$outdated_lines"
+            exit 1
+        fi
+        for group in $upgraded_groups; do
+            echo "$group: the version installed runs from its next start; one running goes on as it was"
+        done
+        if [ -n "$newer_lines" ]; then
+            printf "Newer than the images' (apk's repositories have only the newest), which they serve only in part until the app's next images, recorded on these:\n%s" "$newer_lines"
+        fi
+        echo "upgraded:$upgraded"
         exit 0 ;;
     -h|--help)
         echo "usage: ish-install [--cn] [group...]   (every group if none is given;"
         echo "                                        --cn: from Alibaba Cloud's mirrors, from then on)"
         echo "       ish-install zsh|fish|bash       (that one as root's login shell; only when named)"
         echo "       ish-install -l                  (the groups, and which are installed)"
+        echo "       ish-install -u                  (what the app's AOT images serve, installed at another"
+        echo "                                        version: theirs installed)"
+        echo "       ish-install --outdated          (only says what -u would install)"
         echo
         list
         exit 0 ;;
@@ -232,12 +339,7 @@ for group in $todo; do
         tool_current && continue
         echo "$group: $package $(tool_version) is installed, the app's AOT image is for $(pinned "$package"): installing that"
     fi
-    version=$(pinned "$package")
-    if [ -n "$prefix" ]; then
-        npm install -g --prefix "$prefix" --no-audit --no-fund "$package${version:+@$version}"
-    else
-        npm install -g --no-audit --no-fund "$package${version:+@$version}"
-    fi
+    npm_install "$group"
     npm_installed=1
 done
 [ -z "$npm_installed" ] || npm cache clean --force 2> /dev/null

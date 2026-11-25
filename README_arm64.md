@@ -200,7 +200,10 @@ Enables AI agents to share files between the host app and the Linux guest withou
 - **Alpine 3.24 aarch64** with full apk package manager (`tools/build-rootfs.sh`), with
   only everyday tools preinstalled; `ish-install` installs the development tools when wanted
   (Python, Node.js and Claude Code, Go, Java, C/C++, clang, Redis and MariaDB), all of them
-  or by group (`ish-install go python`; `ish-install -l` lists the groups)
+  or by group (`ish-install go python`; `ish-install -l` lists the groups). After an app
+  update whose AOT images were recorded on newer versions, every login shell names what they
+  serve only in part, and `ish-install -u` installs their versions (Claude Code and Kimi Code
+  where they are, an older apk package upgraded)
 - **RootfsPatch.bundle**: Versioned overlay system for incremental rootfs updates
 - **Polyfills**: WebAssembly polyfill for undici/llhttp, fetch polyfill for HTTP downloads
 - No environment variables injected: a program sees the environment it was started with
