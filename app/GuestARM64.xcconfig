@@ -7,14 +7,15 @@ GCC_PREPROCESSOR_DEFINITIONS =
 GCC_PREPROCESSOR_DEFINITIONS[config=Debug-ApplePleaseFixFB19282108] = DEBUG=1
 
 // YES builds libish with the native JIT (meson -Djit=true, see
-// asbestos/guest-arm64/jit.h). Translating at run time needs executable
-// memory, so ISH_JIT_EMIT = YES is for development builds only; with NO the
-// JIT never maps executable memory and only runs AOT images that the app
-// target links in (aot_<name>.S from tools/jit_aot/gen.py, see
-// asbestos/guest-arm64/aot.h). Without images it runs everything in gadgets,
-// as a build with NO does.
+// asbestos/guest-arm64/jit.h). It runs the AOT images the app target links in
+// (aot_<name>.S from tools/jit_aot/gen.py, see asbestos/guest-arm64/aot.h),
+// and everything else in gadgets. ISH_JIT_EMIT = YES translates the rest at
+// run time too, into executable memory, which iOS lets a process run only
+// while a debugger has it (CS_DEBUGGED: Xcode, or StikDebug on the device):
+// without one the JIT maps none and runs as a build with NO does, which never
+// maps it (meson -Djit_emit=false).
 ISH_ENABLE_JIT = YES
-ISH_JIT_EMIT = NO
+ISH_JIT_EMIT = YES
 
 // ARM64 root filesystem, relative to the repository: Alpine 3.24 aarch64 with
 // the preinstalled packages, built by tools/build-rootfs.sh (not in git).

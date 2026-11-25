@@ -336,8 +336,9 @@ meson setup build-arm64-aot -Djit=true -Djit_emit=false -Dbuildtype=release \
 ninja -C build-arm64-aot
 ```
 
-App / IPA: the ARM64 targets build the AOT runtime by default (`ISH_ENABLE_JIT = YES`,
-`ISH_JIT_EMIT = NO` in `app/GuestARM64.xcconfig`). List the images in `app/AOTImages.local.xcconfig`
+App / IPA: the ARM64 targets build the JIT with the AOT runtime (`ISH_ENABLE_JIT = YES` in
+`app/GuestARM64.xcconfig`); with `ISH_JIT_EMIT = YES` there it also translates at run time while a
+debugger is attached (Xcode, StikDebug), and without one runs the images and gadgets only. List the images in `app/AOTImages.local.xcconfig`
 (not committed, included by `app/AppARM64.xcconfig`) and a plain build of the scheme links them:
 
 ```sh

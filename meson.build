@@ -45,7 +45,7 @@ if ish_jit
     endif
     if not get_option('jit_emit')
         # Run only AOT images a target links in (asbestos/guest-arm64/aot.h);
-        # never map executable memory (iOS release builds).
+        # never map executable memory, even with a debugger attached.
         add_project_arguments('-DISH_JIT_NO_EMIT=1', language: 'c')
     endif
 endif

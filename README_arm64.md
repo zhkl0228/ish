@@ -90,6 +90,9 @@ backend builds a **gadget program** — an array of `unsigned long` values alter
 to pre-compiled ARM64 gadget functions with inline operands. Execution is a chain of tail
 calls — each gadget loads the next pointer from the program stream and branches to it
 (`br x8`). No executable memory is allocated, no machine code is generated at runtime.
+(The native JIT on top of it, `asbestos/guest-arm64/jit.c`, runs the AOT images the app links
+in, and translates at run time only while a debugger is attached, which iOS requires for it:
+Xcode, or StikDebug on the device.)
 The host-code overhead per guest instruction is a few ARM64 instructions inside the
 corresponding gadget.
 
