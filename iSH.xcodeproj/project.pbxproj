@@ -175,6 +175,9 @@
 		AA000109AF96D90D00FFB7A4 /* TerminalView.m in Sources */ = {isa = PBXBuildFile; fileRef = BB78AB2A1FAD22440013E782 /* TerminalView.m */; };
 		AA00010AAF96D90D00FFB7A4 /* mach_exc.defs in Sources */ = {isa = PBXBuildFile; fileRef = 49087C26295DF1350058075B /* mach_exc.defs */; settings = {ATTRIBUTES = (Server, ); }; };
 		AA00010BAF96D90D00FFB7A4 /* ScrollbarView.m in Sources */ = {isa = PBXBuildFile; fileRef = BB23F58C231E1D1400585522 /* ScrollbarView.m */; };
+		83339ED5AC086DD47F1DFD92 /* MonitorStripView.m in Sources */ = {isa = PBXBuildFile; fileRef = 33A5ED90BCF94E8F02CF71F1 /* MonitorStripView.m */; };
+		AD73F38C646D985744D94F5B /* MonitorDetailViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 9B33E330436B7DAFF9CB4C2A /* MonitorDetailViewController.m */; };
+		91B2EE7834408CB02B4097F1 /* MonitorSampler.m in Sources */ = {isa = PBXBuildFile; fileRef = FC16CCE0F1BA542252CD40CC /* MonitorSampler.m */; };
 		AA00010CAF96D90D00FFB7A4 /* DelayedUITask.m in Sources */ = {isa = PBXBuildFile; fileRef = BB455E101FB37F6600AFB48B /* DelayedUITask.m */; };
 		AA00010DAF96D90D00FFB7A4 /* hook.c in Sources */ = {isa = PBXBuildFile; fileRef = 49087C14295DF0490058075B /* hook.c */; };
 		AA00010EAF96D90D00FFB7A4 /* Roots.m in Sources */ = {isa = PBXBuildFile; fileRef = BB10E5CD248DBE66009C7A74 /* Roots.m */; };
@@ -216,6 +219,9 @@
 		CE0E058DCA6C5E29C6B30547 /* ClipboardSettingsViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = CE331FAA24D08D73A2254BAF /* ClipboardSettingsViewController.m */; };
 		BB28C79726896B1F00BDC834 /* TerminalView.m in Sources */ = {isa = PBXBuildFile; fileRef = BB78AB2A1FAD22440013E782 /* TerminalView.m */; };
 		BB28C79826896B1F00BDC834 /* ScrollbarView.m in Sources */ = {isa = PBXBuildFile; fileRef = BB23F58C231E1D1400585522 /* ScrollbarView.m */; };
+		F08205DAB85935B5E4DA8556 /* MonitorStripView.m in Sources */ = {isa = PBXBuildFile; fileRef = 33A5ED90BCF94E8F02CF71F1 /* MonitorStripView.m */; };
+		C60A8E83C3D4A43E185DDBD6 /* MonitorDetailViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 9B33E330436B7DAFF9CB4C2A /* MonitorDetailViewController.m */; };
+		DEFCE7A73F25F7ED9B991522 /* MonitorSampler.m in Sources */ = {isa = PBXBuildFile; fileRef = FC16CCE0F1BA542252CD40CC /* MonitorSampler.m */; };
 		BB28C79926896B1F00BDC834 /* DelayedUITask.m in Sources */ = {isa = PBXBuildFile; fileRef = BB455E101FB37F6600AFB48B /* DelayedUITask.m */; };
 		BB28C79A26896B1F00BDC834 /* Terminal.m in Sources */ = {isa = PBXBuildFile; fileRef = BB0FC5911F980A6B00803272 /* Terminal.m */; };
 		BB28C79B26896B1F00BDC834 /* FontPickerViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = BB101B372364CF57000A93BC /* FontPickerViewController.m */; };
@@ -537,6 +543,12 @@
 		BB235536235D49B300139E00 /* CoreLocation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreLocation.framework; path = System/Library/Frameworks/CoreLocation.framework; sourceTree = SDKROOT; };
 		BB23F58B231E1D1400585522 /* ScrollbarView.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ScrollbarView.h; sourceTree = "<group>"; };
 		BB23F58C231E1D1400585522 /* ScrollbarView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = ScrollbarView.m; sourceTree = "<group>"; };
+		343AD69E5B94D3810979AE03 /* MonitorStripView.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MonitorStripView.h; sourceTree = "<group>"; };
+		33A5ED90BCF94E8F02CF71F1 /* MonitorStripView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MonitorStripView.m; sourceTree = "<group>"; };
+		5AA2200FC3D9942B80D9DE0D /* MonitorDetailViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MonitorDetailViewController.h; sourceTree = "<group>"; };
+		9B33E330436B7DAFF9CB4C2A /* MonitorDetailViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MonitorDetailViewController.m; sourceTree = "<group>"; };
+		39D7AD2FC5FFC645E2347106 /* MonitorSampler.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MonitorSampler.h; sourceTree = "<group>"; };
+		FC16CCE0F1BA542252CD40CC /* MonitorSampler.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MonitorSampler.m; sourceTree = "<group>"; };
 		BB267FA423A48F1500ED7CAF /* AltIconViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AltIconViewController.h; sourceTree = "<group>"; };
 		BB267FA523A48F1500ED7CAF /* AltIconViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = AltIconViewController.m; sourceTree = "<group>"; };
 		BB28C755268956C900BDC834 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS15.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
@@ -876,6 +888,12 @@
 				BB0FC5911F980A6B00803272 /* Terminal.m */,
 				BB23F58B231E1D1400585522 /* ScrollbarView.h */,
 				BB23F58C231E1D1400585522 /* ScrollbarView.m */,
+				343AD69E5B94D3810979AE03 /* MonitorStripView.h */,
+				33A5ED90BCF94E8F02CF71F1 /* MonitorStripView.m */,
+				5AA2200FC3D9942B80D9DE0D /* MonitorDetailViewController.h */,
+				9B33E330436B7DAFF9CB4C2A /* MonitorDetailViewController.m */,
+				39D7AD2FC5FFC645E2347106 /* MonitorSampler.h */,
+				FC16CCE0F1BA542252CD40CC /* MonitorSampler.m */,
 				BB4A53991FAA40FD00A72ACE /* terminal */,
 				BB235532235D472F00139E00 /* Devices */,
 				BBFB557321586C7600DFE6DE /* About */,
@@ -1706,6 +1724,9 @@
 				AA000109AF96D90D00FFB7A4 /* TerminalView.m in Sources */,
 				AA00010AAF96D90D00FFB7A4 /* mach_exc.defs in Sources */,
 				AA00010BAF96D90D00FFB7A4 /* ScrollbarView.m in Sources */,
+				83339ED5AC086DD47F1DFD92 /* MonitorStripView.m in Sources */,
+				AD73F38C646D985744D94F5B /* MonitorDetailViewController.m in Sources */,
+				91B2EE7834408CB02B4097F1 /* MonitorSampler.m in Sources */,
 				AA00010CAF96D90D00FFB7A4 /* DelayedUITask.m in Sources */,
 				AA00010DAF96D90D00FFB7A4 /* hook.c in Sources */,
 				AA00010EAF96D90D00FFB7A4 /* Roots.m in Sources */,
@@ -1779,6 +1800,9 @@
 				BB28C79726896B1F00BDC834 /* TerminalView.m in Sources */,
 				497A08BF29633FF400B323CF /* mach_exc.defs in Sources */,
 				BB28C79826896B1F00BDC834 /* ScrollbarView.m in Sources */,
+				F08205DAB85935B5E4DA8556 /* MonitorStripView.m in Sources */,
+				C60A8E83C3D4A43E185DDBD6 /* MonitorDetailViewController.m in Sources */,
+				DEFCE7A73F25F7ED9B991522 /* MonitorSampler.m in Sources */,
 				BB28C79926896B1F00BDC834 /* DelayedUITask.m in Sources */,
 				497A08C029633FFA00B323CF /* hook.c in Sources */,
 				BB28C7BF2689799800BDC834 /* Roots.m in Sources */,

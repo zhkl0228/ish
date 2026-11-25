@@ -25,6 +25,7 @@ NSString *const kPreferenceBootCommandKey = @"Boot Command";
 static NSString *const kPreferenceCursorStyleKey = @"Cursor Style";
 static NSString *const kPreferenceBlinkCursorKey = @"Blink Cursor";
 NSString *const kPreferenceHideStatusBarKey = @"Status Bar";
+static NSString *const kPreferenceShowMetersKey = @"Show Meters";
 static NSString *const kPreferenceColorSchemeKey = @"Color Scheme";
 // This key has a different naming scheme because it's used in UI tests as a
 // CLI argument.
@@ -163,6 +164,7 @@ bool remove_user_default_impl(const char *name) {
             kPreferenceBlinkCursorKey: @(NO),
             kPreferenceCursorStyleKey: @(CursorStyleBlock),
             kPreferenceHideStatusBarKey: @(NO),
+            kPreferenceShowMetersKey: @(YES),
             kPreferenceColorSchemeKey: @(ColorSchemeMatchSystem),
             kPreferenceThemeKey: @"Default",
             kHostnameOverrideKey: UIDevice.currentDevice.name,
@@ -197,6 +199,7 @@ bool remove_user_default_impl(const char *name) {
             @"cursor_style": kPreferenceCursorStyleKey,
             @"blink_cursor": kPreferenceBlinkCursorKey,
             @"hide_status_bar": kPreferenceHideStatusBarKey,
+            @"show_meters": kPreferenceShowMetersKey,
             @"color_scheme": kPreferenceColorSchemeKey,
             @"theme": kPreferenceThemeKey,
             @"hostname_override": kHostnameOverrideKey,
@@ -224,6 +227,7 @@ bool remove_user_default_impl(const char *name) {
             kPreferenceCursorStyleKey: property(cursorStyle),
             kPreferenceBlinkCursorKey: property(blinkCursor),
             kPreferenceHideStatusBarKey: property(hideStatusBar),
+            kPreferenceShowMetersKey: property(showMeters),
             kPreferenceColorSchemeKey: property(colorScheme),
             kPreferenceClaudeProxyKey: property(claudeProxy),
             kPreferenceClaudeMemoryKey: property(claudeMemory),
@@ -524,6 +528,19 @@ bool remove_user_default_impl(const char *name) {
 }
 
 - (BOOL)validateHideStatusBar:(id *)value error:(NSError **)error {
+    return [*value isKindOfClass:NSNumber.class];
+}
+
+// MARK: showMeters
+- (BOOL)showMeters {
+    return [_defaults boolForKey:kPreferenceShowMetersKey];
+}
+
+- (void)setShowMeters:(BOOL)showMeters {
+    [_defaults setBool:showMeters forKey:kPreferenceShowMetersKey];
+}
+
+- (BOOL)validateShowMeters:(id *)value error:(NSError **)error {
     return [*value isKindOfClass:NSNumber.class];
 }
 

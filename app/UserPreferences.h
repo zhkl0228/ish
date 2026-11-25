@@ -54,6 +54,8 @@ extern const int kDefaultFontSize;
 @property BOOL hideExtraKeysWithExternalKeyboard;
 @property BOOL overrideControlSpace;
 @property BOOL hideStatusBar;
+// The meters right of the terminal's last column (MonitorStripView)
+@property BOOL showMeters;
 @property (nonatomic) Theme *theme;
 @property (nonatomic) Palette *palette;
 @property BOOL shouldDisableDimming;

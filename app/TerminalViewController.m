@@ -23,6 +23,8 @@
 #import "ClipboardStackView.h"
 #import "ClipboardSettingsViewController.h"
 #import "ClipboardUI.h"
+#import "MonitorStripView.h"
+#import "MonitorDetailViewController.h"
 #include "kernel/init.h"
 #include "kernel/task.h"
 #include "kernel/calls.h"
@@ -77,6 +79,9 @@
 
 // Find (⌘F), created the first time it is shown; hidden while not finding
 @property (nullable) FindBar *findBar;
+
+// The meters, in what the terminal leaves right of its last column
+@property MonitorStripView *monitorStrip;
 
 @property BOOL ignoreKeyboardMotion;
 // How much of the view's bottom the keyboard and the keys over it cover (0
@@ -288,6 +293,15 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
     ]];
     [self tabsDidChange];
 
+    // The meters, while Settings or the View menu have them shown; a tap on
+    // them (VoiceOver's activation) shows their details
+    self.monitorStrip = [[MonitorStripView alloc] initWithFrame:CGRectZero];
+    __weak typeof(self) weakSelf = self;
+    self.termView.marginTapped = self.monitorStrip.activated = ^{
+        [weakSelf showMeterDetails];
+    };
+    [self applyShowMeters];
+
     self.terminal = self.terminal;
     [self.termView becomeFirstResponder];
 
@@ -371,6 +385,11 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
             [self setNeedsStatusBarAppearanceUpdate];
         });
     }];
+    [UserPreferences.shared observe:@[@"showMeters"] options:0 owner:self usingBlock:^(typeof(self) self) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self applyShowMeters];
+        });
+    }];
     [UserPreferences.shared observe:@[@"colorScheme", @"theme", @"hideExtraKeysWithExternalKeyboard"]
                             options:0 owner:self usingBlock:^(typeof(self) self) {
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -379,7 +398,6 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
     }];
     [self _updateBadge];
 
-    __weak typeof(self) weakSelf = self;
     self.termView.pasteInterceptor = ^BOOL {
         return [weakSelf pasteFromStack];
     };
@@ -818,6 +836,7 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
                    pressedColor:[background ish_blendedWithColor:foreground fraction:0.36]
                       textColor:foreground];
         }
+        self.monitorStrip.foregroundColor = foreground;
         // the gaps between the keys and the rest of the row
         self.barView.backgroundColor = self.view.backgroundColor;
     }];
@@ -1238,6 +1257,8 @@ static NSString *ShellQuoted(NSString *string) {
         command.state = prefs.hideExtraKeysWithExternalKeyboard ? UIMenuElementStateOff : UIMenuElementStateOn;
     } else if (action == @selector(toggleStatusBar:)) {
         command.state = prefs.hideStatusBar ? UIMenuElementStateOn : UIMenuElementStateOff;
+    } else if (action == @selector(toggleMeters:)) {
+        command.state = prefs.showMeters ? UIMenuElementStateOn : UIMenuElementStateOff;
     } else if (action == @selector(toggleKeepAlive:)) {
         BackgroundKeepAlive *keepAlive = BackgroundKeepAlive.shared;
         command.state = keepAlive.enabled && !keepAlive.denied ? UIMenuElementStateOn : UIMenuElementStateOff;
@@ -1523,6 +1544,24 @@ static NSString *ShellQuoted(NSString *string) {
 }
 - (void)toggleStatusBar:(id)sender {
     UserPreferences.shared.hideStatusBar = !UserPreferences.shared.hideStatusBar;
+}
+- (void)toggleMeters:(id)sender {
+    UserPreferences.shared.showMeters = !UserPreferences.shared.showMeters;
+}
+
+// Off, the meters leave the window, and read nothing (MonitorStripView). The
+// room they had stays the scroll bar's: the terminal keeps its columns.
+- (void)applyShowMeters {
+    self.termView.marginView = UserPreferences.shared.showMeters ? self.monitorStrip : nil;
+}
+
+// In a popover pointing at them, as they read
+- (void)showMeterDetails {
+    MonitorStripView *strip = self.monitorStrip;
+    MonitorDetailViewController *details = [[MonitorDetailViewController alloc] initWithSampler:strip.sampler
+                                                                                     sourceView:strip
+                                                                                     sourceRect:strip.metersFrame];
+    [self presentViewController:details animated:YES completion:nil];
 }
 
 - (void)toggleKeepAlive:(id)sender {

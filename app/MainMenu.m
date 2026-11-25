@@ -149,6 +149,7 @@ static UIMenu *ViewMenu(void) {
         Group(@"view.toggles", @[
             Cmd(@"Extra Keys with Hardware Keyboard", @"keyboard", @selector(toggleExtraKeys:), nil),
             Cmd(@"Hide Status Bar", nil, @selector(toggleStatusBar:), nil),
+            Cmd(@"Show Meters", @"gauge.with.dots.needle.33percent", @selector(toggleMeters:), nil),
         ]),
         Group(@"view.console", @[
             Submenu(@"Console", @"display", @"console", consoles),

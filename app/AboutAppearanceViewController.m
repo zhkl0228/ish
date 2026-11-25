@@ -17,6 +17,9 @@
 @property (strong, nonatomic) IBOutlet UISwitch *blinkCursor;
 @property (strong, nonatomic) IBOutlet UISegmentedControl *cursorStyle;
 @property (strong, nonatomic) IBOutlet UISwitch *hideStatusBar;
+// The meters' row is made here, not in the storyboard: its cell a plain one
+// with this switch
+@property UISwitch *showMeters;
 @property UIFontPickerViewController *fontPicker API_AVAILABLE(ios(13));
 @end
 
@@ -70,7 +73,10 @@ char *previewString = "# cat /proc/ish/colors\r\n"
         });
     }];
     
-    [UserPreferences.shared observe:@[@"cursorStyle", @"blinkCursor", @"hideStatusBar"]
+    self.showMeters = [UISwitch new];
+    [self.showMeters addTarget:self action:@selector(showMetersChanged:) forControlEvents:UIControlEventValueChanged];
+    [self.tableView registerClass:UITableViewCell.class forCellReuseIdentifier:@"Meters"];
+    [UserPreferences.shared observe:@[@"cursorStyle", @"blinkCursor", @"hideStatusBar", @"showMeters"]
                             options:0 owner:self usingBlock:^(typeof(self) self) {
         dispatch_async(dispatch_get_main_queue(), ^{
             [self updateOtherControls];
@@ -115,6 +121,7 @@ enum {
     ColorSchemeSection,
     CursorSection,
     StatusBarSection,
+    MetersSection,
     NumberOfSections,
 };
 
@@ -129,6 +136,7 @@ enum {
         case ColorSchemeSection: return 3;
         case CursorSection: return 2;
         case StatusBarSection: return 1;
+        case MetersSection: return 1;
         default: NSAssert(NO, @"unhandled section"); return 0;
     }
 }
@@ -139,6 +147,7 @@ enum {
         case ColorSchemeSection: return @"Color Scheme";
         case CursorSection: return @"Cursor";
         case StatusBarSection: return @"Status Bar";
+        case MetersSection: return @"Meters";
         default: return nil;
     }
 }
@@ -146,6 +155,7 @@ enum {
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     switch (section) {
         case PreviewSection: return @"Change the color scheme used for the preview.";
+        case MetersSection: return @"The CPUs, the memory and the heat, right of the terminal's last column. Tap them for more.";
         default: return nil;
     }
 }
@@ -157,6 +167,7 @@ enum {
         case ColorSchemeSection: return @"Color Scheme";
         case CursorSection: return @[@"Cursor Style", @"Blink Cursor"][indexPath.row];
         case StatusBarSection: return @"Status Bar";
+        case MetersSection: return @"Meters";
         default: return nil;
     }
 }
@@ -232,6 +243,12 @@ enum {
         case StatusBarSection:
             cell.selectionStyle = UITableViewCellSelectionStyleNone;
             break;
+
+        case MetersSection:
+            cell.textLabel.text = @"Show Meters";
+            cell.accessoryView = self.showMeters;
+            cell.selectionStyle = UITableViewCellSelectionStyleNone;
+            break;
     }
     
     return cell;
@@ -260,6 +277,7 @@ enum {
 
 - (void)updateOtherControls {
     self.hideStatusBar.on = UserPreferences.shared.hideStatusBar;
+    self.showMeters.on = UserPreferences.shared.showMeters;
     self.cursorStyle.selectedSegmentIndex = UserPreferences.shared.cursorStyle;
     self.blinkCursor.on = UserPreferences.shared.blinkCursor;
     [self setNeedsStatusBarAppearanceUpdate];
@@ -292,6 +310,10 @@ enum {
 
 - (IBAction)fontSizeChanged:(UIStepper *)sender {
     UserPreferences.shared.fontSize = @((int) sender.value);
+}
+
+- (void)showMetersChanged:(UISwitch *)sender {
+    UserPreferences.shared.showMeters = sender.on;
 }
 
 - (IBAction)hideStatusBarChanged:(UISwitch *)sender {

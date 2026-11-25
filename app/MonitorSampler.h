@@ -1,0 +1,60 @@
+//
+//  MonitorSampler.h
+//  iSH
+//
+//  What the meters show (MonitorStripView) and their details
+//  (MonitorDetailViewController): the device's CPUs and load, the app's
+//  memory and the kernel's brake on it, how hot the device runs. Read once a
+//  second while started, each reading told (MonitorSamplerDidReadNotification).
+//
+
+#import <Foundation/Foundation.h>
+
+NS_ASSUME_NONNULL_BEGIN
+
+// What one reading found. The CPUs' shares are of their time since the
+// reading before, which the first reading after start has none of: counted
+// NO, and they are 0.
+@interface MonitorReading : NSObject
+
+@property (readonly) BOOL counted;
+// Of all the CPUs' time: busy, which is user (with nice) and system
+@property (readonly) double cpuBusy;
+@property (readonly) double cpuUser;
+@property (readonly) double cpuSystem;
+// Each CPU's busy share, as many as the host has (get_per_cpu_usage); none
+// where not counted
+@property (readonly) NSArray<NSNumber *> *coreBusy;
+// The device's load averages over 1, 5 and 15 minutes (vm.loadavg, as the
+// guest's /proc/loadavg has them)
+@property (readonly) double load1;
+@property (readonly) double load5;
+@property (readonly) double load15;
+// The memory as the guest's free counts it (get_mem_usage): on iOS the app's
+// footprint of its limit (appLimit), past which iOS ends it; with no limit
+// (the simulator), the device's
+@property (readonly) uint64_t memoryUsed;
+@property (readonly) uint64_t memoryTotal;
+@property (readonly) BOOL appLimit;
+@property (readonly) double memoryFraction;
+// The kernel's memory governor refuses the guest's new memory (ish_mem_braked)
+@property (readonly) BOOL memoryBraked;
+@property (readonly) NSProcessInfoThermalState thermalState;
+
+@end
+
+extern NSNotificationName const MonitorSamplerDidReadNotification;
+
+@interface MonitorSampler : NSObject
+
+// The last reading; nil before the first
+@property (readonly, nullable) MonitorReading *reading;
+
+// Reads now, then once a second until stopped; started again, the CPUs are
+// counted from its first reading, not across the time it was stopped
+- (void)start;
+- (void)stop;
+
+@end
+
+NS_ASSUME_NONNULL_END
