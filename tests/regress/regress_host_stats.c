@@ -2,8 +2,8 @@
 // app's malloc (0d586712):
 //
 //   anonymous host mmaps since the app started: N, for X MB; of them lazy
-//       commits C (H host pages, G guest pages), Y MB; copies on write K, a host
-//       page each: V MB
+//       commits C (H host pages, G guest pages), Y MB; copies on write K (H2
+//       host pages, G2 guest pages), Y2 MB, a host page each: V MB
 //   MADV_DONTNEED zeroed in place since the app started: P pages, Z MB
 //   translated blocks now: B, W MB
 //
@@ -16,8 +16,10 @@
 //    contents;
 //  - an 8MB PROT_NONE mapping, a host one though it costs no memory: an
 //    anonymous host mmap of 8MB;
-//  - 256 pages a forked child writes: as many copies on write, each an
-//    anonymous host mmap;
+//  - 256 pages a forked child writes: copied on write, 1MB of guest pages, in
+//    copies each an anonymous host mmap of a host page (which on a host whose
+//    page is larger holds its other guest pages too: a quarter as many on
+//    iOS);
 //  - 20000 functions of their own, called once each: 20000 blocks more, and
 //    their bytes at least the 128 of each block's gadgets (16 unsigned longs,
 //    FIBER_BLOCK_INITIAL_CAPACITY); unmapped, and in a child that exits or
@@ -78,8 +80,8 @@ static void check_alone(const char *name, int ok, const char *detail) {
 static char detail[256];
 
 struct stats {
-    unsigned long long anon_mmaps, lazy, host_pages, guest_pages, cow, zeroed, blocks;
-    double anon_mb, committed_mb, cow_mb, zeroed_mb, blocks_mb;
+    unsigned long long anon_mmaps, lazy, host_pages, guest_pages, cow, cow_host_pages, cow_guest_pages, zeroed, blocks;
+    double anon_mb, committed_mb, copied_mb, cow_mb, zeroed_mb, blocks_mb;
 };
 
 static char text[1 << 16];
@@ -93,10 +95,10 @@ static struct stats read_stats(void) {
     int lines = 0;
     for (char *line = strtok(text, "\n"); line != NULL; line = strtok(NULL, "\n")) {
         lines += sscanf(line, "anonymous host mmaps since the app started: %llu, for %lf MB; of them lazy commits "
-                        "%llu (%llu host pages, %llu guest pages), %lf MB; copies on write %llu, a host page each: "
-                        "%lf MB",
+                        "%llu (%llu host pages, %llu guest pages), %lf MB; copies on write %llu (%llu host pages, "
+                        "%llu guest pages), %lf MB, a host page each: %lf MB",
                         &s.anon_mmaps, &s.anon_mb, &s.lazy, &s.host_pages, &s.guest_pages, &s.committed_mb, &s.cow,
-                        &s.cow_mb) == 8;
+                        &s.cow_host_pages, &s.cow_guest_pages, &s.copied_mb, &s.cow_mb) == 11;
         lines += sscanf(line, "MADV_DONTNEED zeroed in place since the app started: %llu pages, %lf MB", &s.zeroed,
                         &s.zeroed_mb) == 2;
         lines += sscanf(line, "translated blocks now: %llu, %lf MB", &s.blocks, &s.blocks_mb) == 2;
@@ -202,11 +204,12 @@ static void prot_none_and_copies_on_write(void) {
     // and a few more: the pages of the child's stack and data it writes, and
     // this process's since the fork
     unsigned long long cow = s3.cow - s2.cow;
-    snprintf(detail, sizeof(detail), "%llu copies (%.1f MB), %llu anonymous host mmaps", cow, s3.cow_mb - s2.cow_mb,
-             s3.anon_mmaps - s2.anon_mmaps);
-    check("each page a child writes a copy on write, an anonymous host mmap",
-          cow >= 256 && (!alone || cow < 256 + 200) && s3.cow_mb - s2.cow_mb > 0.95 &&
-          s3.anon_mmaps - s2.anon_mmaps >= cow,
+    double copied = s3.copied_mb - s2.copied_mb, taken = s3.cow_mb - s2.cow_mb;
+    snprintf(detail, sizeof(detail), "%llu copies (%llu of host pages), %.1f MB copied in %.1f MB, %llu anonymous "
+             "host mmaps", cow, s3.cow_host_pages - s2.cow_host_pages, copied, taken, s3.anon_mmaps - s2.anon_mmaps);
+    check("the pages a child writes are copied on write, in anonymous host mmaps",
+          copied > 0.95 && (!alone || copied < 1 + 200 * 16384 / 1048576.0) && taken > copied - 0.15 &&
+          cow >= 1 && s3.anon_mmaps - s2.anon_mmaps >= cow,
           detail);
     munmap(pages, 256 * 4096);
 }

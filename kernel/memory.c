@@ -629,7 +629,9 @@ int pt_unmap_always(struct mem *mem, page_t start, pages_t pages) {
 // commits are pt_map_cluster's.
 _Atomic uint64_t st_anon_mmaps;
 _Atomic uint64_t st_anon_pages_mapped;
-_Atomic uint64_t st_cow_copies;        // of them, pages copied on write
+_Atomic uint64_t st_cow_copies;        // of them, copies on write
+_Atomic uint64_t st_cow_whole;         // ...of a host page's guest pages (cow_cluster)
+_Atomic uint64_t st_cow_pages;         // ...the guest pages they copied
 
 void anon_mmap_count(uint64_t mmaps, pages_t pages) {
     atomic_fetch_add_explicit(&st_anon_mmaps, mmaps, memory_order_relaxed);
@@ -920,10 +922,13 @@ int pt_map_cluster(struct mem *mem, page_t page, unsigned flags,
 }
 
 // Snapshot the anonymous host mmap counters for /proc/ish/host.
-void ish_anon_mmap_stats(uint64_t *mmaps, uint64_t *pages, uint64_t *cow_copies) {
+void ish_anon_mmap_stats(uint64_t *mmaps, uint64_t *pages, uint64_t *cow_copies, uint64_t *cow_whole,
+                         uint64_t *cow_pages) {
     if (mmaps) *mmaps = atomic_load(&st_anon_mmaps);
     if (pages) *pages = atomic_load(&st_anon_pages_mapped);
     if (cow_copies) *cow_copies = atomic_load(&st_cow_copies);
+    if (cow_whole) *cow_whole = atomic_load(&st_cow_whole);
+    if (cow_pages) *cow_pages = atomic_load(&st_cow_pages);
 }
 
 void ish_cluster_stats(uint64_t *calls, uint64_t *full, uint64_t *single,
@@ -1138,6 +1143,35 @@ static void mem_changed(struct mem *mem) {
 // zeroing a page in place).
 void mem_changed_pub(struct mem *mem) {
     mem_changed(mem);
+}
+
+// The guest pages a page copied on write takes with it, the first of them in
+// *start: the others of its host page, when each is as it is (mapped, with its
+// flags, copy on write) and anonymous memory, and the page is not executable
+// code; else the page alone.
+//
+// A copy is a host mapping, and the host cannot give less than a host page:
+// 16KB on iOS, four guest pages, of which a guest page's copy used one. A
+// python multiprocessing.Pool(200)'s workers made 267K copies, 4.2GB, of the
+// 1GB they wrote: 21MB a worker, where Linux copies the 5MB. Copied with it,
+// the others hold what they held, in the memory the copy takes anyway, and
+// each that is written later needs no copy of its own: a private file
+// mapping's page is not one (it reads the file until written, as Linux's), nor
+// executable code (its blocks would go). On a host whose page is a guest page,
+// the page alone.
+static pages_t cow_cluster(struct mem *mem, page_t page, unsigned flags, page_t *start) {
+    pages_t cluster = (pages_t) (real_page_size >> PAGE_BITS);
+    page_t base = page & ~(page_t) (cluster - 1);
+    *start = page;
+    if (cluster == 1 || (flags & P_EXEC))
+        return 1;
+    for (page_t p = base; p < base + cluster; p++) {
+        struct pt_entry *entry = mem_pt(mem, p);
+        if (entry == NULL || entry->flags != flags || entry->data->fd != NULL)
+            return 1;
+    }
+    *start = base;
+    return cluster;
 }
 
 // This version will return NULL instead of making necessary pagetable changes.
@@ -1450,9 +1484,10 @@ have_entry:
             // bump when it verifies.
             __atomic_thread_fence(__ATOMIC_SEQ_CST);
         }
-        // if page is cow, ~~milk~~ copy it
+        // if page is cow, ~~milk~~ copy it, into a host page, with the others
+        // of that host page that can go with it (cow_cluster)
         if (entry->flags & P_COW) {
-            void *copy = mmap(NULL, PAGE_SIZE, PROT_READ | PROT_WRITE,
+            void *copy = mmap(NULL, real_page_size, PROT_READ | PROT_WRITE,
                     MAP_PRIVATE | MAP_ANONYMOUS, 0, 0);
             // (Claude Code and Kimi Code running at once: MAP_FAILED, and the
             // page was copied to (void *) -1)
@@ -1480,31 +1515,39 @@ have_entry:
             // already resolved this CoW while we were waiting for the lock.
             entry = mem_pt(mem, page);
             if (entry != NULL && (entry->flags & P_COW)) {
-                void *data = (char *) entry->data->data + entry->offset;
-                memcpy(copy, data, PAGE_SIZE);
+                unsigned flags = entry->flags;
+                page_t start;
+                pages_t pages = cow_cluster(mem, page, flags, &start);
+                for (pages_t i = 0; i < pages; i++) {
+                    struct pt_entry *from = mem_pt(mem, start + i);
+                    memcpy((char *) copy + i * PAGE_SIZE, (char *) from->data->data + from->offset, PAGE_SIZE);
+                }
 #if ANON_MMAP_LIMIT_PAGES > 0
-                // pt_map will unmap the old page (decrementing anon_page_count),
-                // so pre-increment for the new CoW copy to keep balance.
-                bool anonymous = entry->flags & P_ANONYMOUS;
+                // pt_map will unmap the old pages (decrementing anon_page_count),
+                // so pre-increment for the new CoW copies to keep balance.
+                bool anonymous = flags & P_ANONYMOUS;
                 if (anonymous)
-                    atomic_fetch_add(&anon_page_count, 1);
+                    atomic_fetch_add(&anon_page_count, pages);
 #endif
-                if (pt_map(mem, page, 1, copy, 0, entry->flags &~ P_COW) >= 0) {
-                    anon_mmap_count(1, 1);
+                if (pt_map(mem, start, pages, copy, 0, flags &~ P_COW) >= 0) {
+                    anon_mmap_count(1, pages);
                     atomic_fetch_add_explicit(&st_cow_copies, 1, memory_order_relaxed);
+                    atomic_fetch_add_explicit(&st_cow_pages, pages, memory_order_relaxed);
+                    if (pages > 1)
+                        atomic_fetch_add_explicit(&st_cow_whole, 1, memory_order_relaxed);
                 } else {
-                    // Not mapped (pt_map let the copy go), and the old page
-                    // not unmapped: what was counted for it is not. The page
+                    // Not mapped (pt_map let the copy go), and the old pages
+                    // not unmapped: what was counted for them is not. The page
                     // stays copy on write, so the store faults (mem_ptr_nofault
                     // gives no pointer to write a P_COW page through).
 #if ANON_MMAP_LIMIT_PAGES > 0
                     if (anonymous)
-                        atomic_fetch_sub(&anon_page_count, 1);
+                        atomic_fetch_sub(&anon_page_count, pages);
 #endif
                 }
                 mem_changed(mem);
             } else {
-                munmap(copy, PAGE_SIZE);
+                munmap(copy, real_page_size);
             }
             write_wrunlock(&mem->lock);
             read_wrlock(&mem->lock);

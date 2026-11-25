@@ -203,9 +203,10 @@ void ish_cluster_stats(uint64_t *calls, uint64_t *full, uint64_t *single,
                        uint64_t *pages_committed);
 // The anonymous host mmaps that became guest memory since the app started,
 // PROT_NONE ones too, a mapping in 16MB chunks one for each, and the guest
-// pages they hold; of them the pages copied on write. Any out-param may be
-// NULL.
-void ish_anon_mmap_stats(uint64_t *mmaps, uint64_t *pages, uint64_t *cow_copies);
+// pages they hold; of them the copies on write, of those the ones of a whole
+// host page, and the guest pages they copied. Any out-param may be NULL.
+void ish_anon_mmap_stats(uint64_t *mmaps, uint64_t *pages, uint64_t *cow_copies, uint64_t *cow_whole,
+                         uint64_t *cow_pages);
 // Count mmaps anonymous host mmaps that became guest memory, of pages pages
 void anon_mmap_count(uint64_t mmaps, pages_t pages);
 // Set the flags on memory
