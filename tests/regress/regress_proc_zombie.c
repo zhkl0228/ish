@@ -197,6 +197,16 @@ static void *stays(void *arg) {
     return NULL;
 }
 
+// The process main_thread_exits looks at: a thread that stays till told, and
+// its main thread gone
+static int leader_exits(int ready_fd, int go_fd) {
+    go_pipe[0] = go_fd;
+    pthread_t t;
+    pthread_create(&t, NULL, stays, NULL);
+    write(ready_fd, "r", 1);
+    pthread_exit(NULL);
+}
+
 static void main_thread_exits(void) {
     char detail[300], tasks[256], threads[16];
     int ready[2];
@@ -204,10 +214,17 @@ static void main_thread_exits(void) {
     pipe(go_pipe);
     pid_t child = fork();
     if (child == 0) {
-        pthread_t t;
-        pthread_create(&t, NULL, stays, NULL);
-        write(ready[1], "r", 1);
-        pthread_exit(NULL);
+        // In an image of its own: a musl before 1.2.5 (Ubuntu's 1.2.4, CI's)
+        // gives the kernel no address to clear for a forked child's thread
+        // (its _Fork has no set_tid_address), so the thread list lock its main
+        // thread exits holding is never let go, and the last thread's exit
+        // waits for it for good, as on Linux. An exec'd image's __init_tp
+        // gives it.
+        char ready_fd[16], go_fd[16];
+        snprintf(ready_fd, sizeof(ready_fd), "%d", ready[1]);
+        snprintf(go_fd, sizeof(go_fd), "%d", go_pipe[0]);
+        execl("/proc/self/exe", "regress_proc_zombie", "leader-exits", ready_fd, go_fd, (char *) NULL);
+        _exit(127);
     }
     char c;
     read(ready[0], &c, 1);
@@ -288,7 +305,9 @@ static void dots(void) {
     check("/proc, /proc/self and /proc/self/fd list . and .. once", ok, detail);
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    if (argc == 4 && strcmp(argv[1], "leader-exits") == 0)
+        return leader_exits(atoi(argv[2]), atoi(argv[3]));
     zombie();
     main_thread_exits();
     thread_fd();
