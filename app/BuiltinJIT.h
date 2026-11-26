@@ -43,6 +43,8 @@ extern NSNotificationName const BuiltinJITChangedNotification;
 @property (readonly) BOOL hasPairingFile;
 // Copies it in, replacing one there
 - (BOOL)importPairingFileFromURL:(NSURL *)url error:(NSError **)error;
+// Writes one made on the device (OnDevicePairing), replacing one there
+- (BOOL)savePairingFile:(NSData *)data error:(NSError **)error;
 
 // Enables the JIT now, if it does not translate already
 - (void)enable;

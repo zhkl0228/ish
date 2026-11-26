@@ -238,13 +238,17 @@ static bool LoopbackUp(void) {
         [url stopAccessingSecurityScopedResource];
     if (data == nil)
         return NO;
+    return [self savePairingFile:data error:error];
+}
+
+- (BOOL)savePairingFile:(NSData *)data error:(NSError **)error {
     NSURL *destination = self.pairingFileURL;
     if (![NSFileManager.defaultManager createDirectoryAtURL:destination.URLByDeletingLastPathComponent
                                 withIntermediateDirectories:YES attributes:nil error:error])
         return NO;
     if (![data writeToURL:destination options:NSDataWritingAtomic error:error])
         return NO;
-    self.status = @"Pairing file imported";
+    self.status = @"Pairing file saved";
     [self changed];
     return YES;
 }

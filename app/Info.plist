@@ -25,6 +25,11 @@
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_remotepairing._tcp</string>
+		<string>_remotepairing-pairable-host._tcp</string>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>$(PRODUCT_BUNDLE_IDENTIFIER).pairing</string>
 	</array>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>Programs running in iSH will be allowed to track your location in the background.</string>

@@ -6,6 +6,7 @@
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import "BuiltinJIT.h"
 #import "BuiltinJITViewController.h"
+#import "OnDevicePairing.h"
 
 enum {
     SectionStatus,
@@ -16,6 +17,9 @@ enum {
 };
 
 @interface BuiltinJITViewController () <UIDocumentPickerDelegate>
+// The pairing going on, and the alert that tells of it
+@property (nullable) OnDevicePairing *pairing;
+@property (nullable) UIAlertController *pairingAlert;
 @end
 
 @implementation BuiltinJITViewController
@@ -44,7 +48,7 @@ enum {
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     switch (section) {
     case SectionStatus: return 3;
-    case SectionPairing: return 1;
+    case SectionPairing: return OnDevicePairing.available ? 2 : 1;
     case SectionDiskImage: return 2;
     case SectionLog: return MAX(BuiltinJIT.shared.log.count, 1);
     }
@@ -69,8 +73,12 @@ enum {
                 "up). iSH's own loopback tunnel, a VPN, runs only while the JIT is enabled, unless one is up already "
                 "(LocalDevVPN): iOS turns off another VPN while it runs.";
     case SectionPairing:
-        return @"The device's pairing file, made once on a computer with idevice_pair (or another pairing tool), "
-                "imported here or copied to iSH's StikJIT folder with Finder.";
+        return OnDevicePairing.available
+            ? @"The device's pairing file: made here, by pairing the device with iSH in Settings, or on a computer "
+               "with idevice_pair (or another pairing tool), imported here or copied to iSH's StikJIT folder with "
+               "Finder."
+            : @"The device's pairing file, made once on a computer with idevice_pair (or another pairing tool), "
+               "imported here or copied to iSH's StikJIT folder with Finder. From iOS 27 it can be made here.";
     case SectionDiskImage:
         return @"Downloaded the first time it is needed, from StikJIT's sources, and mounted once a boot.";
     }
@@ -109,8 +117,9 @@ enum {
             return cell;
         }
     case SectionPairing: {
-        UITableViewCell *cell = [self cellWithText:@"Import Pairing File…"
-                                            detail:jit.hasPairingFile ? @"Imported" : @"Not imported"];
+        BOOL pair = OnDevicePairing.available && indexPath.row == 0;
+        UITableViewCell *cell = [self cellWithText:pair ? @"Pair This Device…" : @"Import Pairing File…"
+                                            detail:pair ? nil : jit.hasPairingFile ? @"There is one" : @"None"];
         cell.textLabel.textColor = self.view.tintColor;
         return cell;
     }
@@ -137,6 +146,8 @@ enum {
     BuiltinJIT *jit = BuiltinJIT.shared;
     if (indexPath.section == SectionStatus && indexPath.row == 1 && !jit.busy && !jit.translating) {
         [jit enable];
+    } else if (indexPath.section == SectionPairing && OnDevicePairing.available && indexPath.row == 0) {
+        [self pair];
     } else if (indexPath.section == SectionPairing) {
         UIDocumentPickerViewController *picker =
             [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeItem] asCopy:YES];
@@ -148,6 +159,72 @@ enum {
         else
             [jit resetDeveloperDiskImage];
     }
+}
+
+#pragma mark Pairing
+
+// An alert of the pairing's, in place of the one before: the instructions
+// until the device connects, then the code, then how it ended
+- (void)showPairingAlert:(UIAlertController *)alert {
+    void (^present)(void) = ^{
+        self.pairingAlert = alert;
+        [self presentViewController:alert animated:YES completion:nil];
+    };
+    if (self.pairingAlert != nil && self.pairingAlert.presentingViewController != nil)
+        [self.pairingAlert dismissViewControllerAnimated:NO completion:present];
+    else
+        present();
+}
+
+- (UIAlertController *)cancellableAlert:(NSString *)title message:(NSString *)message {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:message
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:^(UIAlertAction *_) {
+        [self.pairing cancel];
+    }]];
+    return alert;
+}
+
+- (void)pair {
+    if (self.pairing != nil)
+        return;
+    self.pairing = [OnDevicePairing new];
+    // The words the device shows: "Pair with iSH" here, "Pair with iSH" there
+    UIAlertController *instructions = [self cancellableAlert:@"Pair with iSH"
+                                                 message:@"On this device, open Settings › Privacy & Security › "
+                                                          "Developer Mode, scroll down, tap \"Pair with iSH\", then come "
+                                                          "back here for the code."];
+    [instructions addAction:[UIAlertAction actionWithTitle:@"Open Settings" style:UIAlertActionStyleDefault
+                                                   handler:^(UIAlertAction *_) {
+        [UIApplication.sharedApplication openURL:[NSURL URLWithString:UIApplicationOpenSettingsURLString]
+                                         options:@{} completionHandler:nil];
+    }]];
+    [self showPairingAlert:instructions];
+    [self.pairing startWithPIN:^(NSString *pin) {
+        [self showPairingAlert:[self cancellableAlert:@"Pairing Code"
+                                          message:[NSString stringWithFormat:@"Enter this code on the device to finish "
+                                                                              "pairing:\n\n%@", pin]]];
+    } done:^(NSData *pairingFile, NSString *failure) {
+        self.pairing = nil;
+        NSString *message = nil;
+        NSError *error = nil;
+        if (pairingFile != nil)
+            message = [BuiltinJIT.shared savePairingFile:pairingFile error:&error]
+                ? @"The pairing file is saved: the JIT can be enabled."
+                : [@"The pairing file was not saved: " stringByAppendingString:error.localizedDescription];
+        else if (failure != nil)
+            message = [@"Not paired: " stringByAppendingString:failure];
+        if (message == nil) {
+            [self.pairingAlert dismissViewControllerAnimated:YES completion:nil];
+            self.pairingAlert = nil;
+            return;
+        }
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Pairing" message:message
+                                                                 preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        [self showPairingAlert:alert];
+        [self.tableView reloadData];
+    }];
 }
 
 - (void)enabledAtStartChanged:(UISwitch *)toggle {

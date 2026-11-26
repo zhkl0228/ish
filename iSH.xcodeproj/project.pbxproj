@@ -246,6 +246,8 @@
 		9BB8E1ED09FF0CA5849B2B60 /* StikJIT.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 82757387CA4A501DB73121C2 /* StikJIT.xcframework */; };
 		C8BF293A5E1AAEDD6FA0CD21 /* iSHLoopbackTunnel ARM64.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 378263D49E2685E2E7005F65 /* iSHLoopbackTunnel ARM64.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		CBB7FAD71BCF0DCE56594538 /* JITHelperRequestHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F77181B7A04CE7F6E2AD5D9 /* JITHelperRequestHandler.swift */; };
+		4602C0A3EB05F494DEE39C2D /* BackgroundTasks.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 47BF4935815D8A2653ECC82D /* BackgroundTasks.framework */; };
+		E0654F36D17D87DC20085DBC /* OnDevicePairing.m in Sources */ = {isa = PBXBuildFile; fileRef = 7DDB87C0D363C6E97289A145 /* OnDevicePairing.m */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXBuildRule section */
@@ -694,6 +696,9 @@
 		CA402E70AC59D8E20131776C /* BuiltinJITViewController.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = BuiltinJITViewController.m; sourceTree = "<group>"; };
 		E97CAB48FD43955C01B4511E /* BuiltinJIT.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = BuiltinJIT.h; sourceTree = "<group>"; };
 		EEFC8C2CF0668418A1674AD6 /* PacketTunnelProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PacketTunnelProvider.swift; sourceTree = "<group>"; };
+		47BF4935815D8A2653ECC82D /* BackgroundTasks.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = BackgroundTasks.framework; path = System/Library/Frameworks/BackgroundTasks.framework; sourceTree = SDKROOT; };
+		60D7BE736CF4B47198E225C1 /* OnDevicePairing.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = OnDevicePairing.h; sourceTree = "<group>"; };
+		7DDB87C0D363C6E97289A145 /* OnDevicePairing.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = OnDevicePairing.m; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -709,6 +714,7 @@
 				AA000036AF96D90D00FFB7A4 /* libresolv.tbd in Frameworks */,
 				4794ABFE52E87A1897711640 /* NetworkExtension.framework in Frameworks */,
 				1954D0456295C3427AA05B16 /* UniformTypeIdentifiers.framework in Frameworks */,
+				4602C0A3EB05F494DEE39C2D /* BackgroundTasks.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -984,6 +990,7 @@
 				9E65BF4861D9631B082A4A3C /* NetworkExtension.framework */,
 				9B799F3DE9FDA06A81F81E27 /* UniformTypeIdentifiers.framework */,
 				82757387CA4A501DB73121C2 /* StikJIT.xcframework */,
+				47BF4935815D8A2653ECC82D /* BackgroundTasks.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -1220,6 +1227,8 @@
 				A363AC070086D041E27266F3 /* BuiltinJITViewController.h */,
 				758923384E59FA379C751186 /* BuiltinJIT.m */,
 				CA402E70AC59D8E20131776C /* BuiltinJITViewController.m */,
+				60D7BE736CF4B47198E225C1 /* OnDevicePairing.h */,
+				7DDB87C0D363C6E97289A145 /* OnDevicePairing.m */,
 			);
 			name = "Built-in JIT";
 			sourceTree = "<group>";
@@ -1915,6 +1924,7 @@
 				C498B6E73648245EDAFA3A38 /* TerminalSession.m in Sources */,
 				3E280507715D05CE850E06AC /* BuiltinJIT.m in Sources */,
 				1153F84ACAF9D723AFA4FBC8 /* BuiltinJITViewController.m in Sources */,
+				E0654F36D17D87DC20085DBC /* OnDevicePairing.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

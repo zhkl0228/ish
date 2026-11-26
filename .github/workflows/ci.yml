@@ -60,6 +60,17 @@ jobs:
       - name: StikJIT
         # The JIT helper extension's framework (app/StikJIT/build.sh)
         run: app/StikJIT/build.sh
+      - name: idevice
+        # The on-device pairing's library (app/idevice/build.sh), in Rust
+        run: |
+          if ! command -v rustup > /dev/null; then
+              brew install rustup
+              export PATH="$(brew --prefix rustup)/bin:$PATH"
+              echo "$(brew --prefix rustup)/bin" >> "$GITHUB_PATH"
+          fi
+          rustup default stable
+          rustup target add aarch64-apple-ios
+          app/idevice/build.sh
       - name: Build
         run: |
           xcodebuild -project iSH.xcodeproj -scheme iSH-ARM64 -arch arm64 -sdk iphoneos \

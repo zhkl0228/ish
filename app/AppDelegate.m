@@ -24,6 +24,7 @@
 #import "ClipboardStore.h"
 #import "BackgroundKeepAlive.h"
 #import "BuiltinJIT.h"
+#import "OnDevicePairing.h"
 #import "NSObject+SaneKVO.h"
 #import "Roots.h"
 #import "TerminalViewController.h"
@@ -347,6 +348,8 @@ static void ish_install_anon_cap(void) {
     if ([NSUserDefaults.standardUserDefaults boolForKey:@"recovery"])
         return YES;
 
+    // Registered before launch ends, as BGTaskScheduler requires
+    [OnDevicePairing registerBackgroundTask];
     bootError = [self boot];
     // iSH runs from here as it does without the JIT; it translates once the
     // built-in JIT, if enabled in Settings, has its code region
