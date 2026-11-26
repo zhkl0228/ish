@@ -139,6 +139,12 @@ void jit_report(void);
 
 // Human-readable state for /proc/ish/jit (mode, AOT images, hits per module).
 size_t jit_describe(char *buf, size_t size);
+// Blocks compiled since the start (jit_block), and of them those that got
+// native code: an AOT image's, the JIT's, or one shared from another process's
+// translation; the rest run as gadgets. The meters' JIT gauge is the share of
+// those compiled lately (app/MonitorSampler.m). Native is read before blocks
+// and counted after it, so a reading never has more native than blocks.
+void jit_block_counts(uint64_t *blocks, uint64_t *native);
 // Writes to /proc/ish/jit: "off" / "on" stop / resume installing AOT images
 // in blocks compiled afterwards (for A/B timing on a device); "region" maps
 // the code region now, if the JIT has none (jit_region_now(false)). -1: an

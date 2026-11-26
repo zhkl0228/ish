@@ -42,12 +42,30 @@ NS_ASSUME_NONNULL_BEGIN
 // The kernel's memory governor refuses the guest's new memory (ish_mem_braked)
 @property (readonly) BOOL memoryBraked;
 @property (readonly) NSProcessInfoThermalState thermalState;
+// Of the blocks the guest's programs had compiled in the last
+// kMonitorNativeWindow readings, the share with native code (jit_block_counts:
+// an AOT image's, or the JIT's), the rest running as gadgets. Known once any
+// were compiled; held while none are, as code run before is run on.
+@property (readonly) BOOL nativeKnown;
+@property (readonly) double nativeShare;
+// The device's network since the reading before, bytes a second in and out
+// over its uplinks: Wi-Fi and the like (en*) and cellular (pdp_ip*), not the
+// tunnels (utun*, ipsec*), whose bytes those carry too. iOS counts no app's
+// own. Not counted at the first reading after start.
+@property (readonly) BOOL networkCounted;
+@property (readonly) double networkIn;
+@property (readonly) double networkOut;
+// The guest's processes as ps lists them: thread groups made and not yet
+// waited for (ish_live_guest_procs), the zombies with them
+@property (readonly) int64_t processes;
 
 @end
 
 extern NSNotificationName const MonitorSamplerDidReadNotification;
 // Readings in cpuHistory: a minute's
 extern const NSUInteger kMonitorHistoryLength;
+// Readings whose blocks the native share is of: ten seconds'
+#define kMonitorNativeWindow 10
 
 @interface MonitorSampler : NSObject
 

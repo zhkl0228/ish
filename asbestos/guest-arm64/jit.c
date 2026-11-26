@@ -83,6 +83,8 @@ static bool env_off(const char *name) {
 // ---------------------------------------------------------------- stats
 
 static _Atomic uint64_t st_blocks, st_segments, st_units, st_bytes, st_ticks;
+// Of st_blocks, those with native code once compiled (jit_block_counts)
+static _Atomic uint64_t st_native_blocks;
 
 // Timings summed over every block: jit_ticks() reads the counter without the
 // barrier mach_absolute_time() has, which would wait for the cache misses of the
@@ -4076,7 +4078,15 @@ void jit_block(struct fiber_block *b, struct jit_units *U) {
         cm_block(b);
     jit_translate(b, U, &scratch->em, scratch->key);
     atomic_fetch_add_explicit(&st_ticks, jit_ticks() - t0, memory_order_relaxed);
-    atomic_fetch_add_explicit(&st_blocks, 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&st_blocks, 1, memory_order_release);
+    // after st_blocks: a reading of both never has more native than blocks
+    if (__atomic_load_n(&b->native_entry, __ATOMIC_ACQUIRE) != 0)
+        atomic_fetch_add_explicit(&st_native_blocks, 1, memory_order_release);
+}
+
+void jit_block_counts(uint64_t *blocks, uint64_t *native) {
+    *native = atomic_load_explicit(&st_native_blocks, memory_order_acquire);
+    *blocks = atomic_load_explicit(&st_blocks, memory_order_acquire);
 }
 
 // A native segment covering units [first, end) of block b is installed at

@@ -23,6 +23,17 @@
         }
       }
     },
+    "%1$@, JIT %2$@, network down %3$@ a second, up %4$@ a second, %5$lld processes" : {
+      "comment" : "The column's meters read aloud: the strip's, then the JIT's share, the network, the processes",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@，JIT %2$@，网络下行每秒 %3$@，上行每秒 %4$@，%5$lld 个进程"
+          }
+        }
+      }
+    },
     "%@ more and iOS ends the app" : {
       "comment" : "Meter details: memory left under the app's limit",
       "localizations" : {
@@ -144,6 +155,17 @@
         }
       }
     },
+    "NET" : {
+      "comment" : "The network's name, under its rates: a few letters",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网络"
+          }
+        }
+      }
+    },
     "Nominal" : {
       "comment" : "Heat: ProcessInfo's thermal state, not warm",
       "localizations" : {
@@ -162,6 +184,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "不热。"
+          }
+        }
+      }
+    },
+    "PROC" : {
+      "comment" : "The processes' name, under their count: a few letters",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "进程"
           }
         }
       }
@@ -217,6 +250,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "用户 %1$@ · 系统 %2$@"
+          }
+        }
+      }
+    },
+    "unknown" : {
+      "comment" : "The JIT gauge read aloud before any code was compiled",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未知"
           }
         }
       }
