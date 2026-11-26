@@ -74,6 +74,19 @@ struct asbestos {
 #define FIBER_BLOCK_INITIAL_CAPACITY 16
 
 struct fiber_block {
+#ifdef ISH_JIT
+    // Hot translation (guest-arm64/jit.c, jit_hot_runs): a block no image and
+    // no translation of another's gave native code as it was compiled runs as
+    // gadgets, code[0]'s gadget gadget_jit_count's. That counts its runs
+    // (jit_runs) and goes on to the gadget it stands in for (jit_first); at
+    // jit_hot_runs the run loop translates the block (INT_JIT_HOT,
+    // asbestos.c's fiber_block_hot), and code[0] is native code or jit_first
+    // again. jit_first is kept: a thread may be in gadget_jit_count still.
+    // First, before addr: code's distance from addr is what the gadgets'
+    // loads of addr through _pc reach (ldur, at most 256 bytes back).
+    unsigned long jit_first;
+    uint32_t jit_runs;
+#endif
     addr_t addr;
     addr_t end_addr;
     size_t used;

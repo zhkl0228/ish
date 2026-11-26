@@ -20,6 +20,10 @@
 // So, for a block it found was translated from other code than its address
 // space has there (another's mapping)
 #define INT_ASBESTOS_DIFFERS 0x103
+// A block left to be translated when hot has run jit_hot_runs times as gadgets
+// (gadget_jit_count): the run loop translates it at cpu->pc, its start, before
+// it runs again (asbestos.c, fiber_block_hot). gadgets.h has it too.
+#define INT_JIT_HOT 0x104
 // A host fault in native code with no position to retry from: the process is
 // killed (asbestos/guest-arm64/jit.c, jit_native_fault())
 #define INT_JIT_NATIVE_FAULT 0x101

@@ -124,6 +124,39 @@ fiber_ret_chain:
     br x8
 #endif
 
+#ifdef ISH_JIT
+/*
+ * jit_count - code[0] of a block left to be translated when hot
+ *
+ * (guest-arm64/jit.c, jit_hot_runs; asbestos.h's jit_runs, jit_first.) Counts
+ * a run of the block and goes on to the gadget code[0] had (jit_first), _pc at
+ * that gadget's arguments as it would have them. The run that makes them
+ * jit_hot_runs has the run loop translate the block before it runs, at its
+ * start (INT_JIT_HOT: cpu->pc the block's address, no block to chain from),
+ * which puts jit_first or native code back at code[0]. Only that run: one the
+ * run loop does not find (a block not in its hash), or runs counted past a
+ * lower jit_hot_runs set since, go on as gadgets, never back to the run loop
+ * for good. x8-x10 are free at a gadget's start, as gret's profiling has them.
+ */
+.gadget jit_count
+    sub x8, _pc, #(FIBER_BLOCK_code + 8)    // the block, _pc past code[0]
+    ldr w9, [x8, #FIBER_BLOCK_jit_runs]
+    add w9, w9, #1
+    str w9, [x8, #FIBER_BLOCK_jit_runs]
+    adrp x10, PAGE(NAME(jit_hot_runs))
+    ldr w10, [x10, PAGEOFF(NAME(jit_hot_runs))]
+    cmp w9, w10
+    b.eq 1f
+    ldr x9, [x8, #FIBER_BLOCK_jit_first]
+    br x9
+1:
+    ldr x9, [x8, #FIBER_BLOCK_addr]
+    str x9, [_cpu, #CPU_pc]
+    str xzr, [_cpu, #LOCAL_last_block]
+    mov w0, #INT_JIT_HOT
+    b fiber_exit
+#endif
+
 chain_null_gadget:
     // Null gadget pointer detected in chained block — the block was likely
     // freed/jetsammed and its memory zeroed. Return to main loop safely.

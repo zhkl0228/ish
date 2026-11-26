@@ -614,7 +614,17 @@ static struct fiber_block *fiber_lookup(struct asbestos *asbestos, addr_t addr) 
     return NULL;
 }
 
-static struct fiber_block *fiber_block_compile(addr_t ip, struct tlb *tlb) {
+#ifdef ISH_JIT
+// code[0]'s gadget while a block waits to be hot (hot translation, jit.h)
+extern void gadget_jit_count(void);
+#endif
+
+struct jit_units;
+
+// The block at ip. With units (hot translation: fiber_block_hot), not
+// translated: the units of its stream are given back instead, the JIT's
+// per-thread ones, good till the thread compiles again.
+static struct fiber_block *fiber_block_compile_units(addr_t ip, struct tlb *tlb, struct jit_units **units) {
     ISH_SIGNPOST_SCOPE_BEGIN(jit, "block_compile", _bc_spid);
     struct gen_state state;
     TRACE("%d %08x --- compiling:\n", current_pid(), ip);
@@ -682,10 +692,22 @@ static struct fiber_block *fiber_block_compile(addr_t ip, struct tlb *tlb) {
     assert(state.ip - ip <= PAGE_SIZE);
     state.block->used = state.capacity;
 #ifdef ISH_JIT
-    jit_block(state.block, jit_units);
+    if (units != NULL) {
+        *units = jit_units;
+    } else if (jit_block(state.block, jit_units) == JIT_LATER) {
+        // gadgets till it is hot: code[0] counts its runs first
+        state.block->jit_first = state.block->code[0];
+        state.block->code[0] = (unsigned long) gadget_jit_count;
+    }
+#else
+    (void) units;
 #endif
     ISH_SIGNPOST_SCOPE_END(jit, "block_compile", _bc_spid);
     return state.block;
+}
+
+static struct fiber_block *fiber_block_compile(addr_t ip, struct tlb *tlb) {
+    return fiber_block_compile_units(ip, tlb, NULL);
 }
 
 // [T-ish-precise-fault-pc] cpu->pc only follows block boundaries: a gadget
@@ -793,6 +815,72 @@ static struct fiber_block *fiber_block_compile_protected(addr_t ip, struct tlb *
         fiber_block_free(NULL, block);
     }
 }
+
+#ifdef ISH_JIT
+// INT_JIT_HOT: the block at ip has run jit_hot_runs times as gadgets
+// (gadget_jit_count). Its gadget is back at code[0] first: what the
+// translation runs as gadgets of its first unit is code[0]'s, and the count's
+// there made the native code exit to the run loop at each run. Its
+// translation's units were the compile's, not kept (some hundred bytes a
+// block, for every block): it is compiled again, and the same code at the
+// same place makes the same stream (as fiber_fix_fault_pc has it), then
+// translated in place if the stream is its own, word for word at each unit's
+// start; if not (its code changed, its block soon gone with it), it runs on
+// as gadgets. Translated, its chains are decided again as a chain made now
+// would be (the run loop's, at "jit_chain_ok"): a successor's kept and linked
+// if its native exit may take it, else undone (refused, if its native code
+// may enter it: jit_chain_refused); a predecessor's native exit, refused while
+// it had no native code, chained and linked. Under asbestos->lock.
+static void fiber_block_hot(struct asbestos *asbestos, struct tlb *tlb, addr_t ip) {
+    struct fiber_block *block = fiber_lookup(asbestos, ip);
+    if (block == NULL || block->is_jetsam || block->code[0] != (unsigned long) gadget_jit_count)
+        return;  // translated by another thread's run, or gone
+    __atomic_store_n(&block->code[0], block->jit_first, __ATOMIC_RELEASE);
+    struct jit_units *units = NULL;
+    struct fiber_block *again = fiber_block_compile_units(ip, tlb, &units);
+    bool same = again != NULL && units != NULL && units->n <= JIT_MAX_UNITS && again->end_addr == block->end_addr &&
+        again->used == block->used;
+    for (unsigned i = 0; same && i < units->n; i++) {
+        unsigned pos = units->u[i].start;
+        same = again->code[pos] == block->code[pos];
+    }
+    // compiled for its units only: never in the cache, nor translated
+    free(again);
+    if (!same || !jit_block_hot(block, units))
+        return;
+    for (int i = 0; i <= 1; i++) {
+        if (block->jump_ip[i] == NULL)
+            continue;
+        unsigned long slot = *block->jump_ip[i];
+        if (slot & (1UL << 63))
+            continue;  // not chained: the successor's fake ip
+        struct fiber_block *to = (struct fiber_block *) (slot - offsetof(struct fiber_block, code));
+        if (jit_chain_ok(block, i, to)) {
+            jit_link(block, i, to);
+            continue;
+        }
+        *block->jump_ip[i] = block->old_jump_ip[i];
+        list_remove_safe(&block->jumps_from_links[i]);
+        if (jit_chain_refused(block, i, to))
+            list_add(&to->jumps_from[i], &block->jumps_from_links[i]);
+    }
+    unsigned long fake_ip = (unsigned long) block->addr | (1UL << 63);
+    for (int i = 0; i <= 1; i++) {
+        struct fiber_block *from;
+        list_for_each_entry(&block->jumps_from[i], from, jumps_from_links[i]) {
+            if (from->is_jetsam || from->jump_ip[i] == NULL)
+                continue;
+            unsigned long slot = *from->jump_ip[i];
+            bool refused = slot == (fake_ip | (1UL << 62));
+            if ((slot == (unsigned long) block->code || refused) && jit_chain_ok(from, i, block)) {
+                if (refused)
+                    __atomic_store_n(from->jump_ip[i], (unsigned long) block->code, __ATOMIC_RELEASE);
+                jit_link(from, i, block);
+            }
+        }
+    }
+}
+#endif
 
 // Remove all pointers to the block. It can't be freed yet because another
 // thread may be executing it.
@@ -1285,6 +1373,15 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
         frame->cpu.segfault_precise_pc = 0;
         if (interrupt == INT_GPF)
             fiber_fix_fault_pc(asbestos, frame, tlb);
+#ifdef ISH_JIT
+        // a block hot, at its start (cpu->pc): translated, then run on
+        if (interrupt == INT_JIT_HOT) {
+            lock(&asbestos->lock);
+            fiber_block_hot(asbestos, tlb, frame->cpu.pc);
+            unlock(&asbestos->lock);
+            interrupt = INT_NONE;
+        }
+#endif
 
 
 #ifdef ISH_JIT

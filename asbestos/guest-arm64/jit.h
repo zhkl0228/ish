@@ -76,7 +76,20 @@ static inline struct jit_step jit_step_begin(const struct gen_state *state) {
 }
 void jit_step_end(struct jit_units *units, const struct jit_step *step,
                   const struct gen_state *state, bool more, struct tlb *tlb);
-void jit_block(struct fiber_block *block, struct jit_units *units);
+// What a block got as it was compiled: native code (an image's, another's
+// translation, or one of its own), gadgets for good, or gadgets till it is hot
+// (JIT_LATER: fiber_block_compile puts gadget_jit_count at its code[0])
+enum jit_outcome { JIT_GADGETS, JIT_NATIVE, JIT_LATER };
+enum jit_outcome jit_block(struct fiber_block *block, struct jit_units *units);
+// Hot translation. A block no image and no translation of another's had is
+// translated only once it has run jit_hot_runs times (gadget_jit_count): code
+// run once or twice, as a program's start, takes no room in the code region,
+// and its translating no time. 0 translates each as it is compiled.
+// ISH_JIT_HOT=<runs> sets it, as /proc/ish/jit's "hot <runs>" does.
+extern uint32_t jit_hot_runs;
+// The block hot (INT_JIT_HOT), compiled again to give units (the same code
+// makes the same stream): translated in place. Whether it got native code.
+bool jit_block_hot(struct fiber_block *block, struct jit_units *units);
 
 // Per-block state, set up by gen_start().
 void jit_block_init(struct fiber_block *block);
@@ -149,6 +162,10 @@ void jit_block_counts(uint64_t *blocks, uint64_t *native);
 // (unless an AOT image has them), as /proc/ish/jit says "(full: ...)". The
 // meters' JIT gauge is red then.
 bool jit_region_is_full(void);
+// Whether the JIT translates (it has its code region), and if so how much of
+// the region its code takes, all of it once full, and its size: the meters'
+// details show it (app/MonitorDetailViewController.m)
+bool jit_region_usage(size_t *used, size_t *size);
 // Writes to /proc/ish/jit: "off" / "on" stop / resume installing AOT images
 // in blocks compiled afterwards (for A/B timing on a device); "region" maps
 // the code region now, if the JIT has none (jit_region_now(false)). -1: an
@@ -166,6 +183,10 @@ bool jit_region_now(bool from_debugger);
 // (exec.c: node's JS stays in V8's interpreter, which node's image runs as
 // native code, only when there is one).
 bool jit_aot_serves(const char *path);
+// Whether the JIT translates now, with room in its code region: code a
+// program writes at run time becomes native code too (exec.c: node then gets
+// V8's tiers, though an image serves its interpreter)
+bool jit_translates_with_room(void);
 
 #endif
 #endif

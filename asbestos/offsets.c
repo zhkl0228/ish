@@ -77,6 +77,11 @@ void cpu(void) {
 
     OFFSET(FIBER_BLOCK, fiber_block, addr);
     OFFSET(FIBER_BLOCK, fiber_block, code);
+#ifdef ISH_JIT
+    // gadget_jit_count's (hot translation, guest-arm64/jit.c)
+    OFFSET(FIBER_BLOCK, fiber_block, jit_runs);
+    OFFSET(FIBER_BLOCK, fiber_block, jit_first);
+#endif
 
     OFFSET(TLB, tlb, entries);
     OFFSET(TLB, tlb, mmu);

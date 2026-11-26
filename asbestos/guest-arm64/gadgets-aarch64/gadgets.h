@@ -27,6 +27,7 @@
 #define INT_GPF 13
 #define INT_TIMER 32
 #define INT_SYSCALL 0x80
+#define INT_JIT_HOT 0x104   // emu/interrupt.h's: a block hot, to be translated
 
 /*
  * ARM64-on-ARM64 Register Mapping

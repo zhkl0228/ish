@@ -68,6 +68,9 @@ static bool pic_on;       // ISH_JIT_PIC=1: position-independent code (see "PIC"
 static bool aot_only;     // ISH_JIT_AOT_ONLY=1: install AOT translations, translate nothing
                           // (what a build without the JIT would run)
 static bool aot_only_forced;   // by ISH_JIT_AOT_ONLY=1, not by having no code region
+// jit.h's: the runs as gadgets a block waits for to be translated, if no image
+// and no translation of another's gave it native code. Read by gadget_jit_count.
+uint32_t jit_hot_runs = 8;
 // jit_on and aot_only change once after the start, when a code region comes
 // (jit_region_now()): read with acquire, they say the region and its stubs
 // are there
@@ -83,8 +86,14 @@ static bool env_off(const char *name) {
 // ---------------------------------------------------------------- stats
 
 static _Atomic uint64_t st_blocks, st_segments, st_units, st_bytes, st_ticks;
-// Of st_blocks, those with native code once compiled (jit_block_counts)
-static _Atomic uint64_t st_native_blocks;
+// What the meters' share is of (jit_block_counts): the blocks decided, native
+// code or gadgets for good, as they were compiled or when hot, and of them
+// those with native code. One left till it is hot is decided then, or never
+// (code that runs once or twice).
+static _Atomic uint64_t st_decided, st_native_blocks;
+// Hot translation: the blocks left till they are hot, and of them those
+// translated when hot (and with native code)
+static _Atomic uint64_t st_later, st_hot, st_hot_native;
 
 // Timings summed over every block: jit_ticks() reads the counter without the
 // barrier mach_absolute_time() has, which would wait for the cache misses of the
@@ -2505,11 +2514,13 @@ static bool slot_claim(struct jit_ctx *ctx, unsigned idx, struct fiber_block *b,
     return ok;
 }
 
-static void reg_install(struct fiber_block *b, struct jit_ctx *ctx, const struct reg_entry *r) {
+// Whether b got native code: none while another block of the address space
+// holds the translation, or a translation of no segment
+static bool reg_install(struct fiber_block *b, struct jit_ctx *ctx, const struct reg_entry *r) {
     // Another block of this address space holds the translation (the same
     // code at the same place, still in the cache): b keeps its gadgets.
     if (!slot_claim(ctx, r->idx, b, ctx->base, ctx->base))
-        return;
+        return false;
     b->jit_ctx = ctx;
     b->native_link[0] = r->link[0];
     b->native_link[1] = r->link[1];
@@ -2518,6 +2529,7 @@ static void reg_install(struct fiber_block *b, struct jit_ctx *ctx, const struct
         if (r->seg[i].pos == 0 && n_pinned)
             __atomic_store_n(&b->native_entry, (uintptr_t) r->seg[i].code + entry_off(), __ATOMIC_RELEASE);
     }
+    return r->nseg > 0;
 }
 
 // ISH_JIT_RECORD=<file>: at exit, write every translation of the modules whose
@@ -3061,30 +3073,38 @@ static const struct aot_trans *aot_lookup(int mod, const struct fiber_block *b, 
     return t;
 }
 
-// Translate b, or install an earlier translation with the same key.
-static void jit_translate(struct fiber_block *b, const struct jit_units *U, struct em *e, uint32_t *key) {
+// Translate b, or install an earlier translation with the same key: native
+// code, a segment of it at least (its code[] then has native code in some
+// slot; native_entry only when the first unit's is, and registers are pinned),
+// the rest of it gadgets; or gadgets. Compiled (not hot), one no image and no
+// translation of another's has is left till it is hot (JIT_LATER), unless
+// translations are recorded (all of the module's are wanted) or jit_hot_runs
+// is 0. Hot (INT_JIT_HOT), the image was looked for as it was compiled, and it
+// is counted among its module's blocks then.
+static enum jit_outcome jit_translate(struct fiber_block *b, const struct jit_units *U, struct em *e, uint32_t *key,
+                                      bool hot) {
     e->record = false;
     if (!pic_on) {
         jit_native(b, U, e);
-        return;
+        return e->ninst > 0 ? JIT_NATIVE : JIT_GADGETS;
     }
     uint64_t off, base;
     int mod = jit_locate(b->addr, &off, &base);
     struct asbestos *a = cm_tlb ? cm_tlb->mmu->asbestos : NULL;
     if (mod < 0 || !a || !U->n || !one_mapping(U, mod, base))
-        return;
+        return JIT_GADGETS;
     bool images_only = flag(&aot_only);
     // This process's own translations need a context with room for CTX_MAX
     // indices (8MB of address space, per module mapping of every guest
     // process, all in this one host process): not made when only images run.
     struct jit_ctx *ctx = NULL;
     if (!images_only && !(ctx = ctx_get(a, mod, base, NULL)))
-        return;
+        return JIT_GADGETS;
     unsigned nkey = reg_key(b, U, mod, off, key);
     // for the registry (images are found by offset; aot_lookup() hashes for its memo)
     uint64_t h2 = 0, h = images_only ? 0 : reg_hash(key, nkey, &h2);
     pthread_mutex_lock(&reg_lock);
-    const struct aot_module *img = mod_image(mod);
+    const struct aot_module *img = hot ? NULL : mod_image(mod);
     struct aot_place place = {a, mod, base, NULL, NULL};
     uint64_t dbase = base;
     bool fixed = false;
@@ -3093,16 +3113,16 @@ static void jit_translate(struct fiber_block *b, const struct jit_units *U, stru
                                                  : NULL;
     if (img)
         atomic_fetch_add_explicit(&st_find_ticks, jit_ticks() - t0, memory_order_relaxed);
-    if ((unsigned) mod < mod_next_cap)
+    if (!hot && (unsigned) mod < mod_next_cap)
         mod_blocks[mod]++;
     if (at) {
         pthread_mutex_unlock(&reg_lock);
         struct jit_ctx *actx = ctx_get(a, mod, base, img);
         if (!actx)
-            return;
+            return JIT_GADGETS;
         if (!aot_install(b, actx, at, img->entry_off, dbase)) {
             atomic_fetch_add_explicit(&st_aot_busy, 1, memory_order_relaxed);
-            return;
+            return JIT_GADGETS;
         }
         bool moved = at->off != off;
         atomic_fetch_add_explicit(&st_aot, 1, memory_order_relaxed);
@@ -3116,18 +3136,18 @@ static void jit_translate(struct fiber_block *b, const struct jit_units *U, stru
             mod_moved[mod] += moved;
         }
         pthread_mutex_unlock(&reg_lock);
-        return;
+        return JIT_NATIVE;
     }
     if (images_only) {
         pthread_mutex_unlock(&reg_lock);
-        return;
+        return JIT_GADGETS;
     }
     // Recording translates only the recorded module: the others' code would
     // only take room in the code region (once it is full nothing more is
     // translated, so nothing more recorded) and their blocks run as gadgets.
     if (rec_file && !rec_module(mod)) {
         pthread_mutex_unlock(&reg_lock);
-        return;
+        return JIT_GADGETS;
     }
     if (!reg_table)
         reg_table = calloc(REG_BUCKETS, sizeof(*reg_table));
@@ -3135,17 +3155,22 @@ static void jit_translate(struct fiber_block *b, const struct jit_units *U, stru
     for (; r; r = r->next)
         if (r->hash == h && r->nkey == nkey && !memcmp(r->key, key, nkey * 4))
             break;
+    // a translation of its own: not before it is hot (taking no slot till then)
+    if (!r && !hot && jit_hot_runs != 0 && !rec_file) {
+        pthread_mutex_unlock(&reg_lock);
+        return JIT_LATER;
+    }
     unsigned idx = 0;
     if (!r && reg_table)
         idx = mod_tables_fit(mod) ? mod_next_idx[mod]++ : CTX_MAX;
     pthread_mutex_unlock(&reg_lock);
     if (r) {
-        reg_install(b, ctx, r);
+        bool native = reg_install(b, ctx, r);
         atomic_fetch_add_explicit(&st_shared, 1, memory_order_relaxed);
-        return;
+        return native ? JIT_NATIVE : JIT_GADGETS;
     }
     if (!reg_table || idx >= CTX_MAX)
-        return;
+        return JIT_GADGETS;
     // The code may run as soon as the first segment is installed.
     e->record = rec_module(mod);
     e->idx = idx;
@@ -3153,15 +3178,17 @@ static void jit_translate(struct fiber_block *b, const struct jit_units *U, stru
     b->jit_ctx = ctx;
     slot_set(ctx, idx, b, base, base);
     jit_native(b, U, e);
+    // installed as it was translated, registered for others or not
+    enum jit_outcome native = e->ninst > 0 ? JIT_NATIVE : JIT_GADGETS;
     if (e->ninst > sizeof(e->inst) / sizeof(e->inst[0]))
-        return;
+        return native;
     r = malloc(sizeof(*r) + nkey * 4);
     if (!r)
-        return;
+        return native;
     r->seg = malloc(e->ninst * sizeof(*r->seg) + 1);
     if (!r->seg) {
         free(r);
-        return;
+        return native;
     }
     r->hash = h;
     r->nkey = nkey;
@@ -3179,6 +3206,7 @@ static void jit_translate(struct fiber_block *b, const struct jit_units *U, stru
     r->next = reg_table[h & (REG_BUCKETS - 1)];
     reg_table[h & (REG_BUCKETS - 1)] = r;
     pthread_mutex_unlock(&reg_lock);
+    return native;
 }
 
 // ================================================================ host faults
@@ -3746,6 +3774,18 @@ int jit_control(const char *cmd, size_t len) {
     }
     if (len == 6 && !memcmp(cmd, "region", 6))
         return jit_region_now(false) ? 0 : -2;
+    // "hot <runs>": for blocks compiled from now on
+    if (len > 4 && len < 16 && !memcmp(cmd, "hot ", 4)) {
+        char digits[16];
+        memcpy(digits, cmd + 4, len - 4);
+        digits[len - 4] = '\0';
+        char *end;
+        unsigned long runs = strtoul(digits, &end, 10);
+        if (*end != '\0' || runs > UINT32_MAX)
+            return -1;
+        jit_hot_runs = (uint32_t) runs;
+        return 0;
+    }
     return -1;
 }
 
@@ -3770,6 +3810,18 @@ size_t jit_describe(char *buf, size_t size) {
         "fixed: %llu, slot taken elsewhere: %llu), reused: %llu\n", (unsigned long long) st_blocks,
         (unsigned long long) st_aot, (unsigned long long) st_aot_moved, (unsigned long long) st_aot_fixed,
         (unsigned long long) st_aot_busy, (unsigned long long) st_shared);
+    // what the meters' JIT gauge is the share of, lately (jit_block_counts)
+    uint64_t blocks, native;
+    jit_block_counts(&blocks, &native);
+    OUT("blocks decided: %llu, with native code (an image's, translated or reused) %llu, %.1f%%; the rest gadgets\n",
+        (unsigned long long) blocks, (unsigned long long) native,
+        blocks ? 100.0 * (double) native / (double) blocks : 0.0);
+    uint64_t later = st_later, hot_done = st_hot;
+    OUT("hot translation: after %u runs as gadgets (echo hot <runs> > /proc/ish/jit; 0: as compiled), "
+        "for blocks compiled afterwards: %llu left till hot, %llu of them hot and translated "
+        "(%llu with native code), %llu never hot yet\n", jit_hot_runs, (unsigned long long) later,
+        (unsigned long long) hot_done, (unsigned long long) st_hot_native,
+        (unsigned long long) (later > hot_done ? later - hot_done : 0));
     OUT("other versions: %s (ISH_AOT_FAMILY=0 turns off)\n", aot_family ? "images serve their family" : "off");
     OUT("image lookups: %.1f ms (%llu answered from the memo; %llu searches of other versions: %.1f ms)\n",
         jit_ticks_ms(st_find_ticks), (unsigned long long) st_memo_hits,
@@ -3926,6 +3978,15 @@ static void jit_init(void) {
     pin_init(pin_on);
     cm_on = getenv("ISH_JIT_MAP") != NULL;
     rec_file = pic_on && have_region ? getenv("ISH_JIT_RECORD") : NULL;
+    const char *hot = getenv("ISH_JIT_HOT");
+    if (hot != NULL) {
+        char *end;
+        unsigned long runs = strtoul(hot, &end, 10);
+        if (*hot != '\0' && *end == '\0' && runs <= UINT32_MAX)
+            jit_hot_runs = (uint32_t) runs;
+        else
+            fprintf(stderr, "⚠️  JIT: ISH_JIT_HOT=%s is no count of runs: %u\n", hot, jit_hot_runs);
+    }
     rec_mod = getenv("ISH_JIT_RECORD_MOD") ? getenv("ISH_JIT_RECORD_MOD") : "ld-musl";
     if (have_region) {
         make_exit_stub();
@@ -3993,6 +4054,11 @@ bool jit_region_now(bool from_debugger) {
     }
     pthread_mutex_unlock(&region_lock);
     return translating;
+}
+
+bool jit_translates_with_room(void) {
+    pthread_once(&init_once, jit_init);
+    return flag(&jit_on) && !flag(&aot_only) && !atomic_load(&region_full);
 }
 
 bool jit_aot_serves(const char *path) {
@@ -4068,29 +4134,68 @@ void jit_block_init(struct fiber_block *b) {
     b->native_entry = 0;
     b->jit_ctx = NULL;
     b->jit_idx = 0;
+    b->jit_runs = 0;
+    b->jit_first = 0;
 }
 
-void jit_block(struct fiber_block *b, struct jit_units *U) {
+// A block decided (native code or gadgets for good), for the meters' share:
+// st_native_blocks after st_decided, so a reading of both never has more native
+// than decided. By what jit_translate says, not native_entry, which is the
+// first unit's native code only, with pinned registers: counted by it, a block
+// whose native code began further in was not, and the share fell as low as 0.
+static void count_decided(enum jit_outcome outcome) {
+    atomic_fetch_add_explicit(&st_decided, 1, memory_order_release);
+    if (outcome == JIT_NATIVE)
+        atomic_fetch_add_explicit(&st_native_blocks, 1, memory_order_release);
+}
+
+enum jit_outcome jit_block(struct fiber_block *b, struct jit_units *U) {
     if (!U || U->n > JIT_MAX_UNITS)
-        return;
+        return JIT_GADGETS;
     uint64_t t0 = jit_ticks();
     if (cm_on)
         cm_block(b);
-    jit_translate(b, U, &scratch->em, scratch->key);
+    enum jit_outcome outcome = jit_translate(b, U, &scratch->em, scratch->key, false);
     atomic_fetch_add_explicit(&st_ticks, jit_ticks() - t0, memory_order_relaxed);
-    atomic_fetch_add_explicit(&st_blocks, 1, memory_order_release);
-    // after st_blocks: a reading of both never has more native than blocks
-    if (__atomic_load_n(&b->native_entry, __ATOMIC_ACQUIRE) != 0)
-        atomic_fetch_add_explicit(&st_native_blocks, 1, memory_order_release);
+    atomic_fetch_add_explicit(&st_blocks, 1, memory_order_relaxed);
+    if (outcome == JIT_LATER)
+        atomic_fetch_add_explicit(&st_later, 1, memory_order_relaxed);
+    else
+        count_decided(outcome);
+    return outcome;
+}
+
+bool jit_block_hot(struct fiber_block *b, struct jit_units *U) {
+    if (!U || U->n > JIT_MAX_UNITS)
+        return false;
+    uint64_t t0 = jit_ticks();
+    enum jit_outcome outcome = jit_translate(b, U, &scratch->em, scratch->key, true);
+    atomic_fetch_add_explicit(&st_ticks, jit_ticks() - t0, memory_order_relaxed);
+    atomic_fetch_add_explicit(&st_hot, 1, memory_order_relaxed);
+    if (outcome == JIT_NATIVE)
+        atomic_fetch_add_explicit(&st_hot_native, 1, memory_order_relaxed);
+    count_decided(outcome);
+    return outcome == JIT_NATIVE;
 }
 
 void jit_block_counts(uint64_t *blocks, uint64_t *native) {
     *native = atomic_load_explicit(&st_native_blocks, memory_order_acquire);
-    *blocks = atomic_load_explicit(&st_blocks, memory_order_acquire);
+    *blocks = atomic_load_explicit(&st_decided, memory_order_acquire);
 }
 
 bool jit_region_is_full(void) {
     return atomic_load(&region_full);
+}
+
+bool jit_region_usage(size_t *used, size_t *size) {
+    pthread_once(&init_once, jit_init);
+    if (!flag(&jit_on) || flag(&aot_only)) {
+        *used = *size = 0;
+        return false;
+    }
+    *size = REGION_SIZE;
+    *used = atomic_load(&region_full) ? REGION_SIZE : atomic_load(&region_used);
+    return true;
 }
 
 // A native segment covering units [first, end) of block b is installed at
