@@ -40,7 +40,7 @@ static void check(const char *name, int ok, const char *detail) {
 }
 
 int main(void) {
-    char detail[300];
+    char detail[600];
     long long processes_before = processes_now();
     pid_t child = fork();
     if (child == 0)

@@ -72,7 +72,9 @@ librt = cc.find_library('rt', required: false)
 libm = cc.find_library('m', required: false)
 libdl = cc.find_library('dl', required: false)
 sqlite3 = cc.find_library('sqlite3')
-dependencies = [librt, libm, libdl, threads, sqlite3]
+# sqlite3 comes with libfakefs, for fs/fake.c too: here as well, it was on
+# the CLI's link line twice, which Apple's ld warned of
+dependencies = [librt, libm, libdl, threads]
 
 subdir('vdso/arm64')
 includes += include_directories('vdso/arm64')

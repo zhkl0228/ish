@@ -32,10 +32,11 @@ work=$(cd "$work" && pwd)
 
 # Homebrew's libarchive is keg-only: pkg-config finds it by its own path. A
 # warning an error when compiling (-Werror), not when linking, which
-# -Dwerror=true would make so too (ld -fatal_warnings): Homebrew's bottle is
-# built on a newer macOS than the image may be (27.2's on xcode-27's 27.0),
-# and ld warns of it ("linking with dylib ... built for newer version")
-PKG_CONFIG_PATH="$(brew --prefix libarchive)/lib/pkgconfig" CC=clang \
+# -Dwerror=true would make so too (ld -fatal_warnings). Built for the macOS
+# it runs on, which Homebrew's bottles are: for the SDK's (27.0 with Xcode
+# 27.2, on 27.2), ld warned of each ("linking with dylib ... built for newer
+# version")
+MACOSX_DEPLOYMENT_TARGET=$(sw_vers -productVersion) PKG_CONFIG_PATH="$(brew --prefix libarchive)/lib/pkgconfig" CC=clang \
     meson setup "$work/build" --buildtype=release -Dc_args=-Werror
 ninja -C "$work/build" ish tools/fakefsify
 

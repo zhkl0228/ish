@@ -42,7 +42,8 @@ static void check(const char *name, int ok, const char *detail) {
 
 int main(void) {
     char detail[300];
-    char dir[200];
+    // room for it and /listening.sock in sun_path's 108 bytes
+    char dir[90];
     snprintf(dir, sizeof(dir), "/tmp/regress_unix_path_with_a_directory_name_long_enough.%d", getpid());
     mkdir(dir, 0755);
     struct sockaddr_un addr = {.sun_family = AF_UNIX};

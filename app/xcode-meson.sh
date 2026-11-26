@@ -37,7 +37,7 @@ if [[ $? -ne 0 ]]; then
     [properties]
     needs_exe_wrapper = true
 EOF
-    (set -x; meson $SRCROOT --cross-file $crossfile) || exit $?
+    (set -x; meson setup --cross-file $crossfile . $SRCROOT) || exit $?
     config=$(meson introspect --buildoptions)
 fi
 
@@ -46,7 +46,13 @@ b_ndebug=false
 if [[ $CONFIGURATION == Release ]]; then
     buildtype=debugoptimized
 fi
+# No sanitizer: none in b_sanitize's combo, before meson 1.8; nothing in the
+# array it is since (the value introspected a list), where "none" is a
+# sanitizer's name, which meson warned of with b_lundef
 b_sanitize=none
+if python3 -c "import sys, json; sys.exit(0 if isinstance(next(x['value'] for x in json.load(sys.stdin) if x['name'] == 'b_sanitize'), list) else 1)" <<< $config; then
+    b_sanitize=
+fi
 if [[ -n "$ENABLE_ADDRESS_SANITIZER" ]]; then
     b_sanitize=address
 fi
