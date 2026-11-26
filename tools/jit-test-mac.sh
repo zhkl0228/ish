@@ -17,6 +17,8 @@
 #     (ISH_JIT_FAULT_TEST=unknown);
 #   - regress_jit_flush: a 1 MB code region (ISH_JIT_REGION_MB=1), flushed
 #     over and over as processes start and end, every result right;
+#   - regress_jit_fp: scalar floating point, each instruction's results and
+#     flags the gadgets' (ISH_JIT_PIC=1, as on iOS);
 #   - regression tests the JIT can break: instructions compared against
 #     hardware, faults, signals, memory.
 # Needs meson, ninja and timeout. Exits 1 if any test failed.
@@ -43,6 +45,7 @@ if [ "${1:-}" = --prepare ]; then
     build fenv -O0 tests/regress/regress_fenv.c -lm
     build jit_fault -O0 tests/regress/regress_jit_fault.c
     build jit_flush -O0 tests/regress/regress_jit_flush.c
+    build jit_fp -O0 tests/regress/regress_jit_fp.c
     build mmap_spin -O1 tests/regress/regress_mmap_spin.c
     build stack_extent -O0 tests/regress/regress_stack_extent.c
     build force_signal -O0 tests/regress/regress_force_signal.c
@@ -109,6 +112,13 @@ echo "== regress_jit_flush"
 out=$(ISH_JIT_REGION_MB=1 timeout 300 "$ISH" -r "$ROOT" /tmp/regress_jit_flush 2>&1)
 echo "$out" | grep -v '^PASS' | tail -20
 echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || fail "regress_jit_flush"
+
+# scalar FP: each instruction run as gadgets and run hot, the JIT's (PIC, as
+# on iOS, where a block runs as gadgets till hot)
+echo "== regress_jit_fp"
+out=$(ISH_JIT_PIC=1 timeout 300 "$ISH" -r "$ROOT" /tmp/regress_jit_fp 2>&1)
+echo "$out" | grep -v '^PASS' | tail -20
+echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || fail "regress_jit_fp"
 
 for t in $TESTS; do
     echo "== regress_$t"

@@ -1077,6 +1077,116 @@ static bool emit_simd(struct em *e, uint32_t x) {
     return true;
 }
 
+// ---- Scalar floating point, single and double precision. The guest's FPCR
+// is the host's while guest code runs (fiber_enter) and its FPSR collects in
+// the host's (cpu_step_to_interrupt), as for the gadgets, which run the
+// host's own instruction too: the same instruction here, on the guest's
+// registers loaded into v16..v19, gives their result and their flags. Half
+// precision, FRINT32/64 and what is unallocated are left to the gadgets (an
+// unallocated encoding run here would be the host's SIGILL). Returns false
+// for anything not handled.
+static bool emit_fp(struct em *e, uint32_t x) {
+    int rd = x & 31, rn = (x >> 5) & 31, rm = (x >> 16) & 31;
+    unsigned type = (x >> 22) & 3;
+    if ((x & 0xFFFFFFE0u) == 0xD53B4400u || (x & 0xFFFFFFE0u) == 0xD53B4420u) {   // mrs fpcr / fpsr
+        if (rd == 31) return true;
+        int hd = hreg(e, rd);
+        put(e, (x & ~0x1Fu) | (uint32_t) hd);
+        writeback(e, rd);
+        return true;
+    }
+    if ((x & 0xFF000000u) == 0x1F000000u) {                                   // fmadd fmsub fnmadd fnmsub
+        if (type > 1) return false;
+        vload(e, V_N, rn);
+        vload(e, V_M, rm);
+        vload(e, V_T, (x >> 10) & 31);
+        put(e, (x & ~0x001F7FFFu) | ((uint32_t) V_M << 16) | ((uint32_t) V_T << 10) | ((uint32_t) V_N << 5) | V_D);
+        vstore(e, V_D, rd);
+        return true;
+    }
+    if ((x & 0xFFFFFC00u) == 0x9EAF0000u) {                                   // fmov v.d[1], x
+        vload(e, V_D, rd);
+        int hn = rn == 31 ? 31 : hreg(e, rn);
+        put(e, 0x9EAF0000u | ((uint32_t) hn << 5) | V_D);
+        vstore(e, V_D, rd);
+        return true;
+    }
+    if ((x & 0xFFFFFC00u) == 0x9EAE0000u) {                                   // fmov x, v.d[1]
+        vload(e, V_N, rn);
+        if (rd == 31) return true;
+        int hd = hreg(e, rd);
+        put(e, 0x9EAE0000u | (V_N << 5) | (uint32_t) hd);
+        writeback(e, rd);
+        return true;
+    }
+    // AdvSIMD's scalar fcvtzs/fcvtzu and scvtf/ucvtf, the forms of it the
+    // gadgets have (gen.c; the others are their SIGILL)
+    if ((x & 0xDFBFFC00u) == 0x5EA1B800u || (x & 0xDFBFFC00u) == 0x5E21D800u) {
+        vload(e, V_N, rn);
+        put(e, (x & ~0x3FFu) | (V_N << 5) | V_D);
+        vstore(e, V_D, rd);
+        return true;
+    }
+    if ((x & 0x5F000000u) != 0x1E000000u || (x & 0x20000000u) || type > 1)    // M = S = 0, single or double
+        return false;
+    if ((x & 0x7F20FC00u) == 0x1E200000u) {                                   // conversion to and from integer
+        unsigned rmode = (x >> 19) & 3, op = (x >> 16) & 7;
+        if (op <= 1 || ((op == 4 || op == 5) && rmode == 0)) {                // fcvt[npmz]s/u, fcvtas/u: to a register
+            vload(e, V_N, rn);
+            int hd = rd == 31 ? 31 : hreg(e, rd);
+            put(e, (x & ~0x3FFu) | (V_N << 5) | (uint32_t) hd);
+            if (rd != 31) writeback(e, rd);
+            return true;
+        }
+        if ((op == 2 || op == 3) && rmode == 0) {                             // scvtf / ucvtf: from a register
+            int hn = rn == 31 ? 31 : hreg(e, rn);
+            put(e, (x & ~0x3FFu) | ((uint32_t) hn << 5) | V_D);
+            vstore(e, V_D, rd);
+            return true;
+        }
+        return false;   // fmov: emit_simd's, for the forms it has
+    }
+    if (x & 0x80000000u)
+        return false;
+    bool rflags = false, wflags = false, src_m = true, dst = true;
+    if ((x & 0xFF200C00u) == 0x1E200800u) {                                   // 2 source
+        if (((x >> 12) & 15) > 8) return false;                                // fmul .. fnmul
+    } else if ((x & 0xFF207C00u) == 0x1E204000u) {                            // 1 source
+        unsigned op = (x >> 15) & 63;
+        // fmov fabs fneg fsqrt; fcvt to the other precision or half; frintn/p/m/z/a/x/i
+        bool ok = op <= 3 || (op == 4 && type == 1) || (op == 5 && type == 0) || op == 7 ||
+                  (op >= 8 && op <= 15 && op != 13);
+        if (!ok) return false;
+        src_m = false;
+    } else if ((x & 0xFF201FE0u) == 0x1E201000u) {                            // fmov (immediate)
+        put(e, (x & ~0x1Fu) | V_D);
+        vstore(e, V_D, rd);
+        return true;
+    } else if ((x & 0xFF20FC07u) == 0x1E202000u) {                            // fcmp / fcmpe (#0.0: no m)
+        src_m = !(x & 8);
+        wflags = true;
+        dst = false;
+    } else if ((x & 0xFF200C00u) == 0x1E200400u) {                            // fccmp / fccmpe
+        rflags = wflags = true;
+        dst = false;
+    } else if ((x & 0xFF200C00u) == 0x1E200C00u) {                            // fcsel
+        rflags = true;
+    } else {
+        return false;
+    }
+    if (rflags && !e->hflags) load_flags(e);
+    vload(e, V_N, rn);
+    if (src_m) vload(e, V_M, rm);
+    put(e, (x & ~(src_m ? 0x001F03FFu : 0x3FFu)) | (src_m ? (uint32_t) V_M << 16 : 0) | (V_N << 5) |
+               (dst ? V_D : (x & 0x1Fu)));
+    if (wflags) {
+        store_flags(e);
+        e->hflags = true;
+    }
+    if (dst) vstore(e, V_D, rd);
+    return true;
+}
+
 // base (+ offset) -> x9 for a load/store; returns the host register of the base
 static int ldst_addr(struct em *e, int gn, int64_t imm, bool post) {
     int hn = hreg(e, gn);
@@ -1252,6 +1362,7 @@ static bool emit_insn(struct em *e, uint32_t x, uint64_t pc, unsigned spos, bool
         put(e, x);
         return true;
     }
+    if (simd_on && emit_fp(e, x)) return !e->fail;                         // scalar FP
     if ((x & 0x0E000000u) == 0x0E000000u && (x & 0x1F000000u) != 0x1F000000u && simd_on) {   // SIMD data processing
         if (emit_simd(e, x)) return !e->fail;
     }
@@ -2590,7 +2701,7 @@ void ish_aot_register(const struct aot_module *m) {
 
 // Bump whenever the code emitted for some guest instruction, stub or exit
 // changes: images made before would still pass every other check.
-#define JIT_CODE_VERSION 10
+#define JIT_CODE_VERSION 11
 
 // Everything the emitted code bakes in besides the gadgets it names: the
 // conventions, the struct layouts it loads from and the TLB / block cache
