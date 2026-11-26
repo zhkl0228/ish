@@ -103,9 +103,10 @@
 // Esc, tab, /, up, down and return at the bottom of the column, while it is
 // shown and the keyboard is down (updateColumnKeys): what a program's menus
 // take (claude's: / for its commands, esc to leave one), without the keyboard
-// over the terminal. The meters stay above them (aboveColumnKeys). With the
-// keyboard up, esc and tab only, under the memory (underMeters), above the
-// keyboard (aboveKeyboard); the bar over the keyboard has them too.
+// over the terminal. The meters stay above them. With the keyboard up, esc
+// and tab only, at the column's bottom above the keyboard's bar
+// (columnKeysAboveKeyboard), where the CPU and the memory leave the room
+// (updateColumnKeys); the bar over the keyboard has them too.
 @property UIStackView *columnKeys;
 @property NSArray<UIView *> *columnKeysKeyboardDown;
 @property NSLayoutConstraint *columnKeysAtBottom;
