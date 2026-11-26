@@ -3,7 +3,7 @@
 # them, and of the apk packages of whose code an image is, an older one of which every
 # login shell names (ish-install --outdated). Written by publish_app_images.py.
 npm @anthropic-ai/claude-code 2.1.332
-npm @moonshot-ai/kimi-code 2.8.0
+npm @moonshot-ai/kimi-code 2.8.1
 apk bash 5.3.9-r1
 apk busybox 1.37.0-r31
 apk git 2.54.1-r0

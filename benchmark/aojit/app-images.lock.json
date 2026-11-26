@@ -11,79 +11,79 @@
     "bash": {
       "module": "/bin/bash",
       "object": "aot_bash_ios.o",
-      "sha256": "76f59bfba2030db5653b37037aa3a502d2ceac685b9d002b792ce626f5dadf38",
-      "size": 6760312,
-      "xz_size": 970208
+      "sha256": "b022677387d11492527b6e8a882ba9d30bfa4018baed27749552cfad617c5435",
+      "size": 6760216,
+      "xz_size": 969504
     },
     "busybox": {
       "module": "/bin/busybox",
       "object": "aot_busybox_ios.o",
-      "sha256": "b0426061add262b30022273bb0f3b15b878026d7c082eed6e626d1e636201c2e",
-      "size": 4430856,
-      "xz_size": 650004
+      "sha256": "87aa29bc41d5b41d23e442a62db102bea3672b40e3a3ee5449bf267f966edf1f",
+      "size": 4428408,
+      "xz_size": 656628
     },
     "claude": {
       "module": "claude.exe",
       "object": "aot_claude_ios.o",
-      "sha256": "e1a4e125072b9b214058169fa1c7b7968333a76cf6f8dc1285e282356ff2e06a",
-      "size": 181411840,
-      "xz_size": 21805704
+      "sha256": "366698be70f86a79b6897df4a452fb1c3514660840f6383923c3640102396e9e",
+      "size": 181383216,
+      "xz_size": 22024192
     },
     "crypto": {
       "module": "libcrypto.so",
       "object": "aot_crypto_ios.o",
-      "sha256": "3a3a1e954ec3cd7c0b8bc555509581f669d731666bdcd9816359e4c6c408ec67",
-      "size": 18617000,
-      "xz_size": 2456476
+      "sha256": "df05611971018cf0cd5947d175d2b5dd83da2024c821092bb010d0b8c3279146",
+      "size": 18624968,
+      "xz_size": 2457220
     },
     "gh": {
       "module": "/usr/bin/gh",
       "object": "aot_gh_ios.o",
-      "sha256": "b7f17ed1cded71f9d8fa7fee16f4b4c182eb0f4f062ca71b968bcfe406bb3fc8",
-      "size": 75472360,
-      "xz_size": 8825176
+      "sha256": "28ae3345a6cbcbedf83b3fdceda581e0b2e4a4c44b8b28989acca4383b038f75",
+      "size": 76941832,
+      "xz_size": 8871544
     },
     "git": {
       "module": "/usr/bin/git",
       "object": "aot_git_ios.o",
-      "sha256": "cf4406fda74e2f33866faeec1180e12fb58e47e6450e92220042175974e2b255",
-      "size": 26882928,
-      "xz_size": 3684152
+      "sha256": "57ff7e580c0c85ddb6dc6811eb29ebc44cc975af802310fc3306d5038a2bada4",
+      "size": 26885440,
+      "xz_size": 3701344
     },
     "jvm": {
       "module": "libjvm.so",
       "object": "aot_jvm_ios.o",
-      "sha256": "8ffcde9d4f290b975a3179715a1da9fbac62210e081a2a87fe681bd6d370a277",
-      "size": 168337048,
-      "xz_size": 20243500
+      "sha256": "1bfa7ee79141016640e0b2c06f2f06b4b648504a5799636cfcd151d13d7229f7",
+      "size": 168177064,
+      "xz_size": 20452532
     },
     "musl": {
       "module": "ld-musl",
       "object": "aot_musl_ios.o",
-      "sha256": "ce274c6af8cc506239068a0690c8291660d942122403307bf134eac39831d56b",
-      "size": 4822752,
-      "xz_size": 728888
+      "sha256": "a9e8623247d4f7319046039c7ba08fb85c8f0f53d64a0d2d446f4ee9f1cfdd6b",
+      "size": 4847072,
+      "xz_size": 733380
     },
     "node": {
       "module": "/usr/bin/node",
       "object": "aot_node_ios.o",
-      "sha256": "81adabfca8ad6adb92d7d7d4e4161ad2e5b46b464d41598d3da6027077cbdc28",
-      "size": 217670208,
-      "xz_size": 25976724
+      "sha256": "f02e97eca0897f556f59ab0f128c0d0f81a0a15e18c75703cd1a4d24313597e1",
+      "size": 217326376,
+      "xz_size": 26268640
     },
     "python": {
       "module": "libpython3",
       "object": "aot_python_ios.o",
-      "sha256": "03b190a9aacd44fcafb73305185a11c78d7db9a268254f3073debd024c5e7bce",
-      "size": 38096512,
-      "xz_size": 4886500
+      "sha256": "856b0a24b1df7831d19a5935afecb5f40cf43b0ab885a58871293b8396efa2d8",
+      "size": 38091888,
+      "xz_size": 4857216
     },
     "ssh": {
       "module": "/usr/bin/ssh",
       "object": "aot_ssh_ios.o",
-      "sha256": "542ea225b9e1c2d923be2379d1695719bb486408688d0c1ed0c2307696171ea3",
-      "size": 6298072,
-      "xz_size": 875980
+      "sha256": "b667b83afffa2c3f1111e948a55959c97fe726a17642e3efd44d35467f27c6ae",
+      "size": 6283320,
+      "xz_size": 869024
     }
   },
   "recorded": {
@@ -100,10 +100,10 @@
       "openssh-client-default": "10.3_p1-r2",
       "python3": "3.14.10-r2"
     },
-    "inputs": "a701fa251252ef62",
+    "inputs": "0df9dbbc73ce4e74",
     "npm": {
       "@anthropic-ai/claude-code": "2.1.332",
-      "@moonshot-ai/kimi-code": "2.8.0"
+      "@moonshot-ai/kimi-code": "2.8.1"
     }
   },
   "rootfs": {
@@ -111,5 +111,5 @@
     "sha256": "6d6ee01668af8c120ce44bd8ec3da1b42e6301a9eb090783fc7ed232da3aeded",
     "size": 30239249
   },
-  "set": "3a8d7c3a-20261126-bac18cc8"
+  "set": "3a8d7c3a-20261126-f56b855d"
 }
