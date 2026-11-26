@@ -75,6 +75,8 @@ NS_ASSUME_NONNULL_BEGIN
 @end
 
 extern NSNotificationName const MonitorSamplerDidReadNotification;
+// topProcesses counted again (wantsProcesses)
+extern NSNotificationName const MonitorSamplerDidCountProcessesNotification;
 // Readings in cpuHistory: a minute's
 extern const NSUInteger kMonitorHistoryLength;
 // Readings whose blocks the native share is of: ten seconds'
@@ -89,10 +91,11 @@ extern const NSUInteger kMonitorHistoryLength;
 // the sampler is stopped, the time it was stopped not in it.
 @property (readonly) NSArray<NSNumber *> *cpuHistory;
 
-// While set (the details shown, the keyboard down), each reading also finds
-// the three processes taking the most of the CPUs since the one before,
-// off the main thread (fs/proc/ish.h's ish_processes): topProcesses, which
-// the reading after has, nil till two readings were taken
+// While set (the details shown, the keyboard down), the three processes
+// taking the most of the CPUs since the count before, off the main thread
+// (fs/proc/ish.h's ish_processes): counted as it is set and a quarter of a
+// second after, so that they show at once, then with each reading; nil till
+// counted twice, each count told (MonitorSamplerDidCountProcessesNotification)
 @property (nonatomic) BOOL wantsProcesses;
 @property (readonly, nullable) NSArray<MonitorProcess *> *topProcesses;
 

@@ -16,6 +16,7 @@ bool jit_region_is_full(void);
 bool jit_region_usage(size_t *used, size_t *size);
 
 NSNotificationName const MonitorSamplerDidReadNotification = @"MonitorSamplerDidReadNotification";
+NSNotificationName const MonitorSamplerDidCountProcessesNotification = @"MonitorSamplerDidCountProcessesNotification";
 const NSUInteger kMonitorHistoryLength = 60;
 
 // The most CPUs counted one by one
@@ -114,8 +115,17 @@ static struct ticks_between TicksBetween(struct cpu_usage last, struct cpu_usage
     if (wantsProcesses == _wantsProcesses)
         return;
     _wantsProcesses = wantsProcesses;
-    if (wantsProcesses)
+    if (wantsProcesses) {
+        // a count to measure from now, and the first measured a quarter of
+        // a second after: shown at once, not with the reading after next
+        dispatch_async(_processQueue, ^{
+            [self countProcesses];
+        });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t) (0.25 * NSEC_PER_SEC)), _processQueue, ^{
+            [self countProcesses];
+        });
         return;
+    }
     // counted again from the next time it is wanted
     _topProcesses = nil;
     dispatch_async(_processQueue, ^{
@@ -127,9 +137,13 @@ static struct ticks_between TicksBetween(struct cpu_usage last, struct cpu_usage
 // count, their memory found (a walk of each one's page table, so of three
 // only), told on the main thread for the next reading
 - (void)countProcesses {
+    CFTimeInterval now = CACurrentMediaTime();
+    // Too soon after the last (a reading right after the first count): the
+    // shares of a moment's time come and go; that count measures the next
+    if (_lastProcessTimes != nil && now - _lastProcessCount < 0.1)
+        return;
     struct ish_process *processes = malloc(MAX_PROCESSES * sizeof(*processes));
     size_t count = MIN(ish_processes(processes, MAX_PROCESSES), (size_t) MAX_PROCESSES);
-    CFTimeInterval now = CACurrentMediaTime();
     NSMutableDictionary<NSString *, NSNumber *> *times = [NSMutableDictionary dictionaryWithCapacity:count];
     NSMutableArray<MonitorProcess *> *counted = [NSMutableArray array];
     double available = (now - _lastProcessCount) * 1e6 * NSProcessInfo.processInfo.processorCount;
@@ -160,8 +174,10 @@ static struct ticks_between TicksBetween(struct cpu_usage last, struct cpu_usage
     for (MonitorProcess *process in top)
         process.resident = ish_process_resident(process.pid, process.startTicks);
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (self->_wantsProcesses)
-            self->_topProcesses = top;
+        if (!self->_wantsProcesses)
+            return;
+        self->_topProcesses = top;
+        [NSNotificationCenter.defaultCenter postNotificationName:MonitorSamplerDidCountProcessesNotification object:self];
     });
 }
 

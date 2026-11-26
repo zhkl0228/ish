@@ -235,6 +235,8 @@ static NSString *ThermalMeaning(NSProcessInfoThermalState state) {
 
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(samplerDidRead:)
                                                name:MonitorSamplerDidReadNotification object:self.sampler];
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(samplerDidCountProcesses:)
+                                               name:MonitorSamplerDidCountProcessesNotification object:self.sampler];
     [self showReading:self.sampler.reading];
 }
 
@@ -269,6 +271,15 @@ static NSString *ThermalMeaning(NSProcessInfoThermalState state) {
     [bar.widthAnchor constraintEqualToConstant:8].active = YES;
     [self.cores addArrangedSubview:bar];
     return bar;
+}
+
+// The processes as soon as they are counted, not with the next reading
+- (void)samplerDidCountProcesses:(NSNotification *)notification {
+    [UIView animateWithDuration:0.3 animations:^{
+        [self showProcesses];
+        [self updateSize];
+        [self.view layoutIfNeeded];
+    }];
 }
 
 - (void)samplerDidRead:(NSNotification *)notification {
