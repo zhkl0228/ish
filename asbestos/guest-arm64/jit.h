@@ -145,6 +145,10 @@ size_t jit_describe(char *buf, size_t size);
 // those compiled lately (app/MonitorSampler.m). Native is read before blocks
 // and counted after it, so a reading never has more native than blocks.
 void jit_block_counts(uint64_t *blocks, uint64_t *native);
+// Whether the code region has filled up: blocks compiled since run as gadgets
+// (unless an AOT image has them), as /proc/ish/jit says "(full: ...)". The
+// meters' JIT gauge is red then.
+bool jit_region_is_full(void);
 // Writes to /proc/ish/jit: "off" / "on" stop / resume installing AOT images
 // in blocks compiled afterwards (for A/B timing on a device); "region" maps
 // the code region now, if the JIT has none (jit_region_now(false)). -1: an

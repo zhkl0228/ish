@@ -187,10 +187,12 @@ static const CGFloat kStatusInset = 6;
 
 @end
 
-// Bytes a second in four characters, so that the down's line and the up's are
-// as wide as each other: zeros before a whole number (005B, 512B, 095K, 830K,
-// 075M), a tenth under ten of a unit (9.5K, 1.2M). 1024 a step, as top's; one
-// that would round to 1000 is the next unit's (1.0M, not 1000K).
+// Bytes a second in four characters, digits and a unit only, so that the
+// down's line and the up's are as wide as each other: three digits, zeros
+// before (000B, 512B, 009K, 830K, 001M, 075M). A tenth's point was narrower
+// than the digits (monospaced digits, not the point), and a line with one
+// stood off the other's. 1024 a step, as top's; one that would round to 1000
+// is the next unit's (001M, not 1000K).
 static NSString *Rate(double bytes) {
     NSArray<NSString *> *units = @[@"B", @"K", @"M", @"G"];
     double value = bytes;
@@ -199,8 +201,6 @@ static NSString *Rate(double bytes) {
         value /= 1024;
         unit++;
     }
-    if (unit > 0 && value < 9.95)
-        return [NSString stringWithFormat:@"%.1f%@", value, units[unit]];
     return [NSString stringWithFormat:@"%03.0f%@", value, units[unit]];
 }
 
@@ -359,8 +359,10 @@ static UIColor *GaugeColor(double fraction) {
     UIColor *cpu = GaugeColor(reading.cpuBusy);
     self.cpuGauge.color = cpu;
     self.memoryGauge.color = GaugeColor(reading.memoryFraction);
-    // green however full: more of it native is better, not a load
-    self.nativeGauge.color = UIColor.systemGreenColor;
+    // Green however full: more of it native is better, not a load. Red once the
+    // JIT's code region is full: what is compiled since runs as gadgets, unless
+    // an AOT image has it, and the share falls as new programs run.
+    self.nativeGauge.color = reading.codeRegionFull ? UIColor.systemRedColor : UIColor.systemGreenColor;
     for (MonitorGaugeView *gauge in @[self.cpuGauge, self.memoryGauge, self.nativeGauge]) {
         gauge.trackColor = track;
         gauge.valueLabel.textColor = foreground;
@@ -408,6 +410,10 @@ static UIColor *GaugeColor(double fraction) {
     NSString *native = reading.nativeKnown
         ? [NSString stringWithFormat:@"%d%%", (int) round(reading.nativeShare * 100)]
         : NSLocalizedString(@"unknown", @"The JIT gauge read aloud before any code was compiled");
+    if (reading.codeRegionFull)
+        native = [NSString stringWithFormat:NSLocalizedString(@"%@, its code region full",
+                                                              @"The JIT gauge read aloud once the code region is full"),
+                  native];
     NSString *down = [NSByteCountFormatter stringFromByteCount:(long long) reading.networkIn
                                                     countStyle:NSByteCountFormatterCountStyleMemory];
     NSString *up = [NSByteCountFormatter stringFromByteCount:(long long) reading.networkOut

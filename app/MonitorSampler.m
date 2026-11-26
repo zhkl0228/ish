@@ -13,6 +13,7 @@
 // asbestos/guest-arm64/jit.h's (a header for builds with ISH_JIT, which libish
 // is for the app: GuestARM64.xcconfig's ISH_ENABLE_JIT)
 void jit_block_counts(uint64_t *blocks, uint64_t *native);
+bool jit_region_is_full(void);
 
 NSNotificationName const MonitorSamplerDidReadNotification = @"MonitorSamplerDidReadNotification";
 const NSUInteger kMonitorHistoryLength = 60;
@@ -37,6 +38,7 @@ const NSUInteger kMonitorHistoryLength = 60;
 @property NSProcessInfoThermalState thermalState;
 @property BOOL nativeKnown;
 @property double nativeShare;
+@property BOOL codeRegionFull;
 @property BOOL networkCounted;
 @property double networkIn;
 @property double networkOut;
@@ -211,6 +213,7 @@ static struct ticks_between TicksBetween(struct cpu_usage last, struct cpu_usage
     _hasBlocks = YES;
     reading.nativeKnown = _nativeKnown;
     reading.nativeShare = _nativeShare;
+    reading.codeRegionFull = jit_region_is_full();
 
     // The uplinks' bytes a second since the reading before. Their counters
     // are 32 bits (if_data), and a difference taken in 32 bits is right

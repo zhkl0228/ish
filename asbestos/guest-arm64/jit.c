@@ -4089,6 +4089,10 @@ void jit_block_counts(uint64_t *blocks, uint64_t *native) {
     *blocks = atomic_load_explicit(&st_blocks, memory_order_acquire);
 }
 
+bool jit_region_is_full(void) {
+    return atomic_load(&region_full);
+}
+
 // A native segment covering units [first, end) of block b is installed at
 // code (words instructions, stubs included). This is where a recording mode
 // hooks in to capture translations.

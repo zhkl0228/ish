@@ -48,6 +48,9 @@ NS_ASSUME_NONNULL_BEGIN
 // were compiled; held while none are, as code run before is run on.
 @property (readonly) BOOL nativeKnown;
 @property (readonly) double nativeShare;
+// The JIT's code region has filled up (jit_region_is_full): blocks compiled
+// since run as gadgets, unless an AOT image has them
+@property (readonly) BOOL codeRegionFull;
 // The device's network since the reading before, bytes a second in and out
 // over its uplinks: Wi-Fi and the like (en*) and cellular (pdp_ip*), not the
 // tunnels (utun*, ipsec*), whose bytes those carry too. iOS counts no app's
