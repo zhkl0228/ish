@@ -39,6 +39,9 @@
 #include "fs/devices.h"
 #include "fs/path.h"
 #include "fs/proc/ish.h"
+#include "fs/real.h"
+#include "kernel/errno.h"
+#include "kernel/fs.h"
 #include "asbestos/guest-arm64/host_fault.h"
 #if defined(DEBUG)
 #include "DebugServer.h"
@@ -159,6 +162,25 @@ static void ish_install_anon_cap(void) {
           (double) avail / (1024 * 1024));
 }
 
+// The app's Documents (Finder's file sharing, Files' On My iPhone: the
+// built-in JIT's pairing file in StikJIT/, the themes) in the home of root,
+// whom the launch command logs in (login -f root): /root/Documents, as the
+// directory is named. Its host path (/proc/ish/documents) changes as the app
+// is installed again, so it is mounted at each boot; the directory is made
+// the first time, in the root's /root, which an update keeps.
+static void mount_documents(void) {
+    NSURL *documents = [NSFileManager.defaultManager URLsForDirectory:NSDocumentDirectory
+                                                            inDomains:NSUserDomainMask].firstObject;
+    int err = generic_mkdirat(AT_PWD, "/root/Documents", 0755);
+    if (err < 0 && err != _EEXIST) {
+        NSLog(@"iSH: the app's Documents not mounted: /root/Documents not made (error %d)", err);
+        return;
+    }
+    err = do_mount(&realfs, documents.fileSystemRepresentation, "/root/Documents", "", 0);
+    if (err < 0)
+        NSLog(@"iSH: the app's Documents (%@) not mounted at /root/Documents: error %d", documents.path, err);
+}
+
 @implementation AppDelegate
 
 - (int)boot {
@@ -212,6 +234,7 @@ static void ish_install_anon_cap(void) {
 
     do_mount(&procfs, "proc", "/proc", "", 0);
     do_mount(&devptsfs, "devpts", "/dev/pts", "", 0);
+    mount_documents();
 
     iosfs_init(); // let it mount any filesystems from user defaults
 
