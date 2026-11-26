@@ -385,6 +385,60 @@ static unsigned asbestos_next_gen(void) {
 }
 static void fiber_resize_hash(struct asbestos *asbestos, size_t new_size);
 
+#ifdef ISH_JIT
+// Every asbestos, for a flush of the code region: all_lock, which
+// asbestos_new and asbestos_free take alone, and the flush before an
+// asbestos's own lock
+static lock_t all_lock = LOCK_INITIALIZER;
+static struct list all_asbestos = LIST_INITIALIZER(all_asbestos);
+
+// The run loop's passes (cpu_run_to_interrupt: blocks looked up, compiled,
+// translated and run) counted by generation, in two counters by its parity.
+// A grace period bumps the generation and waits till every pass of the one
+// before has ended: none can then be running, or about to run, a block or
+// a translation it came by before. Two atomics a pass.
+static _Atomic unsigned pass_gen;
+static _Atomic unsigned in_pass[2];
+// jit_flushes() as this thread last ran native code
+static __thread uint64_t pass_flushes;
+
+static unsigned pass_begin(void) {
+    for (;;) {
+        unsigned gen = atomic_load(&pass_gen);
+        atomic_fetch_add(&in_pass[gen & 1], 1);
+        if (atomic_load(&pass_gen) == gen)
+            return gen;
+        atomic_fetch_sub(&in_pass[gen & 1], 1);
+    }
+}
+
+static void pass_end(unsigned gen) {
+    atomic_fetch_sub(&in_pass[gen & 1], 1);
+}
+
+static void pass_grace(void) {
+    unsigned gen = atomic_fetch_add(&pass_gen, 1);
+    struct timespec ms = {0, 1000000};
+    while (atomic_load(&in_pass[gen & 1]) != 0)
+        nanosleep(&ms, NULL);
+}
+
+void asbestos_jit_flush(void) {
+    if (!jit_flush_wanted() || !jit_flush_claim())
+        return;
+    // the translations begun before the claim are done: none is made from now
+    pass_grace();
+    lock(&all_lock);
+    struct asbestos *asbestos;
+    list_for_each_entry(&all_asbestos, asbestos, jit_all)
+        asbestos_invalidate_all(asbestos);
+    unlock(&all_lock);
+    // no pass runs a block it came by before the invalidation
+    pass_grace();
+    jit_flush_end();
+}
+#endif
+
 struct asbestos *asbestos_new(struct mmu *mmu) {
     struct asbestos *asbestos = calloc(1, sizeof(struct asbestos));
     asbestos->mmu = mmu;
@@ -398,6 +452,11 @@ struct asbestos *asbestos_new(struct mmu *mmu) {
     atomic_init(&asbestos->last_active_ms, asbestos_now_ms());
     atomic_init(&asbestos->refs, 1);
     asbestos->invalidate_gen = asbestos_next_gen();
+#ifdef ISH_JIT
+    lock(&all_lock);
+    list_add(&all_asbestos, &asbestos->jit_all);
+    unlock(&all_lock);
+#endif
     return asbestos;
 }
 
@@ -425,6 +484,12 @@ bool asbestos_leave_shared(struct asbestos *asbestos) {
 }
 
 void asbestos_free(struct asbestos *asbestos) {
+#ifdef ISH_JIT
+    // out of a flush's reach first: one in progress has it till it lets go
+    lock(&all_lock);
+    list_remove(&asbestos->jit_all);
+    unlock(&all_lock);
+#endif
     // A thread whose address space left it as it ran its code (a store to
     // code took a copy on write, mem_asbestos_page_changing) holds this to
     // read till it leaves it: none other can, the last address space using
@@ -1585,8 +1650,21 @@ int cpu_run_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
     // and by context switches / signal delivery.
     struct asbestos *asbestos = cpu->mmu->asbestos;
     __atomic_add_fetch(&asbestos->active_threads, 1, __ATOMIC_RELAXED);
+#ifdef ISH_JIT
+    unsigned gen = pass_begin();
+    // the region flushed since this thread last ran native code: what it
+    // runs now may be at addresses that held other code
+    uint64_t flushes = jit_flushes();
+    if (flushes != pass_flushes) {
+        pass_flushes = flushes;
+        __asm__ volatile("isb" ::: "memory");
+    }
+#endif
     tlb_refresh(tlb, cpu->mmu);
     int interrupt = (CPU_HAS_SINGLE_STEP ? cpu_single_step : cpu_step_to_interrupt)(cpu, tlb);
+#ifdef ISH_JIT
+    pass_end(gen);
+#endif
     cpu->trapno = interrupt;
     atomic_store_explicit(&asbestos->last_active_ms, asbestos_now_ms(), memory_order_relaxed);
     __atomic_sub_fetch(&asbestos->active_threads, 1, __ATOMIC_RELAXED);

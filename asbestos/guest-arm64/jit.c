@@ -130,6 +130,17 @@ static intptr_t rw_delta; // writable view - executable view
 static bool dual_map;
 static _Atomic size_t region_used;
 static _Atomic bool region_full;   // an allocation failed: what came after runs as gadgets
+// A full region is flushed (jit_flush_*: asbestos.c's asbestos_jit_flush) and
+// taken from its start again, what the shared stubs take (region_floor) kept:
+// every block is invalidated, translated again when it is hot again. It
+// filled for good before: compiling ish with clang (libLLVM's code, no image
+// of it) filled 120MB, and every block hot since ran as gadgets till the app
+// ended. region_limit: REGION_SIZE, or ISH_JIT_REGION_MB's (a test's flushes).
+static size_t region_floor, region_limit = REGION_SIZE;
+static _Atomic bool flush_wanted;   // the region is full: a flush is asked for
+static _Atomic bool flushing;       // till the region is taken from its start: no translation made or reused
+static _Atomic uint64_t st_flushes;
+static const char *rec_file, *rec_mod;   // recording an AOT image (below)
 // Where the region came from, or why there is none: /proc/ish/jit says it
 static char region_how[320];
 
@@ -384,8 +395,11 @@ static bool map_jit(void) {
 
 static uint8_t *region_alloc(size_t bytes) {
     size_t off = atomic_fetch_add(&region_used, (bytes + 15) & ~(size_t) 15);
-    if (off + bytes > REGION_SIZE) {
+    if (off + bytes > region_limit) {
         region_full = true;
+        // a recording keeps what it has: a flush would lose it
+        if (!rec_file)
+            atomic_store(&flush_wanted, true);
         return NULL;
     }
     return region + off;
@@ -2534,7 +2548,6 @@ static bool reg_install(struct fiber_block *b, struct jit_ctx *ctx, const struct
 
 // ISH_JIT_RECORD=<file>: at exit, write every translation of the modules whose
 // path contains ISH_JIT_RECORD_MOD (default "ld-musl") for an AOT exporter.
-static const char *rec_file, *rec_mod;
 static bool module_path_has(int mod, const char *sub);
 static bool rec_module(int mod) {
     return rec_file && module_path_has(mod, rec_mod);
@@ -3084,7 +3097,12 @@ static const struct aot_trans *aot_lookup(int mod, const struct fiber_block *b, 
 static enum jit_outcome jit_translate(struct fiber_block *b, const struct jit_units *U, struct em *e, uint32_t *key,
                                       bool hot) {
     e->record = false;
+    // while a flush clears the region nothing goes into it, and nothing in it
+    // is reused (it is to be written over): gadgets till hot, for after it
+    bool flush_on = atomic_load(&flushing);
     if (!pic_on) {
+        if (flush_on)
+            return hot || jit_hot_runs == 0 ? JIT_GADGETS : JIT_LATER;
         jit_native(b, U, e);
         return e->ninst > 0 ? JIT_NATIVE : JIT_GADGETS;
     }
@@ -3141,6 +3159,10 @@ static enum jit_outcome jit_translate(struct fiber_block *b, const struct jit_un
     if (images_only) {
         pthread_mutex_unlock(&reg_lock);
         return JIT_GADGETS;
+    }
+    if (flush_on) {
+        pthread_mutex_unlock(&reg_lock);
+        return hot || jit_hot_runs == 0 ? JIT_GADGETS : JIT_LATER;
     }
     // Recording translates only the recorded module: the others' code would
     // only take room in the code region (once it is full nothing more is
@@ -3799,9 +3821,11 @@ size_t jit_describe(char *buf, size_t size) {
                        pic_on ? "JIT, position-independent" : "JIT";
     OUT("mode: %s\n", mode);
     if (on && !images_only)
-        OUT("code region: %.1f of %u MB used%s; %s\n",
-            (region_full ? REGION_SIZE : (size_t) region_used) / 1048576.0, REGION_SIZE >> 20,
-            region_full ? " (full: blocks compiled since run as gadgets)" : "", region_how);
+        OUT("code region: %.1f of %zu MB used%s, flushed %llu times (when full: every block translated again once "
+            "hot); %s\n",
+            (region_full ? region_limit : (size_t) region_used) / 1048576.0, region_limit >> 20,
+            region_full ? (flushing ? " (full: being flushed)" : " (full: a flush asked for)") : "",
+            (unsigned long long) st_flushes, region_how);
     else if (region == NULL && region_how[0] != '\0')
         OUT("code region: none: %s\n", region_how);
     OUT("AOT: %s (echo on|off > /proc/ish/jit; affects blocks compiled afterwards, i.e. new processes)\n",
@@ -3987,11 +4011,22 @@ static void jit_init(void) {
         else
             fprintf(stderr, "⚠️  JIT: ISH_JIT_HOT=%s is no count of runs: %u\n", hot, jit_hot_runs);
     }
+    const char *limit = getenv("ISH_JIT_REGION_MB");
+    if (limit != NULL) {
+        char *end;
+        unsigned long mb = strtoul(limit, &end, 10);
+        if (*limit != '\0' && *end == '\0' && mb >= 1 && mb <= REGION_SIZE >> 20)
+            region_limit = (size_t) mb << 20;
+        else
+            fprintf(stderr, "⚠️  JIT: ISH_JIT_REGION_MB=%s is no size from 1 to %u: %u\n", limit, REGION_SIZE >> 20,
+                    REGION_SIZE >> 20);
+    }
     rec_mod = getenv("ISH_JIT_RECORD_MOD") ? getenv("ISH_JIT_RECORD_MOD") : "ld-musl";
     if (have_region) {
         make_exit_stub();
         if (pic_on && n_pinned && !env_off("ISH_JIT_STUBS"))
             make_stubs();
+        region_floor = atomic_load(&region_used);
         jit_exec_ready();
     }
     if (pic_on)
@@ -4037,6 +4072,7 @@ bool jit_region_now(bool from_debugger) {
             make_exit_stub();
             if (pic_on && n_pinned && !env_off("ISH_JIT_STUBS"))
                 make_stubs();
+            region_floor = atomic_load(&region_used);
             jit_exec_ready();
             // The region and its stubs first: a thread that reads either flag
             // set finds them
@@ -4187,14 +4223,53 @@ bool jit_region_is_full(void) {
     return atomic_load(&region_full);
 }
 
+bool jit_flush_wanted(void) {
+    return atomic_load_explicit(&flush_wanted, memory_order_relaxed);
+}
+
+bool jit_flush_claim(void) {
+    bool wanted = true;
+    if (!atomic_compare_exchange_strong(&flush_wanted, &wanted, false))
+        return false;
+    atomic_store(&flushing, true);
+    return true;
+}
+
+void jit_flush_end(void) {
+    pthread_mutex_lock(&reg_lock);
+    for (unsigned bucket = 0; reg_table != NULL && bucket < REG_BUCKETS; bucket++) {
+        struct reg_entry *r = reg_table[bucket];
+        while (r != NULL) {
+            struct reg_entry *next = r->next;
+            free(r->seg);
+            free(r);
+            r = next;
+        }
+        reg_table[bucket] = NULL;
+    }
+    // a module's indices from 0 again: a slot an invalidated block still
+    // holds is taken over (slot_set), and its jit_block_free leaves it be
+    if (mod_next_idx != NULL)
+        memset(mod_next_idx, 0, mod_next_cap * sizeof(*mod_next_idx));
+    atomic_store(&region_used, region_floor);
+    atomic_store(&region_full, false);
+    atomic_fetch_add(&st_flushes, 1);
+    atomic_store(&flushing, false);
+    pthread_mutex_unlock(&reg_lock);
+}
+
+uint64_t jit_flushes(void) {
+    return atomic_load_explicit(&st_flushes, memory_order_acquire);
+}
+
 bool jit_region_usage(size_t *used, size_t *size) {
     pthread_once(&init_once, jit_init);
     if (!flag(&jit_on) || flag(&aot_only)) {
         *used = *size = 0;
         return false;
     }
-    *size = REGION_SIZE;
-    *used = atomic_load(&region_full) ? REGION_SIZE : atomic_load(&region_used);
+    *size = region_limit;
+    *used = atomic_load(&region_full) ? region_limit : atomic_load(&region_used);
     return true;
 }
 

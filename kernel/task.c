@@ -8,6 +8,7 @@
 #include "kernel/task.h"
 #include "kernel/memory.h"
 #include "emu/tlb.h"
+#include "asbestos/asbestos.h"
 #include "platform/platform.h"
 
 __thread struct task *current;
@@ -266,6 +267,10 @@ void task_run_current(void) {
         if (self->mem == NULL) {
             pthread_exit(NULL);
         }
+#ifdef ISH_JIT
+        // between passes, no lock held: where a full code region is flushed
+        asbestos_jit_flush();
+#endif
         read_wrlock_after_writers(&self->mem->lock);
         tlb->cpu = cpu;
         tlb_attach(tlb, &self->mem->mmu);

@@ -166,6 +166,18 @@ bool jit_region_is_full(void);
 // the region its code takes, all of it once full, and its size: the meters'
 // details show it (app/MonitorDetailViewController.m)
 bool jit_region_usage(size_t *used, size_t *size);
+// The flush of a full code region (asbestos.c's asbestos_jit_flush drives it).
+// Wanted: the region filled (not while recording an image). Claim: one caller
+// gets it, and from then no translation is made or reused (blocks run as
+// gadgets till hot). End: once every block was invalidated and no thread can
+// be running what was in the region, the region is taken from its start (its
+// shared stubs kept), the registry of translations emptied, and translating
+// goes on. jit_flushes: how many ended; a thread that sees it change runs an
+// isb before native code, whose addresses held other code.
+bool jit_flush_wanted(void);
+bool jit_flush_claim(void);
+void jit_flush_end(void);
+uint64_t jit_flushes(void);
 // Writes to /proc/ish/jit: "off" / "on" stop / resume installing AOT images
 // in blocks compiled afterwards (for A/B timing on a device); "region" maps
 // the code region now, if the JIT has none (jit_region_now(false)). -1: an

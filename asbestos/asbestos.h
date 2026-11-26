@@ -49,6 +49,7 @@ struct asbestos {
     wrlock_t jetsam_lock;
 #ifdef ISH_JIT
     void *jit_ctxs;             // guest-arm64/jit.c: per-module contexts of this address space
+    struct list jit_all;        // in asbestos.c's list of every asbestos, for a flush of the code region
 #endif
     // When a thread last left translated code (cpu_run_to_interrupt), in ms
     // of CLOCK_MONOTONIC: how long the address space has been idle, for
@@ -154,6 +155,15 @@ void asbestos_reclaim_idle(struct asbestos *asbestos, uint64_t now_ms, uint64_t 
                            size_t *bytes);
 // Every address space's translated blocks, and the bytes malloc holds for them
 extern _Atomic uint64_t st_fiber_blocks, st_fiber_bytes;
+
+#ifdef ISH_JIT
+// The JIT's code region full (guest-arm64/jit.h's jit_flush_*): every block of
+// every address space invalidated, and the region taken from its start once
+// no thread can be running what was in it. Called by a thread between its run
+// loop's passes (task_run_current), holding no lock; one caller does it, the
+// others find nothing to do.
+void asbestos_jit_flush(void);
+#endif
 
 // Invalidate all fiber blocks in pages start (inclusive) to end (exclusive).
 // Locks the asbestos. Should only be called by memory.c in conjunction with
