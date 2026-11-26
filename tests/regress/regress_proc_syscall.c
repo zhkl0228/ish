@@ -70,7 +70,7 @@ int main(void) {
         sscanf(text, "%ld %llx %llx %llx %llx %llx %llx %llx %llx", &nr, &args[0], &args[1], &args[2], &args[3],
                &args[4], &args[5], &sp, &pc);
     }
-    char detail[600];
+    char detail[1100];
     snprintf(detail, sizeof(detail), "%s", text);
     check("a thread in read: its number, its fd, a stack and a pc",
           nr == SYS_read && args[0] == (unsigned long long) p[0] && args[2] == 1 && sp != 0 && pc != 0, detail);
