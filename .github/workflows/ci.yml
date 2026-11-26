@@ -45,10 +45,13 @@ jobs:
   mac-regress:
     # The CLI on macOS, the app's host as iOS is, and tests/regress run with it
     # (tests/regress/ci-mac.sh): what only Darwin does, the linux job does not
-    # see. Its guest's programs are the linux job's, compiled in Alpine
+    # see. Its guest's programs are the linux job's, compiled in Alpine. On
+    # the mac job's image, xcode-27, which it gets at once: on macos-26 it
+    # waited 15 minutes and GitHub gave up ("not acquired by Runner of type
+    # hosted even after multiple attempts"; macOS arm64 runners short)
     needs: linux
     if: ${{ !cancelled() }}
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
