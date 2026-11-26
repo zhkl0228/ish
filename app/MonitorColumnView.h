@@ -12,10 +12,10 @@
 //  them; the share of lately compiled code that runs natively (JIT: an AOT
 //  image's or the JIT's), a gauge too, red once the code region is full; the
 //  heat, by name, while it is more than nominal; each but the CPU while the
-//  column has the room for it (fitRows). A tap (VoiceOver's activation) shows
-//  their details (MonitorDetailViewController). Under them, at the column's
-//  bottom, the terminal's keys (TerminalViewController's columnKeys) have the
-//  room the network's rates and the processes had.
+//  column has the room for it (rowsForRoom:). A tap (VoiceOver's activation)
+//  shows their details (MonitorDetailViewController). Under them, at the
+//  column's bottom, the terminal's keys (TerminalViewController's columnKeys)
+//  have the room the network's rates and the processes had.
 //
 
 #import <UIKit/UIKit.h>

@@ -1280,7 +1280,7 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
     self.columnKeys = keys;
     self.columnKeysKeyboardDown = @[slash, up, down, enter];
     // The meters' room is the column's, down to the keys: the rows that fit
-    // in it show (MonitorColumnView's fitRows)
+    // in it show (MonitorColumnView's rowsForRoom:)
     [self.monitorColumn.bottomAnchor constraintEqualToAnchor:keys.topAnchor constant:-8].active = YES;
     self.columnKeysAtBottom = [keys.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor
                                                                 constant:-8];

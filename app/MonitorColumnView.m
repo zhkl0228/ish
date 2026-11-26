@@ -162,7 +162,11 @@ static UIColor *GaugeColor(double fraction) {
 
 @interface MonitorColumnView ()
 
-@property UIStackView *stack;
+// kStatusInset left of the column's middle, its width less twice that: where
+// the rows are centered, and what goes under them in the column lines up with
+@property UILayoutGuide *meters;
+// The line, the CPU, the memory, the JIT, the heat: top to bottom
+@property NSArray<UIView *> *rows;
 @property MonitorGaugeView *cpuGauge;
 @property MonitorSparkView *cpuLine;
 @property MonitorGaugeView *memoryGauge;
@@ -171,7 +175,7 @@ static UIColor *GaugeColor(double fraction) {
 @property UIImageView *heatIcon;
 @property UILabel *heatLabel;
 // The last reading's heat more than nominal: the heat's row shown, the
-// keyboard down, where it fits (fitRows)
+// keyboard down, where it fits (rowsForRoom:)
 @property (nonatomic) BOOL hot;
 
 @end
@@ -186,37 +190,31 @@ static UIColor *GaugeColor(double fraction) {
         self.accessibilityHint = MonitorDetailsHint();
         [self addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(tapped:)]];
 
-        UIStackView *stack = [UIStackView new];
-        stack.axis = UILayoutConstraintAxisVertical;
-        stack.alignment = UIStackViewAlignmentCenter;
-        stack.spacing = 4;
-        stack.translatesAutoresizingMaskIntoConstraints = NO;
-        [self addSubview:stack];
-        self.stack = stack;
+        // Under the status bar's battery, kStatusInset left of the column's
+        // middle as the status bar is
+        UILayoutGuide *meters = [UILayoutGuide new];
+        [self addLayoutGuide:meters];
+        [NSLayoutConstraint activateConstraints:@[
+            [meters.topAnchor constraintEqualToAnchor:self.topAnchor],
+            [meters.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
+            [meters.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
+            [meters.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-2 * kStatusInset],
+        ]];
+        self.meters = meters;
 
         // The CPU's last minute over its gauge, first under the status bar, its
         // top a CPU's whole share at least (the guest's one thread busy) or
         // the minute's highest: of all the CPUs, a busy thread's share a sixth
-        // of six, the line was a flat one at the bottom of its 14 points. 999:
-        // hidden (fitRows), the stack's own height of 0 for it holds.
+        // of six, the line was a flat one at the bottom of its 14 points
         MonitorSparkView *line = [MonitorSparkView new];
         line.leastTop = 1.0 / NSProcessInfo.processInfo.activeProcessorCount;
-        line.translatesAutoresizingMaskIntoConstraints = NO;
-        NSLayoutConstraint *lineHeight = [line.heightAnchor constraintEqualToConstant:14];
-        lineHeight.priority = UILayoutPriorityRequired - 1;
-        [NSLayoutConstraint activateConstraints:@[
-            [line.widthAnchor constraintEqualToConstant:kGaugeSize],
-            lineHeight,
-        ]];
-        [stack addArrangedSubview:line];
-        [stack setCustomSpacing:6 afterView:line];
         self.cpuLine = line;
-        self.cpuGauge = [self addGauge:@"CPU"];
-        [stack setCustomSpacing:10 afterView:self.cpuGauge];
-        self.memoryGauge = [self addGauge:NSLocalizedString(@"MEM", @"The memory gauge's name, under it: a few letters")];
-        [stack setCustomSpacing:10 afterView:self.memoryGauge];
-        self.nativeGauge = [self addGauge:@"JIT"];
-        [stack setCustomSpacing:8 afterView:self.nativeGauge];
+        self.cpuGauge = [MonitorGaugeView new];
+        self.cpuGauge.nameLabel.text = @"CPU";
+        self.memoryGauge = [MonitorGaugeView new];
+        self.memoryGauge.nameLabel.text = NSLocalizedString(@"MEM", @"The memory gauge's name, under it: a few letters");
+        self.nativeGauge = [MonitorGaugeView new];
+        self.nativeGauge.nameLabel.text = @"JIT";
 
         // The heat while more than nominal: a thermometer and its name
         UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:9 weight:UIImageSymbolWeightSemibold];
@@ -231,20 +229,13 @@ static UIColor *GaugeColor(double fraction) {
         heatRow.alignment = UIStackViewAlignmentCenter;
         heatRow.spacing = 2;
         heatRow.hidden = YES;
-        [stack addArrangedSubview:heatRow];
         self.heatRow = heatRow;
         self.heatIcon = icon;
         self.heatLabel = heat;
 
-        // Under the status bar's battery, kStatusInset left of the column's
-        // middle as the status bar is; from the column's top, as tall as the
-        // rows that fit in it (fitRows), the column's height being the room
-        // the status bar and the keys leave (TerminalViewController)
-        [NSLayoutConstraint activateConstraints:@[
-            [stack.topAnchor constraintEqualToAnchor:self.topAnchor],
-            [stack.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
-            [stack.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-2 * kStatusInset],
-        ]];
+        self.rows = @[line, self.cpuGauge, self.memoryGauge, self.nativeGauge, heatRow];
+        for (UIView *row in self.rows)
+            [self addSubview:row];
         [self applyColors];
     }
     return self;
@@ -267,91 +258,132 @@ static UIColor *GaugeColor(double fraction) {
     [self setNeedsLayout];
 }
 
-// The rows chosen for the room the column has, before the stack is laid out
-// in it: its height is the room, whatever the rows (TerminalViewController),
-// so that choosing them lays out nothing again
-- (void)layoutSubviews {
-    [self chooseRows];
-    [super layoutSubviews];
+// A row's size: a gauge's, the line's 14 points under the gauges' width, the
+// heat's its own, no wider than the meters
+- (CGSize)sizeOfRow:(UIView *)row {
+    if (row == self.cpuLine)
+        return CGSizeMake(kGaugeSize, 14);
+    if (row == self.heatRow) {
+        CGSize size = [row systemLayoutSizeFittingSize:UILayoutFittingCompressedSize];
+        return CGSizeMake(MIN(size.width, self.meters.layoutFrame.size.width), size.height);
+    }
+    return CGSizeMake(kGaugeSize, kGaugeSize);
 }
 
-// A row hidden or shown is not animated. Laid out in the keyboard's animation
-// (TerminalViewController's keyboardMoved:), the stack animated a row it hid,
-// which its fixed height kept whole, shown till the animation ended: the
-// JIT's went late as the keyboard came up. The rows left move with it.
-- (void)chooseRows {
-    [UIView performWithoutAnimation:^{
-        [self fitRows];
-    }];
+// The room between a row and the next one shown
+- (CGFloat)gapAfterRow:(UIView *)row {
+    if (row == self.cpuLine)
+        return 6;
+    if (row == self.nativeGauge)
+        return 8;
+    return 10;
 }
 
-// The rows the column shows: the CPU; the memory; under them the heat's
-// while it is more than nominal and the JIT's, with the keyboard down; over
-// them the CPU's last minute: each, in that order, while the column has the
-// room for it and those before it. One without goes whole: squashed (the
-// stack as tall as the column), the line was flat, the heat's row a dot,
-// and the memory's ring, the keyboard up, half its size under its name.
-- (void)fitRows {
-    CGFloat room = self.bounds.size.height;
-    NSMutableSet<UIView *> *shown = [NSMutableSet setWithObject:self.cpuGauge];
+// These rows' height, top to bottom: theirs, and the gap after each but the
+// last. What layoutSubviews lays them out by, so that what is said to fit,
+// fits: a stack view, which they were in, kept a hidden line's spacing after
+// it over the CPU, 6 points, and the heat's row, said to fit, was cut through
+// its middle by the column's bottom.
+- (CGFloat)heightOfRows:(NSSet<UIView *> *)shown {
+    CGFloat height = 0;
+    UIView *previous = nil;
+    for (UIView *row in self.rows) {
+        if (![shown containsObject:row])
+            continue;
+        if (previous != nil)
+            height += [self gapAfterRow:previous];
+        height += [self sizeOfRow:row].height;
+        previous = row;
+    }
+    return height;
+}
+
+// The rows the column shows in this much room: the CPU; the memory; under
+// them the heat's while it is more than nominal and the JIT's, with the
+// keyboard down; over them the CPU's last minute: each, in that order, while
+// there is room for it and those before it. One without is not shown at all:
+// squashed (a stack as tall as the column), the line was flat, the heat's row
+// a dot, and the memory's ring, the keyboard up, half its size under its name.
+- (NSSet<UIView *> *)rowsForRoom:(CGFloat)room {
     NSMutableArray<UIView *> *wanted = [NSMutableArray arrayWithObject:self.memoryGauge];
     if (self.hot && !self.keyboardUp)
         [wanted addObject:self.heatRow];
     if (!self.keyboardUp)
         [wanted addObject:self.nativeGauge];
     [wanted addObject:self.cpuLine];
+    NSMutableSet<UIView *> *shown = [NSMutableSet setWithObject:self.cpuGauge];
     for (UIView *row in wanted) {
         [shown addObject:row];
         if ([self heightOfRows:shown] > room)
             [shown removeObject:row];
     }
-    for (UIView *row in @[self.cpuLine, self.memoryGauge, self.nativeGauge, self.heatRow]) {
-        BOOL hidden = ![shown containsObject:row];
-        if (row.hidden != hidden)
-            row.hidden = hidden;
-    }
+    return shown;
 }
 
 - (CGFloat)leastHeight {
     return [self heightOfRows:[NSSet setWithObjects:self.cpuGauge, self.memoryGauge, nil]];
 }
 
-// The stack's height with these rows of it shown: theirs, and the spacing
-// after each but the last
-- (CGFloat)heightOfRows:(NSSet<UIView *> *)rows {
-    CGFloat height = 0;
-    UIView *previous = nil;
-    for (UIView *row in self.stack.arrangedSubviews) {
-        if (![rows containsObject:row])
-            continue;
-        if (previous != nil) {
-            CGFloat spacing = [self.stack customSpacingAfterView:previous];
-            height += spacing == UIStackViewSpacingUseDefault ? self.stack.spacing : spacing;
-        }
-        height += [row systemLayoutSizeFittingSize:UILayoutFittingCompressedSize].height;
-        previous = row;
+// Where a row goes among these shown: under those before it, each its height
+// and the gap after it, from the column's top; centered on the meters' middle
+- (CGRect)frameOfRow:(UIView *)row shown:(NSSet<UIView *> *)shown {
+    CGFloat y = 0;
+    for (UIView *above in self.rows) {
+        if (above == row)
+            break;
+        if ([shown containsObject:above])
+            y += [self sizeOfRow:above].height + [self gapAfterRow:above];
     }
-    return height;
+    CGSize size = [self sizeOfRow:row];
+    return CGRectMake(CGRectGetMidX(self.meters.layoutFrame) - size.width / 2, y, size.width, size.height);
 }
 
-- (MonitorGaugeView *)addGauge:(NSString *)name {
-    MonitorGaugeView *gauge = [MonitorGaugeView new];
-    gauge.nameLabel.text = name;
-    gauge.translatesAutoresizingMaskIntoConstraints = NO;
-    [NSLayoutConstraint activateConstraints:@[
-        [gauge.widthAnchor constraintEqualToConstant:kGaugeSize],
-        [gauge.heightAnchor constraintEqualToConstant:kGaugeSize],
-    ]];
-    [self.stack addArrangedSubview:gauge];
-    return gauge;
+// The rows that fit in the column's height, the room the status bar and the
+// keys leave it (TerminalViewController), shown, the others hidden. Not
+// animated: laid out in the keyboard's animation (TerminalViewController's
+// keyboardMoved:), a stack view the rows were in animated a row it hid, shown
+// till the animation ended (the JIT's went about a second after the keyboard
+// came up); a row shown is put in its place at once, not moved there from
+// where it last was.
+- (void)chooseRows {
+    NSSet<UIView *> *shown = [self rowsForRoom:self.bounds.size.height];
+    [UIView performWithoutAnimation:^{
+        for (UIView *row in self.rows) {
+            BOOL hidden = ![shown containsObject:row];
+            if (row.hidden == hidden)
+                continue;
+            row.hidden = hidden;
+            if (!hidden)
+                row.frame = [self frameOfRow:row shown:shown];
+        }
+    }];
+}
+
+// The rows chosen, and those shown put in their places, one under another:
+// those that were shown move with the keyboard, in its animation
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    [self chooseRows];
+    NSMutableSet<UIView *> *shown = [NSMutableSet set];
+    for (UIView *row in self.rows) {
+        if (!row.hidden)
+            [shown addObject:row];
+    }
+    for (UIView *row in shown)
+        row.frame = [self frameOfRow:row shown:shown];
 }
 
 - (CGRect)metersFrame {
-    return self.stack.frame;
+    CGRect frame = CGRectNull;
+    for (UIView *row in self.rows) {
+        if (!row.hidden)
+            frame = CGRectUnion(frame, row.frame);
+    }
+    return frame;
 }
 
 - (NSLayoutXAxisAnchor *)metersCenterXAnchor {
-    return self.stack.centerXAnchor;
+    return self.meters.centerXAnchor;
 }
 
 - (void)tapped:(UITapGestureRecognizer *)tap {
@@ -399,7 +431,12 @@ static UIColor *GaugeColor(double fraction) {
         self.nativeGauge.fraction = reading.nativeShare;
     }
     self.hot = reading.thermalState != NSProcessInfoThermalStateNominal;
-    self.heatLabel.text = MonitorThermalName(reading.thermalState);
+    // its row as wide as its name
+    NSString *heat = MonitorThermalName(reading.thermalState);
+    if (![heat isEqualToString:self.heatLabel.text]) {
+        self.heatLabel.text = heat;
+        [self setNeedsLayout];
+    }
     [UIView animateWithDuration:0.3 animations:^{
         [self applyColors];
     }];
