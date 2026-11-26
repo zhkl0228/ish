@@ -20,6 +20,8 @@
 // The meters' row is made here, not in the storyboard: its cell a plain one
 // with this switch
 @property UISwitch *showMeters;
+// and the column's keys following the program in the foreground
+@property UISwitch *columnKeysFollowProgram;
 @property UIFontPickerViewController *fontPicker API_AVAILABLE(ios(13));
 @end
 
@@ -75,8 +77,11 @@ char *previewString = "# cat /proc/ish/colors\r\n"
     
     self.showMeters = [UISwitch new];
     [self.showMeters addTarget:self action:@selector(showMetersChanged:) forControlEvents:UIControlEventValueChanged];
+    self.columnKeysFollowProgram = [UISwitch new];
+    [self.columnKeysFollowProgram addTarget:self action:@selector(columnKeysFollowProgramChanged:)
+                           forControlEvents:UIControlEventValueChanged];
     [self.tableView registerClass:UITableViewCell.class forCellReuseIdentifier:@"Meters"];
-    [UserPreferences.shared observe:@[@"cursorStyle", @"blinkCursor", @"hideStatusBar", @"showMeters"]
+    [UserPreferences.shared observe:@[@"cursorStyle", @"blinkCursor", @"hideStatusBar", @"showMeters", @"columnKeysFollowProgram"]
                             options:0 owner:self usingBlock:^(typeof(self) self) {
         dispatch_async(dispatch_get_main_queue(), ^{
             [self updateOtherControls];
@@ -136,7 +141,7 @@ enum {
         case ColorSchemeSection: return 3;
         case CursorSection: return 2;
         case StatusBarSection: return 1;
-        case MetersSection: return 1;
+        case MetersSection: return 2;
         default: NSAssert(NO, @"unhandled section"); return 0;
     }
 }
@@ -155,7 +160,7 @@ enum {
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     switch (section) {
         case PreviewSection: return @"Change the color scheme used for the preview.";
-        case MetersSection: return @"The CPUs, the memory and the heat, right of the terminal's last column. Tap them for more.";
+        case MetersSection: return @"The CPUs, the memory and the heat, right of the terminal's last column. Tap them for more. Where the window has a column, its keys follow the program: vim's : and /, a pager's space and q.";
         default: return nil;
     }
 }
@@ -245,8 +250,8 @@ enum {
             break;
 
         case MetersSection:
-            cell.textLabel.text = @"Show Meters";
-            cell.accessoryView = self.showMeters;
+            cell.textLabel.text = @[@"Show Meters", @"Keys Follow the Program"][indexPath.row];
+            cell.accessoryView = @[self.showMeters, self.columnKeysFollowProgram][indexPath.row];
             cell.selectionStyle = UITableViewCellSelectionStyleNone;
             break;
     }
@@ -278,6 +283,7 @@ enum {
 - (void)updateOtherControls {
     self.hideStatusBar.on = UserPreferences.shared.hideStatusBar;
     self.showMeters.on = UserPreferences.shared.showMeters;
+    self.columnKeysFollowProgram.on = UserPreferences.shared.columnKeysFollowProgram;
     self.cursorStyle.selectedSegmentIndex = UserPreferences.shared.cursorStyle;
     self.blinkCursor.on = UserPreferences.shared.blinkCursor;
     [self setNeedsStatusBarAppearanceUpdate];
@@ -310,6 +316,10 @@ enum {
 
 - (IBAction)fontSizeChanged:(UIStepper *)sender {
     UserPreferences.shared.fontSize = @((int) sender.value);
+}
+
+- (void)columnKeysFollowProgramChanged:(UISwitch *)sender {
+    UserPreferences.shared.columnKeysFollowProgram = sender.on;
 }
 
 - (void)showMetersChanged:(UISwitch *)sender {

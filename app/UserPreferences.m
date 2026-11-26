@@ -26,6 +26,7 @@ static NSString *const kPreferenceCursorStyleKey = @"Cursor Style";
 static NSString *const kPreferenceBlinkCursorKey = @"Blink Cursor";
 NSString *const kPreferenceHideStatusBarKey = @"Status Bar";
 static NSString *const kPreferenceShowMetersKey = @"Show Meters";
+static NSString *const kPreferenceColumnKeysFollowProgramKey = @"Column Keys Follow Program";
 NSString *const kMetersColumnLayoutKey = @"Meters Column Layout";
 static NSString *const kPreferenceColorSchemeKey = @"Color Scheme";
 // This key has a different naming scheme because it's used in UI tests as a
@@ -166,6 +167,7 @@ bool remove_user_default_impl(const char *name) {
             kPreferenceCursorStyleKey: @(CursorStyleBlock),
             kPreferenceHideStatusBarKey: @(NO),
             kPreferenceShowMetersKey: @(YES),
+            kPreferenceColumnKeysFollowProgramKey: @(YES),
             kPreferenceColorSchemeKey: @(ColorSchemeMatchSystem),
             kPreferenceThemeKey: @"Default",
             kHostnameOverrideKey: UIDevice.currentDevice.name,
@@ -201,6 +203,7 @@ bool remove_user_default_impl(const char *name) {
             @"blink_cursor": kPreferenceBlinkCursorKey,
             @"hide_status_bar": kPreferenceHideStatusBarKey,
             @"show_meters": kPreferenceShowMetersKey,
+            @"column_keys_follow_program": kPreferenceColumnKeysFollowProgramKey,
             @"meters_column": kMetersColumnLayoutKey,
             @"color_scheme": kPreferenceColorSchemeKey,
             @"theme": kPreferenceThemeKey,
@@ -230,6 +233,7 @@ bool remove_user_default_impl(const char *name) {
             kPreferenceBlinkCursorKey: property(blinkCursor),
             kPreferenceHideStatusBarKey: property(hideStatusBar),
             kPreferenceShowMetersKey: property(showMeters),
+            kPreferenceColumnKeysFollowProgramKey: property(columnKeysFollowProgram),
             kPreferenceColorSchemeKey: property(colorScheme),
             kPreferenceClaudeProxyKey: property(claudeProxy),
             kPreferenceClaudeMemoryKey: property(claudeMemory),
@@ -543,6 +547,19 @@ bool remove_user_default_impl(const char *name) {
 }
 
 - (BOOL)validateShowMeters:(id *)value error:(NSError **)error {
+    return [*value isKindOfClass:NSNumber.class];
+}
+
+// MARK: columnKeysFollowProgram
+- (BOOL)columnKeysFollowProgram {
+    return [_defaults boolForKey:kPreferenceColumnKeysFollowProgramKey];
+}
+
+- (void)setColumnKeysFollowProgram:(BOOL)columnKeysFollowProgram {
+    [_defaults setBool:columnKeysFollowProgram forKey:kPreferenceColumnKeysFollowProgramKey];
+}
+
+- (BOOL)validateColumnKeysFollowProgram:(id *)value error:(NSError **)error {
     return [*value isKindOfClass:NSNumber.class];
 }
 

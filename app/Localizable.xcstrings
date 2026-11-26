@@ -166,6 +166,17 @@
         }
       }
     },
+    "Hold to send ⌃C" : {
+      "comment" : "The column's Ctrl-C key tapped: it is sent only held",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按住发送 ⌃C"
+          }
+        }
+      }
+    },
     "Hot: iOS slows the CPUs down, and the guest's programs with them." : {
       "comment" : "Heat details: serious",
       "localizations" : {
@@ -173,6 +184,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "很热：iOS 会给 CPU 降速，guest 里的程序也随之变慢。"
+          }
+        }
+      }
+    },
+    "Interrupt" : {
+      "comment" : "The column's Ctrl-C key held: what it sends",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "中断"
           }
         }
       }
@@ -228,6 +250,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "不热。"
+          }
+        }
+      }
+    },
+    "Page up" : {
+      "comment" : "The column's space key held in a pager: what it sends (b)",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上一页"
           }
         }
       }
@@ -294,6 +327,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "斜杠"
+          }
+        }
+      }
+    },
+    "Slide for the arrows" : {
+      "comment" : "The column's arrows' pad tapped: it is slid",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "滑动发送方向键"
           }
         }
       }

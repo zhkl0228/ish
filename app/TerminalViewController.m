@@ -43,6 +43,15 @@
 @implementation ColumnKeyHold
 @end
 
+// What the column's two middle keys are, by the program in the foreground
+// (columnProfileForSession:): tab and / for a shell, an AI agent and most
+// programs; : and / for vi; space and q for a pager
+typedef NS_ENUM(NSInteger, ColumnKeyProfile) {
+    ColumnKeyProfileDefault,
+    ColumnKeyProfileEditor,
+    ColumnKeyProfilePager,
+};
+
 @interface TerminalViewController () <UIGestureRecognizerDelegate, TabBarViewDelegate, ClipboardShelfDelegate>
 
 @property UITapGestureRecognizer *tapRecognizer;
@@ -100,15 +109,34 @@
 // above the keyboard and the keys over it (the paste key's row), or the home
 // indicator (aboveKeys: applyBottomPad)
 @property NSLayoutConstraint *monitorColumnTop;
-// Esc, tab, /, up, down and return at the bottom of the column, while it is
-// shown and the keyboard is down (updateColumnKeys): what a program's menus
-// take (claude's: / for its commands, esc to leave one), without the keyboard
-// over the terminal. The meters stay above them. With the keyboard up, esc
-// and tab only, at the column's bottom above the keyboard's bar
-// (columnKeysAboveKeyboard), where the CPU and the memory leave the room
-// (updateColumnKeys); the bar over the keyboard has them too.
+// Keys at the bottom of the column, while it is shown (updateColumnKeys,
+// addColumnKeys): with the keyboard down, what a program's menus take
+// (claude's: / for its commands, esc to leave one) without the keyboard over
+// the terminal. The meters stay above them. With the keyboard up, the arrows'
+// pad and Ctrl-C only, at the column's bottom above the keyboard's bar
+// (columnKeysAboveKeyboard), where the CPU and the memory leave the room.
 @property UIStackView *columnKeys;
-@property NSArray<UIView *> *columnKeysKeyboardDown;
+// With the keyboard down: esc and return, the profile's middle keys
+// (columnProfileKeys) and the keyboard's own two (columnKeysAlways). With it
+// up, those two only, as the bar has the rest: the arrows' pad and Ctrl-C.
+@property NSArray<UIView *> *columnKeysEdge;
+@property NSDictionary<NSNumber *, NSArray<UIView *> *> *columnProfileKeys;
+@property NSArray<UIView *> *columnKeysAlways;
+@property ColumnKeyProfile columnProfile;
+// The marks of what a held key sends, in its corner (badgeKey:), in the
+// theme's colors as the keys are
+@property NSMutableArray<UILabel *> *columnKeyBadges;
+// A tap's hint by a key, gone after a moment (flashCallout:besideKey:)
+@property UILabel *flashCallout;
+// The arrows' pad (arrowPadMoved:): the direction the finger went from where
+// it touched, the bar's modifiers taken as it did, and the repeat
+@property CGPoint padOrigin;
+@property char padDirection;
+@property UIKeyModifierFlags padModifiers;
+@property NSUInteger padSent;
+@property CFTimeInterval padLastSent;
+@property CGFloat padDistance;
+@property NSTimer *padRepeat;
 @property NSLayoutConstraint *columnKeysAtBottom;
 @property NSLayoutConstraint *columnKeysAboveKeyboard;
 // A tap of one: the keyboard's click is heard only while a keyboard shows
@@ -455,6 +483,11 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
             [self applyShowMeters];
         });
     }];
+    [UserPreferences.shared observe:@[@"columnKeysFollowProgram"] options:0 owner:self usingBlock:^(typeof(self) self) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self updateColumnProfile];
+        });
+    }];
     [UserPreferences.shared observe:@[@"colorScheme", @"theme", @"hideExtraKeysWithExternalKeyboard"]
                             options:0 owner:self usingBlock:^(typeof(self) self) {
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -747,6 +780,7 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
 - (void)tabsDidChange {
     NSUInteger selected = self.selectedSession ? [self.tabs indexOfObject:self.selectedSession] : NSNotFound;
     [self.tabBar setSessions:self.tabs selectedIndex:selected];
+    [self updateColumnProfile];
 }
 
 // Another tab, the keyboard as it was: put down, it stays down (a tap on the
@@ -910,6 +944,8 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
                 pressedColor:[background ish_blendedWithColor:foreground fraction:0.36]
                    textColor:foreground];
         }
+        for (UILabel *badge in self.columnKeyBadges)
+            badge.textColor = [foreground colorWithAlphaComponent:0.55];
         // the gaps between the keys and the rest of the row
         self.barView.backgroundColor = self.view.backgroundColor;
     }];
@@ -1020,8 +1056,8 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
     // The on-screen keyboard up (100 points of it or more over the terminal,
     // as hasExternalKeyboard tells it from the bar of extra keys alone, or a
     // floating keyboard's): the column keeps the CPU and the memory only, and
-    // of its keys esc and tab, over the keyboard where the memory leaves them
-    // the room; the bar has them all
+    // of its keys the arrows' pad and Ctrl-C, over the keyboard where the
+    // memory leaves them the room: what the bar has not
     self.keyboardUp = pad >= 100;
     self.monitorColumn.keyboardUp = self.keyboardUp;
     // and the meters' details, open, the CPUs and the memory only then
@@ -1263,49 +1299,66 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
 
 #pragma mark The column's keys
 
-// Esc, tab, /, up and down (held: repeating) and return, as the bar's keys
-// send them and in its order, one over another at the bottom of the column,
-// under the meters' middle, above the home indicator. Esc and / are named as
-// on the bar. Held, esc is backspace, tab shift-tab and / Ctrl-U (clearing
-// the line), each said in a callout before it is let go (columnKeyHeld:);
-// the bar's / keeps its held symbols, whose popup opens over its row.
+// One over another at the bottom of the column, under the meters' middle,
+// above the home indicator: esc; two keys for what runs (columnProfileKeys,
+// updateColumnProfile): tab and / for a shell, an AI agent and most programs,
+// : and / for vi, space and q for a pager; the arrows' pad (arrowPadKey);
+// Ctrl-C, sent only held (a tap would end what runs); return. Held, esc is
+// backspace, tab shift-tab, / Ctrl-U (clearing the line) and space b (a
+// pager's page up), each said in a callout before it is let go
+// (columnKeyHeld:) and marked in its key's corner (badgeKey:with:). Esc and /
+// are named as on the bar; the bar's / keeps its held symbols, whose popup
+// opens over its row.
 - (void)addColumnKeys {
     __weak typeof(self) weakSelf = self;
+    self.columnKeyBadges = [NSMutableArray new];
     BarButton *escape = [self columnKeyNamed:@"esc" name:NSLocalizedString(@"Escape", @"The column's escape key, read aloud")];
     [escape addTarget:self action:@selector(pressEscape:) forControlEvents:UIControlEventTouchUpInside];
-    [self holdKey:escape
+    [self holdKey:escape badge:@"⌫"
           callout:[@"⌫ " stringByAppendingString:NSLocalizedString(@"Backspace", @"The column's esc key held: what it sends")]
              send:^{ [weakSelf.termView deleteBackward]; }];
     BarButton *tab = [self columnKey:@"arrow.right.to.line" name:NSLocalizedString(@"Tab", @"The column's tab key, read aloud")];
     [tab addTarget:self action:@selector(pressTab:) forControlEvents:UIControlEventTouchUpInside];
-    [self holdKey:tab
+    [self holdKey:tab badge:@"⇧"
           callout:[@"⇧⇥ " stringByAppendingString:NSLocalizedString(@"Shift-Tab", @"The column's tab key held: what it sends")]
              send:^{ [weakSelf.termView insertSequence:@"\x1b[Z"]; }];
+    BarButton *colon = [self columnKeyNamed:@":" name:NSLocalizedString(@"Colon", @"The column's colon key (vi's), read aloud")];
+    [colon addTarget:self action:@selector(pressColumnText:) forControlEvents:UIControlEventTouchUpInside];
+    BarButton *space = [self columnKey:@"space" name:NSLocalizedString(@"Space", @"The column's space key (a pager's next page), read aloud")];
+    [space addTarget:self action:@selector(pressColumnText:) forControlEvents:UIControlEventTouchUpInside];
+    [self holdKey:space badge:@"b"
+          callout:[@"b " stringByAppendingString:NSLocalizedString(@"Page up", @"The column's space key held in a pager: what it sends (b)")]
+             send:^{ [weakSelf pressKey:@"b"]; }];
     BarButton *slash = [self columnKeyNamed:kSymbolKeySymbol name:NSLocalizedString(@"Slash", @"The column's slash key, read aloud")];
     [slash addTarget:self action:@selector(pressSymbolKey:) forControlEvents:UIControlEventTouchUpInside];
-    [self holdKey:slash
+    [self holdKey:slash badge:@"⌃U"
           callout:[@"⌃U " stringByAppendingString:NSLocalizedString(@"Clear the line", @"The column's / key held: what it sends (Ctrl-U)")]
              send:^{ [weakSelf.termView insertSequence:@"\x15"]; }];
-    BarButton *up = [self columnKey:@"chevron.up" name:NSLocalizedString(@"Up", @"The column's up arrow key, read aloud")];
-    up.tag = 1; // arrowKeyFinals
-    BarButton *down = [self columnKey:@"chevron.down" name:NSLocalizedString(@"Down", @"The column's down arrow key, read aloud")];
-    down.tag = 2;
-    for (BarButton *arrow in @[up, down]) {
-        [arrow addTarget:self action:@selector(arrowKeyDown:) forControlEvents:UIControlEventTouchDown];
-        [arrow addTarget:self action:@selector(arrowKeyUp:)
-            forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside | UIControlEventTouchCancel];
-    }
+    BarButton *quit = [self columnKeyNamed:@"q" name:NSLocalizedString(@"Q", @"The column's q key (a pager's quit), read aloud")];
+    [quit addTarget:self action:@selector(pressColumnText:) forControlEvents:UIControlEventTouchUpInside];
+    BarButton *pad = [self arrowPadKey];
+    BarButton *interrupt = [self columnKeyNamed:@"⌃C" name:NSLocalizedString(@"Control-C", @"The column's Ctrl-C key, read aloud")];
+    [interrupt addTarget:self action:@selector(pressInterrupt:) forControlEvents:UIControlEventTouchUpInside];
+    [self holdKey:interrupt badge:nil
+          callout:[@"⌃C " stringByAppendingString:NSLocalizedString(@"Interrupt", @"The column's Ctrl-C key held: what it sends")]
+             send:^{ [weakSelf.termView insertSequence:@"\x03"]; }];
     BarButton *enter = [self columnKey:@"return" name:NSLocalizedString(@"Return", @"The column's return key, read aloud")];
     [enter addTarget:self action:@selector(pressReturn:) forControlEvents:UIControlEventTouchUpInside];
 
-    UIStackView *keys = [[UIStackView alloc] initWithArrangedSubviews:@[escape, tab, slash, up, down, enter]];
+    UIStackView *keys = [[UIStackView alloc] initWithArrangedSubviews:@[escape, tab, colon, space, slash, quit, pad, interrupt, enter]];
     keys.axis = UILayoutConstraintAxisVertical;
     keys.spacing = 8;
     keys.translatesAutoresizingMaskIntoConstraints = NO;
     keys.hidden = YES;
     [self.view addSubview:keys];
     self.columnKeys = keys;
-    self.columnKeysKeyboardDown = @[slash, up, down, enter];
+    self.columnKeysEdge = @[escape, enter];
+    self.columnProfileKeys = @{
+        @(ColumnKeyProfileDefault): @[tab, slash],
+        @(ColumnKeyProfileEditor): @[colon, slash],
+        @(ColumnKeyProfilePager): @[space, quit],
+    };
+    self.columnKeysAlways = @[pad, interrupt];
     // The meters' room is the column's, down to the keys: the rows that fit
     // in it show (MonitorColumnView's rowsForRoom:)
     [self.monitorColumn.bottomAnchor constraintEqualToAnchor:keys.topAnchor constant:-8].active = YES;
@@ -1317,11 +1370,20 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
     self.columnKeyFeedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
     self.holdFeedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
     self.holdChangeFeedback = [UISelectionFeedbackGenerator new];
+    // What runs in the selected tab, seen once a second as the tabs' titles
+    // are (TerminalSessionStore): a pager a job runs (git log's less) owns no
+    // title of its own
+    NSTimer *profile = [NSTimer timerWithTimeInterval:1 repeats:YES block:^(NSTimer *_) {
+        [weakSelf updateColumnProfile];
+    }];
+    [NSRunLoop.mainRunLoop addTimer:profile forMode:NSRunLoopCommonModes];
 }
 
 // A column key's second key, sent by holding it (columnKeyHeld:) and, with
-// VoiceOver, by its action of that name
-- (void)holdKey:(BarButton *)key callout:(NSString *)callout send:(void (^)(void))send {
+// VoiceOver, by its action of that name; marked in its corner by badge
+- (void)holdKey:(BarButton *)key badge:(NSString *)badge callout:(NSString *)callout send:(void (^)(void))send {
+    if (badge != nil)
+        [self badgeKey:key with:badge];
     ColumnKeyHold *hold = [[ColumnKeyHold alloc] initWithTarget:self action:@selector(columnKeyHeld:)];
     hold.minimumPressDuration = 0.4;
     hold.callout = callout;
@@ -1342,13 +1404,9 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
     CGRect keyFrame = [self.view convertRect:key.bounds fromView:key];
     switch (hold.state) {
         case UIGestureRecognizerStateBegan: {
-            UILabel *callout = [UILabel new];
-            callout.font = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
-            callout.textAlignment = NSTextAlignmentCenter;
-            callout.backgroundColor = UIColor.secondarySystemBackgroundColor;
-            callout.layer.cornerRadius = 10;
-            callout.layer.masksToBounds = YES;
-            [self.view addSubview:callout];
+            [self.flashCallout removeFromSuperview];
+            self.flashCallout = nil;
+            UILabel *callout = [self makeCallout];
             self.holdCallout = callout;
             self.holdArmed = YES;
             [self showHoldCallout:hold.callout armed:YES besideKey:keyFrame];
@@ -1384,12 +1442,218 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
 
 // The callout 8 points left of the key, level with it, as wide as its text
 - (void)showHoldCallout:(NSString *)text armed:(BOOL)armed besideKey:(CGRect)keyFrame {
-    UILabel *callout = self.holdCallout;
+    [self placeCallout:self.holdCallout text:text armed:armed besideKey:keyFrame];
+}
+
+- (UILabel *)makeCallout {
+    UILabel *callout = [UILabel new];
+    callout.font = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
+    callout.textAlignment = NSTextAlignmentCenter;
+    callout.backgroundColor = UIColor.secondarySystemBackgroundColor;
+    callout.layer.cornerRadius = 10;
+    callout.layer.masksToBounds = YES;
+    [self.view addSubview:callout];
+    return callout;
+}
+
+- (void)placeCallout:(UILabel *)callout text:(NSString *)text armed:(BOOL)armed besideKey:(CGRect)keyFrame {
     callout.text = text;
     callout.textColor = armed ? UIColor.labelColor : UIColor.secondaryLabelColor;
     CGSize size = [callout sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)];
     CGFloat width = size.width + 24, height = 36;
     callout.frame = CGRectMake(CGRectGetMinX(keyFrame) - 8 - width, CGRectGetMidY(keyFrame) - height / 2, width, height);
+}
+
+// A tap's hint beside a key, for a second and a half: what a key that does
+// nothing tapped does held (Ctrl-C), or how it is used (the arrows' pad)
+- (void)flashCallout:(NSString *)text besideKey:(UIView *)key {
+    [self.flashCallout removeFromSuperview];
+    UILabel *callout = [self makeCallout];
+    [self placeCallout:callout text:text armed:NO besideKey:[self.view convertRect:key.bounds fromView:key]];
+    self.flashCallout = callout;
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t) (1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (weakSelf.flashCallout != callout)
+            return;
+        [UIView animateWithDuration:0.2 animations:^{
+            callout.alpha = 0;
+        } completion:^(BOOL _) {
+            [callout removeFromSuperview];
+            if (weakSelf.flashCallout == callout)
+                weakSelf.flashCallout = nil;
+        }];
+    });
+}
+
+// A held key's mark: what holding it sends, small in its top right corner
+- (void)badgeKey:(BarButton *)key with:(NSString *)badge {
+    UILabel *mark = [UILabel new];
+    mark.text = badge;
+    mark.font = [UIFont systemFontOfSize:8 weight:UIFontWeightSemibold];
+    mark.translatesAutoresizingMaskIntoConstraints = NO;
+    mark.isAccessibilityElement = NO;
+    [key addSubview:mark];
+    [NSLayoutConstraint activateConstraints:@[
+        [mark.centerXAnchor constraintEqualToAnchor:key.leadingAnchor constant:30],
+        [mark.centerYAnchor constraintEqualToAnchor:key.topAnchor constant:9],
+    ]];
+    [self.columnKeyBadges addObject:mark];
+}
+
+// Ctrl-C would end what runs, so a tap only says it is sent held
+- (void)pressInterrupt:(UIView *)key {
+    [self flashCallout:NSLocalizedString(@"Hold to send ⌃C", @"The column's Ctrl-C key tapped: it is sent only held")
+             besideKey:key];
+}
+
+// The middle keys a profile has that are plain text: vi's :, a pager's
+// space and q
+- (void)pressColumnText:(BarButton *)key {
+    NSString *text = [key titleForState:UIControlStateNormal];
+    [self pressKey:text != nil ? text : @" "];
+}
+
+// The arrows' pad: a key that, touched and slid, sends the arrow of the way
+// the finger went (the larger of across and along) once it is 14 points from
+// where it touched, again after a third of a second, and then faster the
+// further it is (every 0.3 s at 14 points to every 0.04 s from 70), as the
+// keyboard's space bar is a trackpad. Another way, another arrow at once. Up
+// and down were two keys; the pad has left and right too in the room of one.
+// Tapped, it says how it is used.
+- (BarButton *)arrowPadKey {
+    BarButton *pad = [self columnKey:@"arrow.up.and.down.and.arrow.left.and.right"
+                                name:NSLocalizedString(@"Arrows", @"The column's arrows' pad, read aloud")];
+    UILongPressGestureRecognizer *slide = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(arrowPadMoved:)];
+    slide.minimumPressDuration = 0;
+    slide.allowableMovement = CGFLOAT_MAX;
+    slide.cancelsTouchesInView = NO;
+    [pad addGestureRecognizer:slide];
+    __weak typeof(self) weakSelf = self;
+    NSMutableArray<UIAccessibilityCustomAction *> *actions = [NSMutableArray new];
+    NSArray<NSArray *> *arrows = @[
+        @[NSLocalizedString(@"Up", @"The column's arrows' pad: the up arrow, read aloud"), @('A')],
+        @[NSLocalizedString(@"Down", @"The column's arrows' pad: the down arrow, read aloud"), @('B')],
+        @[NSLocalizedString(@"Left", @"The column's arrows' pad: the left arrow, read aloud"), @('D')],
+        @[NSLocalizedString(@"Right", @"The column's arrows' pad: the right arrow, read aloud"), @('C')],
+    ];
+    for (NSArray *arrow in arrows) {
+        NSString *spoken = arrow[0];
+        char direction = (char) [arrow[1] charValue];
+        [actions addObject:[[UIAccessibilityCustomAction alloc] initWithName:spoken actionHandler:^BOOL(UIAccessibilityCustomAction *_) {
+            [weakSelf.termView insertSequence:[weakSelf.terminal arrow:direction modifiers:[weakSelf.termView takeBarModifiers]]];
+            return YES;
+        }]];
+    }
+    pad.accessibilityCustomActions = actions;
+    return pad;
+}
+
+static NSString *ArrowGlyph(char direction) {
+    switch (direction) {
+        case 'A': return @"↑";
+        case 'B': return @"↓";
+        case 'D': return @"←";
+        default: return @"→";
+    }
+}
+
+- (void)arrowPadMoved:(UILongPressGestureRecognizer *)slide {
+    UIView *pad = slide.view;
+    CGPoint at = [slide locationInView:self.view];
+    switch (slide.state) {
+        case UIGestureRecognizerStateBegan:
+            [self.flashCallout removeFromSuperview];
+            self.flashCallout = nil;
+            self.padOrigin = at;
+            self.padDirection = 0;
+            self.padSent = 0;
+            self.padModifiers = [self.termView takeBarModifiers];
+            break;
+        case UIGestureRecognizerStateChanged: {
+            CGFloat dx = at.x - self.padOrigin.x, dy = at.y - self.padOrigin.y;
+            CGFloat distance = MAX(fabs(dx), fabs(dy));
+            self.padDistance = distance;
+            char direction = distance < 14 ? 0 : fabs(dx) > fabs(dy) ? (dx < 0 ? 'D' : 'C') : (dy < 0 ? 'A' : 'B');
+            if (direction == self.padDirection)
+                break;
+            self.padDirection = direction;
+            [self.padRepeat invalidate];
+            self.padRepeat = nil;
+            if (direction == 0) {
+                [self.holdCallout removeFromSuperview];
+                self.holdCallout = nil;
+                break;
+            }
+            if (self.holdCallout == nil)
+                self.holdCallout = [self makeCallout];
+            [self placeCallout:self.holdCallout text:ArrowGlyph(direction) armed:YES
+                     besideKey:[self.view convertRect:pad.bounds fromView:pad]];
+            [self.holdChangeFeedback selectionChanged];
+            [self sendPadArrow];
+            __weak typeof(self) weakSelf = self;
+            self.padRepeat = [NSTimer scheduledTimerWithTimeInterval:0.02 repeats:YES block:^(NSTimer *_) {
+                [weakSelf repeatPadArrow];
+            }];
+            break;
+        }
+        default:
+            [self.padRepeat invalidate];
+            self.padRepeat = nil;
+            [self.holdCallout removeFromSuperview];
+            self.holdCallout = nil;
+            if (slide.state == UIGestureRecognizerStateEnded && self.padSent == 0)
+                [self flashCallout:NSLocalizedString(@"Slide for the arrows", @"The column's arrows' pad tapped: it is slid")
+                         besideKey:pad];
+            break;
+    }
+}
+
+- (void)sendPadArrow {
+    [self.termView insertSequence:[self.terminal arrow:self.padDirection modifiers:self.padModifiers]];
+    self.padSent++;
+    self.padLastSent = CACurrentMediaTime();
+}
+
+// Again after a third of a second, then every 0.3 s at 14 points, every
+// 0.04 s from 70
+- (void)repeatPadArrow {
+    CFTimeInterval interval = MAX(0.04, 0.3 - (self.padDistance - 14) * (0.26 / 56));
+    if (self.padSent == 1)
+        interval = MAX(interval, 0.35);
+    if (CACurrentMediaTime() - self.padLastSent >= interval)
+        [self sendPadArrow];
+}
+
+// The profile of what runs in a session: a pager's while any program of its
+// foreground job is one (git log's less), else vi's while one is vi, else
+// the default; the default too where the keys are not to follow
+- (ColumnKeyProfile)columnProfileForSession:(TerminalSession *)session {
+    if (session == nil || !UserPreferences.shared.columnKeysFollowProgram)
+        return ColumnKeyProfileDefault;
+    static NSSet<NSString *> *pagers, *editors;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        pagers = [NSSet setWithArray:@[@"less", @"more", @"man", @"most"]];
+        editors = [NSSet setWithArray:@[@"vi", @"vim", @"nvim", @"view", @"vimdiff"]];
+    });
+    NSArray<NSString *> *programs = session.foregroundJobPrograms;
+    for (NSString *program in programs)
+        if ([pagers containsObject:program])
+            return ColumnKeyProfilePager;
+    for (NSString *program in programs)
+        if ([editors containsObject:program])
+            return ColumnKeyProfileEditor;
+    return ColumnKeyProfileDefault;
+}
+
+- (void)updateColumnProfile {
+    if (self.columnKeys.hidden)
+        return;
+    ColumnKeyProfile profile = [self columnProfileForSession:self.selectedSession];
+    if (profile == self.columnProfile)
+        return;
+    self.columnProfile = profile;
+    [self updateColumnKeys];
 }
 
 - (BarButton *)columnKey:(NSString *)symbol name:(NSString *)name {
@@ -1426,27 +1690,28 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
 }
 
 // Shown while the column is, at its bottom, the meters over them: with the
-// keyboard down all six, above the home indicator; up esc and tab, above the
-// keyboard's bar, while the CPU and the memory have the room over them (the
-// bar has them too, folded or with the column hidden their only place; it
-// keeps them, so that its keys do not move as the phone unfolds). Up, they
-// were under the memory, the column's last meter then, as far from the
-// keyboard as the meters had room for. Folded, the column has not the room
-// for both from the status bar's region (174) to the bar (371): it squashed
-// the memory, and the bar's own esc and tab are under the left thumb there;
-// unfolded, the bar's esc is the width of the screen from the right one.
+// keyboard down six, the profile's (updateColumnProfile), above the home
+// indicator; up the arrows' pad and Ctrl-C, above the keyboard's bar, while
+// the CPU and the memory have the room over them. They are what the bar has
+// not: it has esc, tab and / (folded or with the column hidden their only
+// place), and the column had them again. Up, the keys were under the memory
+// once, the column's last meter then, as far from the keyboard as the meters
+// had room for. Folded, the column has not the room for two from the status
+// bar's region (174) to the bar (371): it squashed the memory.
 - (void)updateColumnKeys {
     BOOL shown = !self.monitorColumn.hidden;
     BOOL up = self.keyboardUp;
     if (self.columnKeys.hidden == shown)
         self.columnKeys.hidden = !shown;
-    NSMutableArray<UIView *> *upKeys = [self.columnKeys.arrangedSubviews mutableCopy];
-    [upKeys removeObjectsInArray:self.columnKeysKeyboardDown];
-    BOOL upKeysFit = up && [self columnHasRoomForKeys:upKeys];
+    // Up, the pad and Ctrl-C, where they fit; down, all the profile's
+    BOOL upKeysFit = up && [self columnHasRoomForKeys:self.columnKeysAlways];
+    NSArray<UIView *> *middle = self.columnProfileKeys[@(self.columnProfile)];
     for (UIView *key in self.columnKeys.arrangedSubviews) {
-        BOOL hidden = up && !(upKeysFit && [upKeys containsObject:key]);
-        if (key.hidden != hidden)
-            key.hidden = hidden;
+        BOOL always = [self.columnKeysAlways containsObject:key];
+        BOOL wanted = up ? upKeysFit && always
+                         : always || [self.columnKeysEdge containsObject:key] || [middle containsObject:key];
+        if (key.hidden != !wanted)
+            key.hidden = !wanted;
     }
     // Hidden, at the bottom still (a place of its own). Only what changes, as
     // everything updateMonitorColumn sets, the one to go first, so that both

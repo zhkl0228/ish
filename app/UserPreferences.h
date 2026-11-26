@@ -56,6 +56,10 @@ extern const int kDefaultFontSize;
 @property BOOL hideStatusBar;
 // The meters right of the terminal's last column (MonitorStripView)
 @property BOOL showMeters;
+// The column's two middle keys for the program in the foreground: vi's : and
+// /, a pager's space and q (TerminalViewController's updateColumnProfile);
+// off, a shell's tab and / always
+@property BOOL columnKeysFollowProgram;
 @property (nonatomic) Theme *theme;
 @property (nonatomic) Palette *palette;
 @property BOOL shouldDisableDimming;
