@@ -31,7 +31,12 @@ void do_uname(struct uname *uts) {
 
     memset(uts, 0, sizeof(struct uname));
     strcpy(uts->system, "Linux");
-    strcpy(uts->hostname, hostname);
+    // Linux's nodename is 64 bytes at most (UNAME_LENGTH, its NUL with it).
+    // The host's can be longer (Darwin's up to 255: a CI Mac's was), and so
+    // can the app's hostname setting; strcpy wrote past the field, and macOS
+    // 27's fortified stpcpy trapped there (SIGTRAP: every sh -c, which asks
+    // uname, ended iSH). Cut at 64, a Linux host's longest.
+    snprintf(uts->hostname, sizeof(uts->hostname), "%s", hostname);
     strcpy(uts->release, "4.20.69-ish");
     snprintf(uts->version, sizeof(uts->version), "#1 SMP %s %s %s", ish_build_name(), ISH_COMMIT, ISH_COMMIT_DATE);
     strcpy(uts->arch, "aarch64");
