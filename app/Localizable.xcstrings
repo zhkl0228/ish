@@ -34,17 +34,6 @@
         }
       }
     },
-    "%@ more and iOS ends the app" : {
-      "comment" : "Meter details: memory left under the app's limit",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "再用 %@，iOS 就会结束 app"
-          }
-        }
-      }
-    },
     "%@, its code region full" : {
       "comment" : "The JIT gauge read aloud once the code region is full",
       "localizations" : {

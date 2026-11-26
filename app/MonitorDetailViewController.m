@@ -42,7 +42,6 @@ static NSString *ThermalMeaning(NSProcessInfoThermalState state) {
 @property UILabel *memoryAmount;
 @property MeterBar *memoryBar;
 @property UIView *memoryBarRow;
-@property UILabel *memoryLeft;
 @property UILabel *brake;
 @property UILabel *heatValue;
 @property UIView *heatHeading;
@@ -153,7 +152,8 @@ static NSString *ThermalMeaning(NSProcessInfoThermalState state) {
     [stack addArrangedSubview:barRow];
     self.memoryBar = bar;
     self.memoryBarRow = barRow;
-    self.memoryLeft = [self addDetail];
+    // What was left of the limit, a line of its own, said no more than the
+    // amount over the bar does: gone
     // Only while the brake holds (showReading:): where it starts is the bar's
     // mark, and a line saying so under it at every reading said nothing more
     self.brake = [self addDetail];
@@ -269,15 +269,11 @@ static NSString *ThermalMeaning(NSProcessInfoThermalState state) {
     self.memoryAmount.text = [NSString stringWithFormat:amount, Bytes(reading.memoryUsed), Bytes(reading.memoryTotal)];
     self.memoryBar.fraction = reading.memoryFraction;
     self.memoryBar.fill.backgroundColor = MonitorMemoryColor(reading.memoryFraction, [UIColor.labelColor colorWithAlphaComponent:0.55]);
-    self.memoryLeft.hidden = !reading.appLimit;
-    self.memoryLeft.text = [NSString stringWithFormat:NSLocalizedString(@"%@ more and iOS ends the app",
-                                                                        @"Meter details: memory left under the app's limit"),
-                            Bytes(reading.memoryTotal - reading.memoryUsed)];
     self.brake.hidden = !reading.memoryBraked;
     // the next heading 16 under the memory's last line shown (a hidden line's
     // spacing is not the stack's)
-    UIView *last = !self.brake.hidden ? self.brake : !self.memoryLeft.hidden ? self.memoryLeft : self.memoryBarRow;
-    for (UIView *view in @[self.memoryBarRow, self.memoryLeft, self.brake])
+    UIView *last = !self.brake.hidden ? self.brake : self.memoryBarRow;
+    for (UIView *view in @[self.memoryBarRow, self.brake])
         [self.stack setCustomSpacing:view == last ? 16 : UIStackViewSpacingUseDefault afterView:view];
 
     // the JIT while it translates, and the heat, but with the keyboard up
