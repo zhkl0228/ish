@@ -22,7 +22,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq clang lld meson ninja-build pkg-config libsqlite3-dev libarchive-dev \
-              musl-tools python3 curl
+              python3 curl
       - name: Allow ICMP sockets
         # A guest's ICMP socket is a host one of SOCK_DGRAM (fs/sock.h), which
         # Linux makes for a group in net.ipv4.ping_group_range only: the
@@ -31,6 +31,35 @@ jobs:
         run: sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"
       - name: Build and test
         run: tests/regress/ci.sh "$RUNNER_TEMP/ci"
+      - name: Keep the guest's programs
+        # for mac-regress, whatever the tests found: they are compiled before
+        # each runs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: guest-programs
+          path: ${{ runner.temp }}/ci/guest-programs
+          retention-days: 3
+          if-no-files-found: error
+
+  mac-regress:
+    # The CLI on macOS, the app's host as iOS is, and tests/regress run with it
+    # (tests/regress/ci-mac.sh): what only Darwin does, the linux job does not
+    # see. Its guest's programs are the linux job's, compiled in Alpine
+    needs: linux
+    if: ${{ !cancelled() }}
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install dependencies
+        run: brew install meson ninja libarchive coreutils
+      - uses: actions/download-artifact@v4
+        with:
+          name: guest-programs
+          path: ${{ runner.temp }}/guest-programs
+      - name: Build and test
+        run: tests/regress/ci-mac.sh "$RUNNER_TEMP/ci" "$RUNNER_TEMP/guest-programs"
 
   mac:
     # The app as it is built for a phone (archived, unsigned) and its ipa. On

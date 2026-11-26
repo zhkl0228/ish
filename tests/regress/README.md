@@ -34,12 +34,21 @@ tests/regress/run.sh -m -f -r alpine-arm64-fakefs   # fakefs: runs the cp cases
 `aarch64-linux-musl-gcc` (override with `$CC_GUEST`). If no cross-compiler is
 installed it skips rather than fails, since the toolchain is not vendored here.
 
-On an aarch64 Linux host (Ubuntu's `musl-tools`) the host's `musl-gcc` builds
-the guest's binaries: `CC_GUEST=musl-gcc`. It has no kernel headers, so
-`regress_packet` and `regress_netlink_stub` fail to build with it; give it
-`-isystem` a directory with links to `/usr/include/linux`,
-`/usr/include/asm-generic` and `/usr/include/aarch64-linux-gnu/asm`, by a
-script that runs `musl-gcc -isystem <dir> "$@"`.
+On an aarch64 Linux host, CI (`ci.sh`) compiles them with gcc in an
+`alpine:3.24.4` container, the Alpine of the app's root, so that they link the
+musl the app's programs do: `CC_GUEST` is a script that runs
+`docker exec -w "$PWD" <container> gcc "$@"`, the repository and the work dir
+mounted at their own paths. On an Alpine aarch64 host (iSH itself) its gcc
+is the guest's: `CC_GUEST=gcc`. Ubuntu's `musl-gcc` links musl 1.2.4, whose
+`_Fork` hung `regress_proc_zombie` where Alpine's does not.
+
+macOS has no compiler for the guest. `cc_guest.py` runs the programs one
+compiled on another host: `cc_guest.py record <store> <compiler> ...` compiles
+and keeps each program in `<store>` by its arguments and its sources' contents,
+`cc_guest.py prebuilt <store> ...` gives back the one kept for the same
+arguments. CI's linux job records them, and its macOS job (`ci-mac.sh`) runs
+`run.sh` with them, the CLI built for Darwin, under coreutils' `timeout`
+(Homebrew's).
 
 Keep the rootfs on a disk of the machine's own. Docker Desktop's share of the
 Mac's disk (virtiofs) does not let a socket be chmod'ed (`EINVAL`), so iSH,
