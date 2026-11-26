@@ -47,9 +47,9 @@ enum OverrideAppearance {
 - (UIKeyModifierFlags)takeBarModifiers;
 // Sends an already encoded key sequence (an arrow with its modifiers) without
 // applying the bar's ctrl key again.
-- (void)insertSequence:(NSString *)sequence;
+- (void)insertSequence:(nonnull NSString *)sequence;
 
-@property (nonatomic) Terminal *terminal;
+@property (nonatomic, nullable) Terminal *terminal;
 
 // Consulted by paste: before it pastes the system clipboard; returns YES if it
 // pasted something itself (the clipboard manager's Paste Stack).
@@ -59,7 +59,7 @@ enum OverrideAppearance {
 // the previous one) selected and scrolled to; as the text is typed
 // (incremental), the one found stays while it still matches. clearFind takes
 // the highlights and the selection away.
-- (void)find:(NSString *)text backwards:(BOOL)backwards incremental:(BOOL)incremental;
+- (void)find:(nonnull NSString *)text backwards:(BOOL)backwards incremental:(BOOL)incremental;
 - (void)clearFind;
 // Which match is found (-1 for none) of how many, after a find and again as
 // output changes them
@@ -70,6 +70,6 @@ enum OverrideAppearance {
 - (void)clearScrollback;
 - (void)resetTerminal; // full VT reset, then the theme is reapplied
 // Everything in the scrollback and on screen, as text.
-- (void)fetchTextWithCompletion:(void (^)(NSString *text))completion;
+- (void)fetchTextWithCompletion:(nonnull void (^)(NSString *_Nonnull text))completion;
 
 @end

@@ -7,10 +7,15 @@
 
 #pragma mark - Helpers
 
+// iOS 26's corners and glass where the SDK has them: one before (Xcode 16.4's)
+// compiles the else, as on an older iOS
 void ClipSetCornerRadius(UIView *view, CGFloat radius) {
+#if defined(__IPHONE_26_0)
     if (@available(iOS 26, *)) {
         view.cornerConfiguration = [UICornerConfiguration configurationWithUniformRadius:[UICornerRadius fixedRadius:radius]];
-    } else {
+    } else
+#endif
+    {
         view.layer.cornerRadius = radius;
         view.layer.cornerCurve = kCACornerCurveContinuous;
         view.clipsToBounds = YES;
@@ -19,9 +24,12 @@ void ClipSetCornerRadius(UIView *view, CGFloat radius) {
 
 UIVisualEffectView *ClipGlassView(CGFloat cornerRadius) {
     UIVisualEffectView *view;
+#if defined(__IPHONE_26_0)
     if (@available(iOS 26, *)) {
         view = [[UIVisualEffectView alloc] initWithEffect:[UIGlassEffect effectWithStyle:UIGlassEffectStyleRegular]];
-    } else {
+    } else
+#endif
+    {
         view = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterial]];
     }
     ClipSetCornerRadius(view, cornerRadius);

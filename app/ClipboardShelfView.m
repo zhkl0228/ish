@@ -104,12 +104,16 @@ typedef NS_ENUM(NSInteger, FilterType) {
 
 static UIButton *HeaderButton(NSString *symbol, NSString *label) {
     UIButton *button;
+    // the glass of an SDK that has it (iOS 26's): one before compiles the else
+#if defined(__IPHONE_26_0)
     if (@available(iOS 26, *)) {
         UIButtonConfiguration *config = [UIButtonConfiguration glassButtonConfiguration];
         config.image = [UIImage systemImageNamed:symbol withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:14 weight:UIImageSymbolWeightMedium]];
         config.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
         button = [UIButton buttonWithConfiguration:config primaryAction:nil];
-    } else {
+    } else
+#endif
+    {
         button = [UIButton buttonWithType:UIButtonTypeSystem];
         [button setImage:[UIImage systemImageNamed:symbol withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightMedium]]
                 forState:UIControlStateNormal];

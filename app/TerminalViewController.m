@@ -1793,6 +1793,9 @@ static NSString *ShellQuoted(NSString *string) {
             top = CGRectGetMaxY(status);
             [by addObject:[NSString stringWithFormat:@"the status bar's frame, to %.0f", top]];
         }
+        // UIKit's say of it is iOS 27.1's: an SDK before has none of it (Xcode
+        // 16.4 failed to compile it), where the status bar's frame is all
+#if defined(__IPHONE_27_1)
         if (@available(iOS 27.1, *)) {
             for (UIViewReservedRegion *region in [view reservedRegionsOfKind:[UIViewReservedRegionKind occlusionRegionKind]]) {
                 CGRect frame = region.frame;
@@ -1808,6 +1811,7 @@ static NSString *ShellQuoted(NSString *string) {
             [by addObject:[NSString stringWithFormat:@"a bar on the right edge, its insets %@",
                            NSStringFromUIEdgeInsets(barInsets)]];
         }
+#endif
     }
     if (top == 0) {
         top = MAX(insets.top, CGRectGetMaxY(self.tabBar.frame));
