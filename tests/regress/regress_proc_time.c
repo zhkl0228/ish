@@ -122,16 +122,21 @@ int main(void) {
     waitpid(sleeper, NULL, 0);
     waitpid(spinner, NULL, 0);
 
-    // 2. a child's CPU time, while it lives
+    // 2. a child's CPU time, while it lives: read once it says it computed
+    // (waiting for it to sleep, a loaded host read it in the middle)
+    int computed[2];
+    pipe(computed);
     pid_t child = fork();
     if (child == 0) {
         burn(0.3);
+        write(computed[1], "c", 1);
         sleep_ms(5000);
         _exit(0);
     }
-    sleep_ms(100);
-    for (int i = 0; i < 50 && proc_stat(child, &time, &children) != 'S'; i++)
-        sleep_ms(50);
+    char c;
+    read(computed[0], &c, 1);
+    close(computed[0]);
+    close(computed[1]);
     proc_stat(child, &time, &children);
     snprintf(detail, sizeof(detail), "utime + stime %lu ticks of %ld a second", time, hz);
     check("a process's CPU time in /proc/<pid>/stat", time >= (unsigned long) hz / 5 && time < (unsigned long) hz * 3,
