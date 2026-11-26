@@ -1,0 +1,24 @@
+// The JIT helper extension (app/JITHelper): the debugger side of the JIT, a
+// process the iSH-ARM64 app starts (app/BuiltinJIT.m). It links StikJIT,
+// which app/StikJIT/build.sh builds into build/StikJIT.
+#include "iOS.xcconfig"
+
+INFOPLIST_FILE = app/JITHelper/Info.plist
+PRODUCT_NAME = $(TARGET_NAME)
+SKIP_INSTALL = YES
+SWIFT_VERSION = 5.0
+// StikJIT's own
+IPHONEOS_DEPLOYMENT_TARGET = 17.4
+
+// The app's identifier and one more component: the app finds it by that
+// (JITHelperLauncher in app/BuiltinJIT.m)
+PRODUCT_BUNDLE_IDENTIFIER = $(ROOT_BUNDLE_IDENTIFIER).arm64.JITHelper
+
+// StikJIT.framework, embedded in the extension
+LD_RUNPATH_SEARCH_PATHS = $(inherited) @executable_path/Frameworks
+FRAMEWORK_SEARCH_PATHS = $(inherited) $(SRCROOT)/build/StikJIT
+
+// Must match the host app (AppARM64.xcconfig): iOS rejects an extension
+// whose version differs from its containing app.
+MARKETING_VERSION = 2.1.0
+CURRENT_PROJECT_VERSION = 808

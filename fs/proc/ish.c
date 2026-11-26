@@ -280,9 +280,17 @@ static int proc_ish_show_jit(struct proc_entry *UNUSED(entry), struct proc_data 
     free(text);
     return 0;
 }
-// pwrite, not update: an unknown command fails the write.
+// pwrite, not update: an unknown command fails the write (EINVAL), and
+// "region" with no code region to be had (EIO; /proc/ish/jit says why).
 static ssize_t proc_ish_write_jit(struct proc_entry *UNUSED(entry), struct proc_data *data, off_t UNUSED(off)) {
-    return jit_control(data->data, data->size) == 0 ? (ssize_t) data->size : _EINVAL;
+    switch (jit_control(data->data, data->size)) {
+    case 0:
+        return (ssize_t) data->size;
+    case -2:
+        return _EIO;
+    default:
+        return _EINVAL;
+    }
 }
 #endif
 

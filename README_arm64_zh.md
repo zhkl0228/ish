@@ -223,6 +223,20 @@ ninja -C build-arm64-release
 ./build-arm64-release/ish -f ./alpine-arm64-fakefs /bin/sh
 ```
 
+### 内置 JIT
+
+iSH-ARM64 App 为此嵌入两个扩展：`iSHJITHelper-ARM64`（`app/JITHelper`），把 StikJIT 的调试器挂到
+iSH 上、交给它代码区、再放开它；`iSHLoopbackTunnel-ARM64`（`app/LoopbackTunnel`），StikJIT 经由这条
+回环隧道访问设备自身的服务。StikJIT 用 `app/StikJIT/patches` 从源码编译，App 为本机配对链接 idevice
+（Rust）：在 Xcode 里编译 App 之前先各运行一次 `app/StikJIT/build.sh`（需要 `xcodegen`）和
+`app/idevice/build.sh`（需要 `rustup` 及 `aarch64-apple-ios` 目标）；CI 会运行它们。
+
+在 设置 → JIT 里取得设备的配对文件：iOS 27 上用 Pair This Device（iSH 把自己广播成一台电脑；在
+设置 › 隐私与安全性 › 开发者模式 里点“Pair with iSH”，输入 iSH 显示的配对码），或者导入在电脑上用
+`idevice_pair` 生成的配对文件。然后启用：立即启用，或在 iSH 启动时启用。iSH 启动时不等它；辅助扩展把代码区交给 JIT 之后编译的程序以原生代码运行（
+`/proc/ish/jit` 说明代码区从哪来，或者为什么没有）。需要开发者模式、用开发描述文件签名（
+`get-task-allow`），以及 App 和隧道扩展的 Network Extensions 能力。
+
 ### 测试
 
 ```bash

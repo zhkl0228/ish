@@ -80,12 +80,12 @@ jobs:
             echo "nothing published"
             exit 0
           fi
-          # the app that links them is a new build: its number (the extension's
+          # the app that links them is a new build: its number (its extensions'
           # with it) one more, so that ci.yml publishes its ipa, ipa-<version>-<build>
           build=$(($(sed -n 's/^CURRENT_PROJECT_VERSION = //p' app/AppARM64.xcconfig) + 1))
-          sed -i "s/^CURRENT_PROJECT_VERSION = .*/CURRENT_PROJECT_VERSION = $build/" \
-              app/AppARM64.xcconfig app/FileProviderARM64.xcconfig
-          files="$files app/AppARM64.xcconfig app/FileProviderARM64.xcconfig"
+          versioned="app/AppARM64.xcconfig app/FileProviderARM64.xcconfig app/JITHelperARM64.xcconfig app/LoopbackTunnelARM64.xcconfig"
+          sed -i "s/^CURRENT_PROJECT_VERSION = .*/CURRENT_PROJECT_VERSION = $build/" $versioned
+          files="$files $versioned"
           set=$(python3 -c "import json; print(json.load(open('benchmark/aojit/app-images.lock.json'))['set'])")
           summary=$(python3 -c "
           import json

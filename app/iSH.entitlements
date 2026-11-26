@@ -19,5 +19,15 @@
 	     fragmented, it had no free range of 256MB for node's code range. -->
 	<key>com.apple.developer.kernel.extended-virtual-addressing</key>
 	<true/>
+	<!-- The built-in JIT (app/BuiltinJIT.m): a debugger attaches to iSH (it
+	     needs get-task-allow: a development profile signs with it), reached
+	     through iSH's own loopback tunnel (app/LoopbackTunnel), a VPN the app
+	     configures and starts -->
+	<key>get-task-allow</key>
+	<true/>
+	<key>com.apple.developer.networking.networkextension</key>
+	<array>
+		<string>packet-tunnel-provider</string>
+	</array>
 </dict>
 </plist>

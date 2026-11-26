@@ -14,14 +14,15 @@ MARKETING_VERSION = 2.1.0
 // Build number must increase across the whole app regardless of marketing
 // version. CI (.github/workflows/aot-images.yml) raises it by one, and
 // FileProviderARM64.xcconfig's with it, with each set of AOT images it commits.
-CURRENT_PROJECT_VERSION = 807
+CURRENT_PROJECT_VERSION = 808
 
 // Link meson-built libraries directly from the arm64 meson build dir.
 // These are NOT in the Frameworks build phase to prevent Xcode from
 // auto-discovering implicit dependencies on the library targets (libish,
 // libish_emu, libfakefs). libish's platform/darwin.c reads the app's
-// entitlements with Security's SecTask.
-OTHER_LDFLAGS = $(inherited) $(MESON_BUILD_DIR)/libish.a $(MESON_BUILD_DIR)/libish_emu.a $(MESON_BUILD_DIR)/libfakefs.a $(ISH_AOT_OBJECTS) -framework Security
+// entitlements with Security's SecTask. The on-device pairing's idevice
+// (OnDevicePairing.m): app/idevice/build.sh builds it into build/idevice.
+OTHER_LDFLAGS = $(inherited) $(MESON_BUILD_DIR)/libish.a $(MESON_BUILD_DIR)/libish_emu.a $(MESON_BUILD_DIR)/libfakefs.a $(ISH_AOT_OBJECTS) -framework Security $(SRCROOT)/build/idevice/libidevice_ffi.a
 
 // AOT images the app links in as extra objects: aot_<name>.S from
 // tools/jit_aot/gen.py, assembled for iOS, passed as .o paths. They are not
@@ -37,4 +38,4 @@ OTHER_LDFLAGS = $(inherited) $(MESON_BUILD_DIR)/libish.a $(MESON_BUILD_DIR)/libi
 
 // Header search paths needed for sources compiled directly in this target
 // (previously compiled in libiSHApp, which used AppLib.xcconfig)
-HEADER_SEARCH_PATHS = $(inherited) $(SRCROOT) $(SRCROOT)/deps/libarchive/libarchive
+HEADER_SEARCH_PATHS = $(inherited) $(SRCROOT) $(SRCROOT)/deps/libarchive/libarchive $(SRCROOT)/build/idevice
