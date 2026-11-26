@@ -77,10 +77,8 @@ bool get_user_default_impl(const char *name, char **buffer, size_t *size) {
         return false;
     }
     NSError *error;
-    NSJSONWritingOptions options = NSJSONWritingFragmentsAllowed | NSJSONWritingSortedKeys | NSJSONWritingPrettyPrinted;
-    if (@available(iOS 13.0, *)) {
-        options |= NSJSONWritingWithoutEscapingSlashes;
-    }
+    NSJSONWritingOptions options = NSJSONWritingFragmentsAllowed | NSJSONWritingSortedKeys | NSJSONWritingPrettyPrinted |
+        NSJSONWritingWithoutEscapingSlashes;
     NSData *data = [NSJSONSerialization dataWithJSONObject:value options:options error:&error];
     if (error) {
         return false;
@@ -173,15 +171,9 @@ bool remove_user_default_impl(const char *name) {
             kHostnameOverrideKey: UIDevice.currentDevice.name,
         }];
         // https://webkit.org/blog/10247/new-webkit-features-in-safari-13-1/
-        if (@available(iOS 13.4, *)) {
-            [_defaults registerDefaults:@{
-                kPreferenceFontFamilyKey: kSystemMonospacedFontName,
-            }];
-        } else {
-            [_defaults registerDefaults:@{
-                kPreferenceFontFamilyKey: @"Menlo",
-            }];
-        }
+        [_defaults registerDefaults:@{
+            kPreferenceFontFamilyKey: kSystemMonospacedFontName,
+        }];
         get_all_defaults_keys = get_all_defaults_keys_impl;
         get_friendly_name = get_friendly_name_impl;
         get_underlying_name = get_underlying_name_impl;
@@ -361,10 +353,8 @@ bool remove_user_default_impl(const char *name) {
 }
 
 - (UIFont *)approximateFont {
-    if (@available(iOS 13.4, *)) {
-        if ([self.fontFamily isEqualToString:kSystemMonospacedFontName]) {
-            return [UIFont monospacedSystemFontOfSize:self.fontSize.doubleValue weight:UIFontWeightRegular];
-        }
+    if ([self.fontFamily isEqualToString:kSystemMonospacedFontName]) {
+        return [UIFont monospacedSystemFontOfSize:self.fontSize.doubleValue weight:UIFontWeightRegular];
     }
     UIFont *font = [UIFont fontWithName:self.fontFamily size:self.fontSize.doubleValue];
     return font ? font : [UIFont fontWithName:@"Menlo" size:self.fontSize.doubleValue];
@@ -628,15 +618,13 @@ bool remove_user_default_impl(const char *name) {
 }
 
 + (BOOL)systemThemeIsDark {
-    if (@available(iOS 12.0, *)) {
-        switch (UIScreen.mainScreen.traitCollection.userInterfaceStyle) {
-            case UIUserInterfaceStyleLight:
-                return NO;
-            case UIUserInterfaceStyleDark:
-                return YES;
-            default:
-                break;
-        }
+    switch (UIScreen.mainScreen.traitCollection.userInterfaceStyle) {
+        case UIUserInterfaceStyleLight:
+            return NO;
+        case UIUserInterfaceStyleDark:
+            return YES;
+        default:
+            break;
     }
     return NO;
 }

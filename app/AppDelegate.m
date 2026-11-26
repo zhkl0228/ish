@@ -8,7 +8,7 @@
 #include <resolv.h>
 #include <arpa/inet.h>
 #include <netdb.h>
-#import <SystemConfiguration/SystemConfiguration.h>
+#import <Network/Network.h>
 #import <UserNotifications/UserNotifications.h>
 #import "AboutViewController.h"
 #import "AppDelegate.h"
@@ -55,7 +55,7 @@ extern void native_builtins_init(void);
 @interface AppDelegate () <UNUserNotificationCenterDelegate>
 
 @property BOOL exiting;
-@property SCNetworkReachabilityRef reachability;
+@property nw_path_monitor_t pathMonitor;
 
 @end
 
@@ -386,11 +386,6 @@ static void mount_documents(void) {
     return YES;
 }
 
-void NetworkReachabilityCallback(SCNetworkReachabilityRef target, SCNetworkReachabilityFlags flags, void *info) {
-    AppDelegate *self = (__bridge AppDelegate *) info;
-    [self configureDns];
-}
-
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center didReceiveNotificationResponse:(UNNotificationResponse *)response withCompletionHandler:(void (^)(void))completionHandler {
     NSString *uuid = response.notification.request.content.userInfo[TerminalSessionNotificationUUIDKey];
     for (TerminalViewController *controller in ConnectedTerminalViewControllers()) {
@@ -439,17 +434,18 @@ void NetworkReachabilityCallback(SCNetworkReachabilityRef target, SCNetworkReach
         });
     }];
     
-    // This code is IPv4 and IPv6 aware: see https://developer.apple.com/library/archive/samplecode/Reachability/Listings/ReadMe_md.html
-    struct sockaddr_in address = {
-        .sin_len = sizeof(address),
-        .sin_family = AF_INET,
-    };
-    self.reachability = SCNetworkReachabilityCreateWithAddress(kCFAllocatorDefault, (struct sockaddr *) &address);
-    SCNetworkReachabilityContext context = {
-        .info = (__bridge void *) self,
-    };
-    SCNetworkReachabilitySetCallback(self.reachability, NetworkReachabilityCallback, &context);
-    SCNetworkReachabilityScheduleWithRunLoop(self.reachability, CFRunLoopGetMain(), kCFRunLoopCommonModes);
+    // The DNS servers again as the network changes (Wi-Fi, cellular, a VPN):
+    // the monitor says so of every path, the first at its start. Into init's
+    // /etc/resolv.conf: none without a boot.
+    if (bootError == 0) {
+        self.pathMonitor = nw_path_monitor_create();
+        nw_path_monitor_set_queue(self.pathMonitor, dispatch_get_main_queue());
+        __weak AppDelegate *weakSelf = self;
+        nw_path_monitor_set_update_handler(self.pathMonitor, ^(nw_path_t path) {
+            [weakSelf configureDns];
+        });
+        nw_path_monitor_start(self.pathMonitor);
+    }
 
     if (self.window != nil) {
         // For iOS <13, where the app delegate owns the window instead of the scene
@@ -513,7 +509,7 @@ void NetworkReachabilityCallback(SCNetworkReachabilityRef target, SCNetworkReach
     return [super forwardingTargetForSelector:selector];
 }
 
-- (void)application:(UIApplication *)application didDiscardSceneSessions:(NSSet<UISceneSession *> *)sceneSessions API_AVAILABLE(ios(13.0)) {
+- (void)application:(UIApplication *)application didDiscardSceneSessions:(NSSet<UISceneSession *> *)sceneSessions {
     // Tabs can be moved between windows, so a session listed by a discarded window
     // may live on in another one; only sessions no window shows are closed.
     NSMutableSet<NSUUID *> *shown = [NSMutableSet new];
@@ -534,10 +530,8 @@ void NetworkReachabilityCallback(SCNetworkReachabilityRef target, SCNetworkReach
 }
 
 - (void)dealloc {
-    if (self.reachability != NULL) {
-        SCNetworkReachabilityUnscheduleFromRunLoop(self.reachability, CFRunLoopGetMain(), kCFRunLoopCommonModes);
-        CFRelease(self.reachability);
-    }
+    if (self.pathMonitor != nil)
+        nw_path_monitor_cancel(self.pathMonitor);
 }
 
 - (void)exitApp {

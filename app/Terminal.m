@@ -58,13 +58,6 @@ typedef struct tty *tty_t;
 @interface CustomWebView : WKWebView
 @end
 @implementation CustomWebView
-- (BOOL)becomeFirstResponder {
-    if (@available(iOS 13.4, *)) {
-        return [super becomeFirstResponder];
-    }
-    return NO;
-}
-
 - (BOOL)canPerformAction:(SEL)action withSender:(id)sender {
     if (action == @selector(copy:) || action == @selector(paste:)) {
         return NO;

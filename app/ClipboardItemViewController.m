@@ -41,7 +41,7 @@ static UIImage *UprightImage(UIImage *image) {
     }];
 }
 
-static UIImage *ImageWithoutBackground(UIImage *image, NSError **error) API_AVAILABLE(ios(17.0)) {
+static UIImage *ImageWithoutBackground(UIImage *image, NSError **error) {
     UIImage *upright = UprightImage(image);
     VNGenerateForegroundInstanceMaskRequest *request = [VNGenerateForegroundInstanceMaskRequest new];
     VNImageRequestHandler *handler = [[VNImageRequestHandler alloc] initWithCGImage:upright.CGImage options:@{}];
@@ -91,7 +91,7 @@ static NSString *ColorDescription(UIColor *color, NSString *hex) {
 @property (nullable) UIImageView *imageView;
 @property (nullable) UIImage *editedImage;
 @property (nullable) UIImage *originalImage;
-@property (nullable) UIColorWell *colorWell API_AVAILABLE(ios(14.0));
+@property (nullable) UIColorWell *colorWell;
 @property (nullable) UIView *swatch;
 @property (nullable) UILabel *colorLabel;
 @property BOOL dirty;
@@ -141,8 +141,7 @@ static NSString *ColorDescription(UIColor *color, NSString *hex) {
     self.imageView = nil;
     self.swatch = nil;
     self.colorLabel = nil;
-    if (@available(iOS 14, *))
-        self.colorWell = nil;
+    self.colorWell = nil;
     self.toolbarItems = nil;
     ClipItem *item = self.item;
 
@@ -153,6 +152,9 @@ static NSString *ColorDescription(UIColor *color, NSString *hex) {
         return;
     }
     self.title = item.displayTitle;
+    // UINavigationItem's subtitle is iOS 26's: an SDK before has none of it
+    // (Xcode 16 failed to compile it)
+#if defined(__IPHONE_26_0)
     if (@available(iOS 26, *)) {
         NSString *where = item.pinboardID ? [ClipboardStore.shared pinboardWithID:item.pinboardID].name : nil;
         NSMutableArray<NSString *> *parts = [NSMutableArray arrayWithObject:ClipKindName(item.kind)];
@@ -164,6 +166,7 @@ static NSString *ColorDescription(UIColor *color, NSString *hex) {
             [parts addObject:[NSString stringWithFormat:@"%lu of %lu", (unsigned long) self.index + 1, (unsigned long) self.items.count]];
         self.navigationItem.subtitle = [parts componentsJoinedByString:@" · "];
     }
+#endif
     BOOL editing = self.mode == PageModeEdit;
     switch (item.kind) {
         case ClipKindText:
@@ -214,8 +217,7 @@ static NSString *ColorDescription(UIColor *color, NSString *hex) {
     textView.autocorrectionType = code ? UITextAutocorrectionTypeNo : UITextAutocorrectionTypeDefault;
     textView.smartQuotesType = UITextSmartQuotesTypeNo;
     textView.smartDashesType = UITextSmartDashesTypeNo;
-    if (@available(iOS 18, *))
-        textView.writingToolsBehavior = code ? UIWritingToolsBehaviorNone : UIWritingToolsBehaviorComplete;
+    textView.writingToolsBehavior = code ? UIWritingToolsBehaviorNone : UIWritingToolsBehaviorComplete;
     if (attributed != nil) {
         textView.allowsEditingTextAttributes = editable;
         textView.attributedText = attributed;
@@ -332,29 +334,27 @@ static NSString *ColorDescription(UIColor *color, NSString *hex) {
         [label.centerXAnchor constraintEqualToAnchor:container.centerXAnchor],
     ]];
     if (editable) {
-        if (@available(iOS 14, *)) {
-            UIColorWell *well = [UIColorWell new];
-            well.supportsAlpha = YES;
-            well.title = @"Color";
-            well.selectedColor = color;
-            [well addTarget:self action:@selector(colorChanged:) forControlEvents:UIControlEventValueChanged];
-            well.translatesAutoresizingMaskIntoConstraints = NO;
-            [container addSubview:well];
-            [NSLayoutConstraint activateConstraints:@[
-                [well.topAnchor constraintEqualToAnchor:label.bottomAnchor constant:24],
-                [well.centerXAnchor constraintEqualToAnchor:container.centerXAnchor],
-                [well.widthAnchor constraintEqualToConstant:44],
-                [well.heightAnchor constraintEqualToConstant:44],
-            ]];
-            self.colorWell = well;
-        }
+        UIColorWell *well = [UIColorWell new];
+        well.supportsAlpha = YES;
+        well.title = @"Color";
+        well.selectedColor = color;
+        [well addTarget:self action:@selector(colorChanged:) forControlEvents:UIControlEventValueChanged];
+        well.translatesAutoresizingMaskIntoConstraints = NO;
+        [container addSubview:well];
+        [NSLayoutConstraint activateConstraints:@[
+            [well.topAnchor constraintEqualToAnchor:label.bottomAnchor constant:24],
+            [well.centerXAnchor constraintEqualToAnchor:container.centerXAnchor],
+            [well.widthAnchor constraintEqualToConstant:44],
+            [well.heightAnchor constraintEqualToConstant:44],
+        ]];
+        self.colorWell = well;
     }
     self.swatch = swatch;
     self.colorLabel = label;
     [self pin:container];
 }
 
-- (void)colorChanged:(UIColorWell *)well API_AVAILABLE(ios(14.0)) {
+- (void)colorChanged:(UIColorWell *)well {
     self.dirty = YES;
     self.swatch.backgroundColor = well.selectedColor;
     self.colorLabel.text = ColorDescription(well.selectedColor, @"");
@@ -438,11 +438,9 @@ static NSString *ColorDescription(UIColor *color, NSString *hex) {
             [self barItem:@"rotate.left" label:@"Rotate Left" action:@selector(rotateLeft)],
             [self barItem:@"rotate.right" label:@"Rotate Right" action:@selector(rotateRight)],
         ]];
-        if (@available(iOS 17, *)) {
-            [tools addObject:self.flexible];
-            UIBarButtonItem *remove = [[UIBarButtonItem alloc] initWithTitle:@"Remove Background" style:UIBarButtonItemStylePlain target:self action:@selector(toggleBackground:)];
-            [tools addObject:remove];
-        }
+        [tools addObject:self.flexible];
+        UIBarButtonItem *remove = [[UIBarButtonItem alloc] initWithTitle:@"Remove Background" style:UIBarButtonItemStylePlain target:self action:@selector(toggleBackground:)];
+        [tools addObject:remove];
     }
     self.toolbarItems = tools;
     [self.navigationController setToolbarHidden:tools.count == 0 animated:NO];
@@ -490,7 +488,7 @@ static NSString *ColorDescription(UIColor *color, NSString *hex) {
     self.dirty = YES;
 }
 
-- (void)toggleBackground:(UIBarButtonItem *)sender API_AVAILABLE(ios(17.0)) {
+- (void)toggleBackground:(UIBarButtonItem *)sender {
     if (self.editedImage != self.originalImage && [sender.title isEqualToString:@"Restore Background"]) {
         self.editedImage = self.originalImage;
         self.imageView.image = self.editedImage;

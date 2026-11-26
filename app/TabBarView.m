@@ -357,6 +357,9 @@ static NSString *SymbolForProgram(NSString *_Nullable program) {
         [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(keyboardConnectionChanged:) name:GCKeyboardDidConnectNotification object:nil];
         [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(keyboardConnectionChanged:) name:GCKeyboardDidDisconnectNotification object:nil];
         [self updateMetrics];
+        NSArray *traits = [UITraitCollection.systemTraitsAffectingColorAppearance
+            arrayByAddingObjectsFromArray:@[UITraitPreferredContentSizeCategory.class, UITraitHorizontalSizeClass.class]];
+        [self registerForTraitChanges:traits withAction:@selector(traitsChanged)];
     }
     return self;
 }
@@ -588,15 +591,10 @@ static NSString *SymbolForProgram(NSString *_Nullable program) {
     }
 }
 
-- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
-    [super traitCollectionDidChange:previousTraitCollection];
-    if ([self.traitCollection hasDifferentColorAppearanceComparedToTraitCollection:previousTraitCollection] ||
-        self.traitCollection.preferredContentSizeCategory != previousTraitCollection.preferredContentSizeCategory ||
-        self.traitCollection.horizontalSizeClass != previousTraitCollection.horizontalSizeClass) {
-        [self updateMetrics];
-        [self applyColors];
-        [self scrollSelectedTabIntoView];
-    }
+- (void)traitsChanged {
+    [self updateMetrics];
+    [self applyColors];
+    [self scrollSelectedTabIntoView];
 }
 
 - (void)scrollSelectedTabIntoView {
@@ -693,7 +691,9 @@ static NSString *SymbolForProgram(NSString *_Nullable program) {
     return parameters;
 }
 
-- (UITargetedPreview *)contextMenuInteraction:(UIContextMenuInteraction *)interaction previewForHighlightingMenuWithConfiguration:(UIContextMenuConfiguration *)configuration {
+- (UITargetedPreview *)contextMenuInteraction:(UIContextMenuInteraction *)interaction
+                                configuration:(UIContextMenuConfiguration *)configuration
+                highlightPreviewForItemWithIdentifier:(id<NSCopying>)identifier {
     TabItemView *item = (TabItemView *) interaction.view;
     return [[UITargetedPreview alloc] initWithView:item parameters:[self capsuleParametersOfItem:item parameters:[UIPreviewParameters new]]];
 }

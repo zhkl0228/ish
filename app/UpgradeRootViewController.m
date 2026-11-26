@@ -126,9 +126,7 @@
 - (void)setDismissable:(BOOL)dismissable {
     [self.navigationItem setHidesBackButton:!dismissable animated:YES];
     self.navigationController.interactivePopGestureRecognizer.enabled = dismissable;
-    if (@available(iOS 13, *)) {
-        self.modalInPresentation = !dismissable;
-    }
+    self.modalInPresentation = !dismissable;
 }
 
 - (void)dealloc {

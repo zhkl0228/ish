@@ -20,9 +20,7 @@
     [UserPreferences.shared observe:@[@"colorScheme"] options:NSKeyValueObservingOptionInitial
                               owner:self usingBlock:^(typeof(self) self) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            if (@available(iOS 13, *)) {
-                self.overrideUserInterfaceStyle = UserPreferences.shared.userInterfaceStyle;
-            }
+            self.overrideUserInterfaceStyle = UserPreferences.shared.userInterfaceStyle;
         });
     }];
 }

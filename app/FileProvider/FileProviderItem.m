@@ -5,7 +5,7 @@
 //  Created by Theodore Dubois on 9/20/18.
 //
 
-#import <MobileCoreServices/MobileCoreServices.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include <sys/stat.h>
 #include <dirent.h>
 #import "FileProviderExtension.h"
@@ -173,22 +173,24 @@
     return [NSDate dateWithTimeIntervalSince1970:statbuf.st_mtimespec.tv_sec + (NSTimeInterval) statbuf.st_mtimespec.tv_nsec / 1000000000];
 }
 
-- (NSString *)typeIdentifier {
+// Its type (contentType, which iOS 15 has in typeIdentifier's place): a
+// folder, a link, else its extension's, plain text where the system knows
+// none (a dynamic type) or the extension is none (nil)
+- (UTType *)contentType {
     if (self.isRoot) {
-        NSLog(@"uti of %@ is %@", self.path, (NSString *) kUTTypeFolder);
-        return (NSString *) kUTTypeFolder;
+        NSLog(@"uti of %@ is %@", self.path, UTTypeFolder.identifier);
+        return UTTypeFolder;
     }
     mode_t_ mode = self.ishStat.mode;
     if ((mode & S_IFMT) == S_IFDIR)
-        return (NSString *) kUTTypeFolder;
+        return UTTypeFolder;
     if ((mode & S_IFMT) == S_IFLNK)
-        return (NSString *) kUTTypeSymLink;
-    NSString *uti = CFBridgingRelease(UTTypeCreatePreferredIdentifierForTag(kUTTagClassFilenameExtension,
-                                                                            (__bridge CFStringRef _Nonnull) self.path.pathExtension, nil));
-    if ([uti hasPrefix:@"dyn."])
-        uti = (NSString *) kUTTypePlainText;
-    NSLog(@"uti of %@ is %@", self.path, uti);
-    return uti;
+        return UTTypeSymbolicLink;
+    UTType *type = [UTType typeWithFilenameExtension:self.path.pathExtension];
+    if (type == nil || type.dynamic)
+        type = UTTypePlainText;
+    NSLog(@"uti of %@ is %@", self.path, type.identifier);
+    return type;
 }
 
 // locking on these keeps the remove/copy operation atomic

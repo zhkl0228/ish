@@ -11,6 +11,7 @@
 #import "UIApplication+OpenURL.h"
 #import "UIViewController+Extras.h"
 #import "NSObject+SaneKVO.h"
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 @interface RootsTableViewController ()
 @end
@@ -62,13 +63,12 @@
 }
 
 - (IBAction)importFilesystem:(id)sender {
+    // a copy, as an import
     UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc]
-                                              initWithDocumentTypes:@[@"public.tar-archive", @"org.gnu.gnu-zip-archive"]
-                                              inMode:UIDocumentPickerModeImport];
+                                              initForOpeningContentTypes:@[UTTypeTarArchive, UTTypeGZIP]
+                                              asCopy:YES];
     [self presentViewController:picker animated:YES completion:nil];
-    if (@available(iOS 13, *)) {
-        picker.shouldShowFileExtensions = YES;
-    }
+    picker.shouldShowFileExtensions = YES;
     picker.delegate = self;
 }
 
@@ -193,12 +193,10 @@
                 }
 
                 UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc]
-                                                          initWithURL:self.exportURL
-                                                          inMode:UIDocumentPickerModeExportToService];
+                                                          initForExportingURLs:@[self.exportURL]
+                                                          asCopy:YES];
                 picker.delegate = self;
-                if (@available(iOS 13, *)) {
-                    picker.shouldShowFileExtensions = YES;
-                }
+                picker.shouldShowFileExtensions = YES;
                 [self presentViewController:picker animated:YES completion:nil];
             }];
         });

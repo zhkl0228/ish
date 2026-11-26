@@ -240,8 +240,8 @@ NSString *const ThemeUpdatedNotification = @"ThemeUpdatedNotification";
         NSLog(@"Rejecting theme %@ with invalid version number", name);
         return nil;
     }
-    id _appearance = json[@"appearance"];
-    ThemeAppearance *appearance = [_appearance isKindOfClass:NSDictionary.class] ? [[ThemeAppearance alloc] initWithSerializedRepresentation:_appearance] : nil;
+    id serializedAppearance = json[@"appearance"];
+    ThemeAppearance *appearance = [serializedAppearance isKindOfClass:NSDictionary.class] ? [[ThemeAppearance alloc] initWithSerializedRepresentation:serializedAppearance] : nil;
     id shared = json[@"shared"];
     id light = json[@"light"];
     id dark = json[@"dark"];

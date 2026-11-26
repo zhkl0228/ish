@@ -61,7 +61,7 @@ extern const int kDefaultFontSize;
 // off, a shell's tab and / always
 @property BOOL columnKeysFollowProgram;
 @property (nonatomic) Theme *theme;
-@property (nonatomic) Palette *palette;
+@property (nonatomic, readonly) Palette *palette;
 @property BOOL shouldDisableDimming;
 @property (null_resettable) NSString *fontFamily;
 @property (readonly) NSString *fontFamilyUserFacingName;
@@ -69,7 +69,7 @@ extern const int kDefaultFontSize;
 @property NSNumber *fontSize;
 @property ColorScheme colorScheme;
 @property (readonly) BOOL requestingDarkAppearance;
-@property (readonly) UIUserInterfaceStyle userInterfaceStyle API_AVAILABLE(ios(12.0));
+@property (readonly) UIUserInterfaceStyle userInterfaceStyle;
 @property (readonly) UIKeyboardAppearance keyboardAppearance;
 @property CursorStyle cursorStyle;
 @property (readonly) NSString *cursorShapeName;

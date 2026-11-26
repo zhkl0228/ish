@@ -10,6 +10,62 @@
 #import "iOSFS.h"
 #import "CurrentRoot.h"
 
+// The menus' actions, which the responder chain takes to the scene's
+// TerminalViewController, the settings and the app delegate: declared here
+// for @selector, which warned of each (-Wundeclared-selector). Nothing
+// adopts it.
+@protocol MainMenuActions
+- (void)addSavedCommand:(id)sender;
+- (void)clearScreen:(id)sender;
+- (void)clearScrollback:(id)sender;
+- (void)closeCurrentTab:(id)sender;
+- (void)closeOtherTabs:(id)sender;
+- (void)closeWindow:(id)sender;
+- (void)copyCurrentDirectory:(id)sender;
+- (void)decreaseFontSize:(id)sender;
+- (void)duplicateTab:(id)sender;
+- (void)exportScrollback:(id)sender;
+- (void)findNextMatch:(id)sender;
+- (void)findPreviousMatch:(id)sender;
+- (void)increaseFontSize:(id)sender;
+- (void)killForegroundJob:(id)sender;
+- (void)loseFocus:(id)sender;
+- (void)mergeAllWindows:(id)sender;
+- (void)mountFolder:(id)sender;
+- (void)moveTabLeft:(id)sender;
+- (void)moveTabRight:(id)sender;
+- (void)moveTabToNewWindow:(id)sender;
+- (void)newPinboard:(id)sender;
+- (void)newTab:(id)sender;
+- (void)newWindow:(id)sender;
+- (void)nextTab:(id)sender;
+- (void)previousTab:(id)sender;
+- (void)removeSavedCommand:(id)sender;
+- (void)renameCurrentTab:(id)sender;
+- (void)resetFontSize:(id)sender;
+- (void)resetTerminal:(id)sender;
+- (void)restartShell:(id)sender;
+- (void)runSavedCommand:(id)sender;
+- (void)selectColorScheme:(id)sender;
+- (void)selectTabByNumber:(id)sender;
+- (void)selectTheme:(id)sender;
+- (void)sendEndOfFile:(id)sender;
+- (void)sendInterrupt:(id)sender;
+- (void)sendSuspend:(id)sender;
+- (void)showAbout:(id)sender;
+- (void)showClipboardSettings:(id)sender;
+- (void)showFind:(id)sender;
+- (void)switchTerminal:(id)sender;
+- (void)toggleClipboard:(id)sender;
+- (void)toggleClipboardCapture:(id)sender;
+- (void)toggleExtraKeys:(id)sender;
+- (void)toggleKeepAlive:(id)sender;
+- (void)toggleMeters:(id)sender;
+- (void)togglePasteStack:(id)sender;
+- (void)toggleStatusBar:(id)sender;
+- (void)unmountFolder:(id)sender;
+@end
+
 static NSString *const kSavedCommands = @"Saved Commands";
 
 #pragma mark - Building blocks
@@ -269,10 +325,8 @@ static UICommand *SettingsCommand(void) {
         if ([builder menuForIdentifier:identifier] != nil)
             [builder removeMenuForIdentifier:identifier];
     }
-    if (@available(iOS 17, *)) {
-        if ([builder menuForIdentifier:UIMenuAutoFill] != nil)
-            [builder removeMenuForIdentifier:UIMenuAutoFill];
-    }
+    if ([builder menuForIdentifier:UIMenuAutoFill] != nil)
+        [builder removeMenuForIdentifier:UIMenuAutoFill];
 
     UIMenu *settings = Group(@"settings", @[SettingsCommand()]);
     if ([builder menuForIdentifier:UIMenuAbout] != nil)

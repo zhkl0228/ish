@@ -339,6 +339,7 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
+    [self registerTraitChanges];
 
     int bootError = [AppDelegate bootError];
     if (bootError < 0) {
@@ -1124,16 +1125,16 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
     }
 }
 
-- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
-    [super traitCollectionDidChange:previousTraitCollection];
-    [self updateMonitorColumn];
-    // Hack to resolve a layering mismatch between the UI and preferences.
-    if (@available(iOS 12.0, *)) {
-        if (previousTraitCollection.userInterfaceStyle != self.traitCollection.userInterfaceStyle) {
-            // Ensure that the relevant things listening for this will update.
-            UserPreferences.shared.colorScheme = UserPreferences.shared.colorScheme;
-        }
-    }
+- (void)registerTraitChanges {
+    [self registerForTraitChanges:@[UITraitHorizontalSizeClass.class, UITraitVerticalSizeClass.class]
+                       withAction:@selector(updateMonitorColumn)];
+    [self registerForTraitChanges:@[UITraitUserInterfaceStyle.class] withAction:@selector(userInterfaceStyleChanged)];
+}
+
+// Hack to resolve a layering mismatch between the UI and preferences.
+- (void)userInterfaceStyleChanged {
+    // Ensure that the relevant things listening for this will update.
+    UserPreferences.shared.colorScheme = UserPreferences.shared.colorScheme;
 }
 
 #pragma mark Bar

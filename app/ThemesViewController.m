@@ -11,6 +11,7 @@
 #import "Theme.h"
 #import "ThemeViewController.h"
 #import "UserPreferences.h"
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 @implementation ThemesViewController {
     BOOL _singleRowEditing;
@@ -277,12 +278,9 @@ enum {
 }
 
 - (void)importTheme {
-    UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[ @"public.json" ] inMode:UIDocumentPickerModeOpen];
+    UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeJSON]
+                                                                                                         asCopy:NO];
     picker.delegate = self;
-    if (@available(iOS 13, *)) {
-    } else {
-        picker.allowsMultipleSelection = YES;
-    }
     [self presentViewController:picker animated:true completion:nil];
 }
 

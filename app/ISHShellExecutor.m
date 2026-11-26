@@ -241,7 +241,17 @@ static dispatch_once_t _onceToken;
     // Get guest PID and start task
     ctx.guestPid = task->pid;
     ctx.result.pid = ctx.guestPid;
-    task_start(task);
+    err = task_start(task);
+    if (err < 0) {
+        // No thread for it (the host out of them): it exits as one that never
+        // ran and is reaped here, as TerminalSession's does
+        exit_unstarted(127 << 8);
+        reap_init_child(ctx.guestPid);
+        current = saved_current;
+        [ctx cleanup];
+        NSLog(@"ISHShellExecutor: task_start failed: %d", err);
+        return ISHShellExecutorErrorProcessCreationFailed;
+    }
     current = saved_current;
 
     // Register context

@@ -120,7 +120,6 @@
 		AA000023AF96D90D00FFB7A4 /* PasteboardDevice.m in Sources */ = {isa = PBXBuildFile; fileRef = 650B337322EA235C00B4C03E /* PasteboardDevice.m */; };
 		AA000031AF96D90D00FFB7A4 /* libarchive.a in Frameworks */ = {isa = PBXBuildFile; fileRef = BB10E5C8248DBAA1009C7A74 /* libarchive.a */; };
 		AA000032AF96D90D00FFB7A4 /* CoreLocation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BB235536235D49B300139E00 /* CoreLocation.framework */; };
-		AA000033AF96D90D00FFB7A4 /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BBA8E2C0236FF5EA00515F76 /* SystemConfiguration.framework */; };
 		AA000034AF96D90D00FFB7A4 /* libbz2.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = BBAEE338249B58E80069EBB5 /* libbz2.tbd */; };
 		AA000035AF96D90D00FFB7A4 /* libiconv.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = BB6DB260216435330047A611 /* libiconv.tbd */; };
 		AA000036AF96D90D00FFB7A4 /* libresolv.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = BBFB55652158644C00DFE6DE /* libresolv.tbd */; };
@@ -184,7 +183,6 @@
 		AA00010DAF96D90D00FFB7A4 /* hook.c in Sources */ = {isa = PBXBuildFile; fileRef = 49087C14295DF0490058075B /* hook.c */; };
 		AA00010EAF96D90D00FFB7A4 /* Roots.m in Sources */ = {isa = PBXBuildFile; fileRef = BB10E5CD248DBE66009C7A74 /* Roots.m */; };
 		AA00010FAF96D90D00FFB7A4 /* Terminal.m in Sources */ = {isa = PBXBuildFile; fileRef = BB0FC5911F980A6B00803272 /* Terminal.m */; };
-		AA000110AF96D90D00FFB7A4 /* FontPickerViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = BB101B372364CF57000A93BC /* FontPickerViewController.m */; };
 		AA000111AF96D90D00FFB7A4 /* UpgradeRootViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = BBA5D87D27536E7600B39D77 /* UpgradeRootViewController.m */; };
 		AA000112AF96D90D00FFB7A4 /* SceneDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = BBCC9D952365430800424C83 /* SceneDelegate.m */; };
 		AA000113AF96D90D00FFB7A4 /* AboutExternalKeyboardViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = BB82A7FC21B4C2E8006AA5FD /* AboutExternalKeyboardViewController.m */; };
@@ -227,7 +225,6 @@
 		F40628B47D5394EEAD548D4F /* MonitorColumnView.m in Sources */ = {isa = PBXBuildFile; fileRef = EE2BB9D646014739B7043C22 /* MonitorColumnView.m */; };
 		BB28C79926896B1F00BDC834 /* DelayedUITask.m in Sources */ = {isa = PBXBuildFile; fileRef = BB455E101FB37F6600AFB48B /* DelayedUITask.m */; };
 		BB28C79A26896B1F00BDC834 /* Terminal.m in Sources */ = {isa = PBXBuildFile; fileRef = BB0FC5911F980A6B00803272 /* Terminal.m */; };
-		BB28C79B26896B1F00BDC834 /* FontPickerViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = BB101B372364CF57000A93BC /* FontPickerViewController.m */; };
 		BB28C79D26896B1F00BDC834 /* SceneDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = BBCC9D952365430800424C83 /* SceneDelegate.m */; };
 		BB28C79E26896B1F00BDC834 /* AboutExternalKeyboardViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = BB82A7FC21B4C2E8006AA5FD /* AboutExternalKeyboardViewController.m */; };
 		BB28C79F26896B1F00BDC834 /* PassthroughView.m in Sources */ = {isa = PBXBuildFile; fileRef = BB149E7F256DC97C00F57815 /* PassthroughView.m */; };
@@ -561,8 +558,6 @@
 		BB0F553523A0ACFC0032A2A1 /* pydann2.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = pydann2.png; sourceTree = "<group>"; };
 		BB0FC5901F980A6B00803272 /* Terminal.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Terminal.h; sourceTree = "<group>"; };
 		BB0FC5911F980A6B00803272 /* Terminal.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = Terminal.m; sourceTree = "<group>"; };
-		BB101B362364CF57000A93BC /* FontPickerViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = FontPickerViewController.h; sourceTree = "<group>"; };
-		BB101B372364CF57000A93BC /* FontPickerViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = FontPickerViewController.m; sourceTree = "<group>"; };
 		BB10E0C1248DA5B0009C7A74 /* libarchive.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; name = libarchive.xcodeproj; path = ../deps/libarchive.xcodeproj; sourceTree = "<group>"; };
 		BB10E5C2248DBA7B009C7A74 /* fakefs.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = fakefs.c; path = tools/fakefs.c; sourceTree = SOURCE_ROOT; };
 		BB10E5CC248DBE66009C7A74 /* Roots.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Roots.h; sourceTree = "<group>"; };
@@ -670,7 +665,6 @@
 		BB9C7B88240A343400F5D4F0 /* iSH.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = iSH.xcconfig; path = app/iSH.xcconfig; sourceTree = "<group>"; };
 		BBA5D87C27536E7600B39D77 /* UpgradeRootViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = UpgradeRootViewController.h; sourceTree = "<group>"; };
 		BBA5D87D27536E7600B39D77 /* UpgradeRootViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = UpgradeRootViewController.m; sourceTree = "<group>"; };
-		BBA8E2C0236FF5EA00515F76 /* SystemConfiguration.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SystemConfiguration.framework; path = System/Library/Frameworks/SystemConfiguration.framework; sourceTree = SDKROOT; };
 		BBAEE338249B58E80069EBB5 /* libbz2.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libbz2.tbd; path = usr/lib/libbz2.tbd; sourceTree = SDKROOT; };
 		BBAEE33A249BDADC0069EBB5 /* ProgressReportViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ProgressReportViewController.h; sourceTree = "<group>"; };
 		BBAEE33B249BDADC0069EBB5 /* ProgressReportViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = ProgressReportViewController.m; sourceTree = "<group>"; };
@@ -726,7 +720,6 @@
 			files = (
 				AA000031AF96D90D00FFB7A4 /* libarchive.a in Frameworks */,
 				AA000032AF96D90D00FFB7A4 /* CoreLocation.framework in Frameworks */,
-				AA000033AF96D90D00FFB7A4 /* SystemConfiguration.framework in Frameworks */,
 				AA000034AF96D90D00FFB7A4 /* libbz2.tbd in Frameworks */,
 				AA000035AF96D90D00FFB7A4 /* libiconv.tbd in Frameworks */,
 				AA000036AF96D90D00FFB7A4 /* libresolv.tbd in Frameworks */,
@@ -1010,7 +1003,6 @@
 			children = (
 				BB28C755268956C900BDC834 /* Foundation.framework */,
 				BBAEE338249B58E80069EBB5 /* libbz2.tbd */,
-				BBA8E2C0236FF5EA00515F76 /* SystemConfiguration.framework */,
 				BB235536235D49B300139E00 /* CoreLocation.framework */,
 				BB6DB260216435330047A611 /* libiconv.tbd */,
 				BBFB55652158644C00DFE6DE /* libresolv.tbd */,
@@ -1222,8 +1214,6 @@
 				BBFB5578215876CD00DFE6DE /* AboutViewController.m */,
 				BB267FA423A48F1500ED7CAF /* AltIconViewController.h */,
 				BB267FA523A48F1500ED7CAF /* AltIconViewController.m */,
-				BB101B362364CF57000A93BC /* FontPickerViewController.h */,
-				BB101B372364CF57000A93BC /* FontPickerViewController.m */,
 				491C4C1D27C8FB65008B1DFA /* Theme.h */,
 				491C4C1E27C8FB65008B1DFA /* Theme.m */,
 				491C4C1527C8F84A008B1DFA /* ThemesViewController.h */,
@@ -1915,7 +1905,6 @@
 				AA00010DAF96D90D00FFB7A4 /* hook.c in Sources */,
 				AA00010EAF96D90D00FFB7A4 /* Roots.m in Sources */,
 				AA00010FAF96D90D00FFB7A4 /* Terminal.m in Sources */,
-				AA000110AF96D90D00FFB7A4 /* FontPickerViewController.m in Sources */,
 				AA000111AF96D90D00FFB7A4 /* UpgradeRootViewController.m in Sources */,
 				AA000112AF96D90D00FFB7A4 /* SceneDelegate.m in Sources */,
 				AA000113AF96D90D00FFB7A4 /* AboutExternalKeyboardViewController.m in Sources */,
@@ -1995,7 +1984,6 @@
 				497A08C029633FFA00B323CF /* hook.c in Sources */,
 				BB28C7BF2689799800BDC834 /* Roots.m in Sources */,
 				BB28C79A26896B1F00BDC834 /* Terminal.m in Sources */,
-				BB28C79B26896B1F00BDC834 /* FontPickerViewController.m in Sources */,
 				BBC3863E276817A900CC8C2E /* UpgradeRootViewController.m in Sources */,
 				BB28C79D26896B1F00BDC834 /* SceneDelegate.m in Sources */,
 				BB28C79E26896B1F00BDC834 /* AboutExternalKeyboardViewController.m in Sources */,

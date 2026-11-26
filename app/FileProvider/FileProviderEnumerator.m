@@ -5,7 +5,7 @@
 //  Created by Theodore Dubois on 9/20/18.
 //
 
-#import <MobileCoreServices/MobileCoreServices.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include <dirent.h>
 #import "FileProviderExtension.h"
 #import "FileProviderEnumerator.h"
@@ -36,8 +36,8 @@
         return;
     }
     // if we're asked to enumerate a file
-    if (![self.item.typeIdentifier isEqualToString:(NSString *) kUTTypeFolder]) {
-        NSLog(@"not enumerating a file (%@)", self.item.typeIdentifier);
+    if (![self.item.contentType isEqual:UTTypeFolder]) {
+        NSLog(@"not enumerating a file (%@)", self.item.contentType.identifier);
         [observer finishEnumeratingUpToPage:page];
         return;
     }

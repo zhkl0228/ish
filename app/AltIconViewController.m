@@ -119,12 +119,7 @@
     self.imageView.layer.mask = iconMask;
     self.imageView.layer.minificationFilter = kCAFilterTrilinear;
     
-    if (@available(iOS 13, *)) {
-        self.checkboxImageView.image = UIImage.checkmarkImage;
-    } else {
-//        self.checkboxImageView.backgroundColor = UIColor.whiteColor;
-//        self.checkboxImageView.layer.cornerRadius = self.checkboxImageView.bounds.size.width / 2;
-    }
+    self.checkboxImageView.image = UIImage.checkmarkImage;
 
     self.authorButton.titleLabel.adjustsFontForContentSizeCategory = YES;
 

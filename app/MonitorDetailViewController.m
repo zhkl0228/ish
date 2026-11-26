@@ -79,10 +79,10 @@ static NSString *ThermalMeaning(NSProcessInfoThermalState state) {
         // the popover's background too, which is not this view's
         UIUserInterfaceStyle style = UserPreferences.shared.userInterfaceStyle;
         self.overrideUserInterfaceStyle = style;
-        UITraitCollection *traits = [UITraitCollection traitCollectionWithTraitsFromCollections:@[
-            [UITraitCollection traitCollectionWithUserInterfaceStyle:style],
-            [UITraitCollection traitCollectionWithUserInterfaceLevel:UIUserInterfaceLevelElevated],
-        ]];
+        UITraitCollection *traits = [UITraitCollection traitCollectionWithTraits:^(id<UIMutableTraits> mutable) {
+            mutable.userInterfaceStyle = style;
+            mutable.userInterfaceLevel = UIUserInterfaceLevelElevated;
+        }];
         UIPopoverPresentationController *popover = self.popoverPresentationController;
         popover.sourceView = view;
         popover.sourceRect = rect;

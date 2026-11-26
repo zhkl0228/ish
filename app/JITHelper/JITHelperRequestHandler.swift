@@ -77,6 +77,9 @@ final class JITHelperRequestHandler: NSObject, NSExtensionRequestHandling {
                 throw HelperError("unreachable: \(reason)")
             case .preparationFailed(let reason):
                 throw HelperError("not ready: \(reason)")
+            @unknown default:
+                // a StikJIT newer than this: what it said, for a case of its own
+                throw HelperError("not ready: StikJIT said \(readiness), which this does not know")
             }
         case "resetDDI":
             try StikJIT.resetCachedDDI(at: ddiPaths)
@@ -108,6 +111,9 @@ final class JITHelperRequestHandler: NSObject, NSExtensionRequestHandling {
             return "verifying the developer disk image"
         case .ready:
             return "the device is ready"
+        @unknown default:
+            // a StikJIT newer than this: its stage as it says it (a log line only)
+            return "\(stage)"
         }
     }
 }

@@ -16,6 +16,7 @@
 #import "iOSFS.h"
 #import "UIApplication+OpenURL.h"
 #import "NSObject+SaneKVO.h"
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 @interface AboutViewController () <UIDocumentPickerDelegate>
 @property (weak, nonatomic) IBOutlet UITableViewCell *capsLockMappingCell;
@@ -250,8 +251,10 @@ static const NSInteger kFilesystemsSection = 2;
 static const long long kClaudeMemoryMaxBytes = 1024 * 1024;
 
 - (void)importClaudeMemory {
-    UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[@"public.text", @"net.daringfireball.markdown"]
-                                                                                                 inMode:UIDocumentPickerModeImport];
+    // a copy, as an import; markdown, which has no constant, by its extension
+    // (nil only for an extension that is no valid one)
+    UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc]
+        initForOpeningContentTypes:@[UTTypeText, [UTType typeWithFilenameExtension:@"md"]] asCopy:YES];
     picker.delegate = self;
     [self presentViewController:picker animated:YES completion:nil];
 }

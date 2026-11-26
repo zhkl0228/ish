@@ -23,7 +23,6 @@ extern NSArray<NSUUID *> *SceneTerminalUUIDs(NSUserActivity *activity);
 // The terminal controllers of every window currently on screen (connected scene).
 extern NSArray<TerminalViewController *> *ConnectedTerminalViewControllers(void);
 
-API_AVAILABLE(ios(13))
 @interface SceneDelegate : UIResponder <UIWindowSceneDelegate>
 
 @property (nonatomic) UIWindow *window;

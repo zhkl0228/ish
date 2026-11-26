@@ -92,6 +92,8 @@ typedef NS_ENUM(NSInteger, FilterType) {
         [center addObserver:self selector:@selector(storeDidChange:) name:ClipboardStoreDidChangeNotification object:nil];
         [center addObserver:self selector:@selector(pauseDidChange:) name:ClipboardPauseDidChangeNotification object:nil];
         self.accessibilityIdentifier = @"clipboard shelf";
+        // the cards' side is the width's size class's (ClipCardSide)
+        [self registerForTraitChanges:@[UITraitHorizontalSizeClass.class] withAction:@selector(cardSideMayHaveChanged)];
     }
     return self;
 }
@@ -502,9 +504,7 @@ static UIButton *HeaderButton(NSString *symbol, NSString *label) {
     if (indexPath == nil || (NSUInteger) indexPath.item >= self.displayed.count)
         return;
     ClipItem *item = self.displayed[(NSUInteger) indexPath.item];
-    UIKeyModifierFlags modifiers = 0;
-    if (@available(iOS 13.4, *))
-        modifiers = recognizer.modifierFlags;
+    UIKeyModifierFlags modifiers = recognizer.modifierFlags;
     if (modifiers & UIKeyModifierShift) {
         [self selectRangeTo:(NSUInteger) indexPath.item];
     } else if ((modifiers & UIKeyModifierCommand) || self.selectMode) {
@@ -1499,7 +1499,14 @@ static UIKeyCommand *KeyCommand(NSString *input, UIKeyModifierFlags modifiers, S
     }
 }
 
-- (UIContextMenuConfiguration *)collectionView:(UICollectionView *)collectionView contextMenuConfigurationForItemAtIndexPath:(NSIndexPath *)indexPath point:(CGPoint)point {
+// iOS 16's, for the items held: the one card (the shelf keeps its own
+// selection, which a held card's menu acts on), none for the empty room
+- (UIContextMenuConfiguration *)collectionView:(UICollectionView *)collectionView
+    contextMenuConfigurationForItemsAtIndexPaths:(NSArray<NSIndexPath *> *)indexPaths
+                                           point:(CGPoint)point {
+    NSIndexPath *indexPath = indexPaths.firstObject;
+    if (indexPath == nil)
+        return nil;
     if (collectionView == self.tabs) {
         NSInteger index = indexPath.item;
         return [UIContextMenuConfiguration configurationWithIdentifier:nil previewProvider:nil actionProvider:^UIMenu *(NSArray<UIMenuElement *> *suggested) {
@@ -1676,8 +1683,7 @@ static ClipPinboard *LocalPinboard(id<UIDropSession> session) {
         [store addItemProviders:[session.items valueForKey:@"itemProvider"] toPinboard:self.searching ? nil : self.pinboard atIndex:index completion:nil];
 }
 
-- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
-    [super traitCollectionDidChange:previousTraitCollection];
+- (void)cardSideMayHaveChanged {
     [self.cards.collectionViewLayout invalidateLayout];
 }
 

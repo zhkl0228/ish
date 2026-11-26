@@ -255,6 +255,8 @@ typedef NS_ENUM(NSInteger, CardStyle) {
 
         self.isAccessibilityElement = YES;
         self.accessibilityTraits = UIAccessibilityTraitButton;
+        [self registerForTraitChanges:UITraitCollection.systemTraitsAffectingColorAppearance
+                           withAction:@selector(updateRingColor)];
     }
     return self;
 }
@@ -407,16 +409,21 @@ typedef NS_ENUM(NSInteger, CardStyle) {
 - (void)setCardSelected:(BOOL)cardSelected {
     _cardSelected = cardSelected;
     self.ring.hidden = !cardSelected;
-    self.ring.layer.borderColor = self.tintColor.CGColor;
+    [self updateRingColor];
     if (cardSelected)
         self.accessibilityTraits |= UIAccessibilityTraitSelected;
     else
         self.accessibilityTraits &= ~UIAccessibilityTraitSelected;
 }
 
+// The ring's color, a CGColor: the tint resolved in the appearance it is in
+- (void)updateRingColor {
+    self.ring.layer.borderColor = self.tintColor.CGColor;
+}
+
 - (void)tintColorDidChange {
     [super tintColorDidChange];
-    self.ring.layer.borderColor = self.tintColor.CGColor;
+    [self updateRingColor];
 }
 
 - (void)setShortcutNumber:(NSInteger)shortcutNumber {
@@ -424,11 +431,6 @@ typedef NS_ENUM(NSInteger, CardStyle) {
     self.shortcutBadge.hidden = shortcutNumber <= 0;
     self.shortcutBadge.text = [NSString stringWithFormat:@"⌘%ld", (long) shortcutNumber];
     [self setNeedsLayout];
-}
-
-- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
-    [super traitCollectionDidChange:previousTraitCollection];
-    self.ring.layer.borderColor = self.tintColor.CGColor;
 }
 
 - (void)layoutSubviews {
@@ -576,9 +578,7 @@ static UIFont *TabFont(void) {
         [self.contentView addSubview:_label];
         self.isAccessibilityElement = YES;
         self.accessibilityTraits = UIAccessibilityTraitButton;
-        if (@available(iOS 13.4, *)) {
-            [self addInteraction:[[UIPointerInteraction alloc] initWithDelegate:nil]];
-        }
+        [self addInteraction:[[UIPointerInteraction alloc] initWithDelegate:nil]];
     }
     return self;
 }

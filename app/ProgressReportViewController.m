@@ -28,9 +28,7 @@
 
 - (void)viewDidLoad {
     self.titleLabel.text = self.title;
-    if (@available(iOS 13, *)) {
-        self.backdrop.effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemMaterial];
-    }
+    self.backdrop.effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemMaterial];
 }
 
 - (void)viewDidLayoutSubviews {

@@ -7,8 +7,6 @@ INFOPLIST_FILE = app/JITHelper/Info.plist
 PRODUCT_NAME = $(TARGET_NAME)
 SKIP_INSTALL = YES
 SWIFT_VERSION = 5.0
-// StikJIT's own
-IPHONEOS_DEPLOYMENT_TARGET = 17.4
 
 // The app's identifier and one more component: the app finds it by that
 // (JITHelperLauncher in app/BuiltinJIT.m)

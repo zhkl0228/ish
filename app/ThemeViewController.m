@@ -54,10 +54,8 @@ struct PaletteTextFields {
     textField.text = textField.placeholder = text;
     textField.translatesAutoresizingMaskIntoConstraints = NO;
     textField.textAlignment = NSTextAlignmentRight;
-    if (@available(iOS 13.0, *)) {
-        if (monospaced) {
-            textField.font = [UIFont monospacedSystemFontOfSize:textField.font.pointSize weight:UIFontWeightRegular];
-        }
+    if (monospaced) {
+        textField.font = [UIFont monospacedSystemFontOfSize:textField.font.pointSize weight:UIFontWeightRegular];
     }
     return textField;
 }
@@ -241,9 +239,7 @@ enum {
                 ]];
             } else {
                 cell.detailTextLabel.text = self.theme.name;
-                if (@available(iOS 13.0, *)) {
-                    cell.detailTextLabel.font = [UIFont systemFontOfSize:cell.detailTextLabel.font.pointSize];
-                }
+                cell.detailTextLabel.font = [UIFont systemFontOfSize:cell.detailTextLabel.font.pointSize];
             }
             break;
         case SinglePaletteSection:
@@ -281,9 +277,7 @@ enum {
                 ]];
             } else {
                 cell.detailTextLabel.text = detailTextField.text;
-                if (@available(iOS 13.0, *)) {
-                    cell.detailTextLabel.font = [UIFont monospacedSystemFontOfSize:cell.detailTextLabel.font.pointSize weight:UIFontWeightRegular];
-                }
+                cell.detailTextLabel.font = [UIFont monospacedSystemFontOfSize:cell.detailTextLabel.font.pointSize weight:UIFontWeightRegular];
             }
             break;
         }

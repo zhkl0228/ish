@@ -322,10 +322,6 @@ static char *BuiltinJITReport(void) {
 
 // Why the helper can not be asked, or nil
 - (nullable NSString *)preflight {
-    if (@available(iOS 17.4, *)) {
-    } else {
-        return @"the helper's StikJIT needs iOS 17.4 or later";
-    }
     char why[160];
     if (host_entitlement("get-task-allow", why, sizeof(why)) != ENTITLEMENT_YES)
         return @"iSH is not signed with get-task-allow, which a debugger needs to attach: sign it with a development profile";

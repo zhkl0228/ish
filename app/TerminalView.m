@@ -1008,13 +1008,13 @@ static int controlCharacter(unichar key) {
 
 #pragma mark Keyboard Traits
 
-- (UITextSmartDashesType)smartDashesType API_AVAILABLE(ios(11)) {
+- (UITextSmartDashesType)smartDashesType {
     return UITextSmartDashesTypeNo;
 }
-- (UITextSmartQuotesType)smartQuotesType API_AVAILABLE(ios(11)) {
+- (UITextSmartQuotesType)smartQuotesType {
     return UITextSmartQuotesTypeNo;
 }
-- (UITextSmartInsertDeleteType)smartInsertDeleteType API_AVAILABLE(ios(11)) {
+- (UITextSmartInsertDeleteType)smartInsertDeleteType {
     return UITextSmartInsertDeleteTypeNo;
 }
 - (UITextAutocapitalizationType)autocapitalizationType {
@@ -1124,7 +1124,6 @@ static int controlCharacter(unichar key) {
     }
 }
 
-static const char *alphabet = "abcdefghijklmnopqrstuvwxyz";
 // The keys that have a control character (controlCharacter)
 static const char *controlKeys = "abcdefghijklmnopqrstuvwxyz@^26-/[]\\ ";
 static const char *metaKeys = "abcdefghijklmnopqrstuvwxyz0123456789-=[]\\;',./";
@@ -1158,14 +1157,6 @@ static const char *metaKeys = "abcdefghijklmnopqrstuvwxyz0123456789-=[]\\;',./";
     for (NSString *navKey in navKeys) {
         for (size_t i = 0; i < sizeof(modifierCombos) / sizeof(modifierCombos[0]); i++) {
             [self addKey:navKey withModifiers:modifierCombos[i]];
-        }
-    }
-    if (UserPreferences.shared.capsLockMapping != CapsLockMapNone) {
-        if (@available(iOS 13, *)); else {
-            [self addKeys:controlKeys withModifiers:UIKeyModifierAlphaShift];
-            [self addKeys:alphabet withModifiers:0];
-            [self addKeys:alphabet withModifiers:UIKeyModifierShift];
-            [self addKey:@"" withModifiers:UIKeyModifierAlphaShift]; // otherwise tap of caps lock can switch layouts
         }
     }
     if (UserPreferences.shared.optionMapping == OptionMapEsc) {
@@ -1223,13 +1214,11 @@ static const char *metaKeys = "abcdefghijklmnopqrstuvwxyz0123456789-=[]\\;',./";
 }
 
 - (void)pressesBegan:(NSSet<UIPress *> *)presses withEvent:(UIPressesEvent *)event {
-    if (@available(iOS 13.4, *)) {
-        UIKey *key = presses.anyObject.key;
-        if (UserPreferences.shared.overrideControlSpace &&
-            key.keyCode == UIKeyboardHIDUsageKeyboardSpacebar &&
-            key.modifierFlags & UIKeyModifierControl) {
-            return [self insertControlChar:' '];
-        }
+    UIKey *key = presses.anyObject.key;
+    if (UserPreferences.shared.overrideControlSpace &&
+        key.keyCode == UIKeyboardHIDUsageKeyboardSpacebar &&
+        key.modifierFlags & UIKeyModifierControl) {
+        return [self insertControlChar:' '];
     }
     return [super pressesBegan:presses withEvent:event];
 }

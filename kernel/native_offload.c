@@ -579,7 +579,9 @@ static void *pipe_forward_thread(void *arg) {
     return NULL;
 }
 
-// Start forwarding with host fd destination (macOS posix_spawn)
+#ifdef HAS_POSIX_SPAWN
+// Start forwarding with host fd destination (macOS posix_spawn, its only
+// user: unused, it warned in the app's build)
 static pthread_t start_pipe_forward(int pipe_rd, int dest_fd) {
     struct pipe_fwd *fwd = malloc(sizeof(*fwd));
     fwd->pipe_rd = pipe_rd;
@@ -589,6 +591,7 @@ static pthread_t start_pipe_forward(int pipe_rd, int dest_fd) {
     pthread_create(&tid, NULL, pipe_forward_thread, fwd);
     return tid;
 }
+#endif
 
 // Start forwarding with guest fd destination (iOS handler)
 static pthread_t start_pipe_forward_guest(int pipe_rd, struct fd *guest_fd) {
