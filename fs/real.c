@@ -17,6 +17,9 @@
 #include <poll.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#if defined(__APPLE__)
+#include <sys/event.h>
+#endif
 
 #include "debug.h"
 #include "fs/pipe.h"
@@ -409,6 +412,28 @@ off_t realfs_lseek(struct fd *fd, off_t offset, int whence) {
     return res;
 }
 
+#if defined(__APPLE__)
+// Whether a FIFO's writers have all closed it, as its kqueue says: Darwin's
+// poll of a FIFO's read end says nothing once they have (no POLLIN, no
+// POLLHUP), where Linux's says POLLHUP, and a program's poll of a FIFO for
+// its end waited for good. EVFILT_READ has EV_EOF then (fifofs's
+// socantrcvmore as the last writer closes); not before a first writer has
+// opened it, as Linux's has no POLLHUP for a reader yet to see a writer. A
+// reader that opens it after its writers have come and gone has it at once,
+// where Linux's waits for another writer to come and go. The poll's own
+// kqueue (fs/poll.c) wakes for the same EV_EOF, so a poll waiting on the
+// FIFO is woken to see it.
+static bool fifo_writers_gone(int real_fd) {
+    int kq = kqueue();
+    struct kevent change, event;
+    EV_SET(&change, real_fd, EVFILT_READ, EV_ADD, 0, 0, NULL);
+    struct timespec zero = {0, 0};
+    int n = kevent(kq, &change, 1, &event, 1, &zero);
+    close(kq);
+    return n == 1 && (event.flags & EV_EOF);
+}
+#endif
+
 int realfs_poll(struct fd *fd) {
     // A regular file or a directory is always ready, as Linux has it
     // (DEFAULT_POLLMASK, whatever it was opened for). Darwin's poll of a
@@ -423,8 +448,16 @@ int realfs_poll(struct fd *fd) {
         p.events |= POLLIN;
     if ((flags & O_ACCMODE) != O_RDONLY)
         p.events |= POLLOUT;
+    int hup = 0;
+#if defined(__APPLE__)
+    // a FIFO's read end its writers have closed (fifo_writers_gone); a
+    // pipe's (pipe(2), an adhoc fd) poll says itself
+    if (S_ISFIFO(fd->type) && !is_adhoc_fd(fd) && (flags & O_ACCMODE) == O_RDONLY &&
+            fifo_writers_gone(fd->real_fd))
+        hup = POLLHUP;
+#endif
     if (poll(&p, 1, 0) <= 0)
-        return 0;
+        return hup;
 
 #if defined(__APPLE__)
     // this is the "WTF is apple smoking" section
@@ -451,12 +484,12 @@ int realfs_poll(struct fd *fd) {
                 events |= p.revents;
         }
         assert(!(events & POLLNVAL));
-        return events;
+        return events | hup;
     }
 #endif
 
     assert(!(p.revents & POLLNVAL));
-    return p.revents;
+    return p.revents | hup;
 }
 
 // What pt_map_chunked maps a file's chunks with
