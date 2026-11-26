@@ -4,7 +4,6 @@
 #include <unistd.h>
 #include "fs/sqlutil.h"
 #include "fs/fake-db.h"
-#include "fs/real.h"
 #include "kernel/errno.h"
 #include "util/list.h"
 #include "debug.h"
@@ -55,16 +54,15 @@ int fakefs_rebuild(struct fakefs_db *fs, int root_fd) {
         const char *path = (const char *) sqlite3_column_text(get_paths, 0);
         ino_t inode = sqlite3_column_int64(get_paths, 1);
 
-        // grab real inode
+        // grab real inode. By the path whole, not realfs_at_begin's walk
+        // down a path longer than the host's (fs/real.h): libfakefs is linked
+        // alone into the file provider and tools/fakefsify, which have no
+        // realfs (realfs_at_begin undefined: the app's archive failed). A
+        // row past the host's 1024 bytes is skipped here, as it always was.
         struct stat stat;
-        struct realfs_at at;
-        if (realfs_at_begin(root_fd, path, &at) < 0)
+        int err = fstatat(root_fd, fix_path(path), &stat, 0);
+        if (err < 0)
             continue;
-        int err = fstatat(at.fd, at.path, &stat, 0);
-        if (err < 0) {
-            realfs_at_end(&at);
-            continue;
-        }
         ino_t real_inode = stat.st_ino;
 
         // restore hardlinks
@@ -73,17 +71,12 @@ int fakefs_rebuild(struct fakefs_db *fs, int root_fd) {
         bool found = false;
         list_for_each_entry(bucket, entry, chain) {
             if (entry->inode == inode) {
-                struct realfs_at entry_at;
-                unlinkat(at.fd, at.path, 0);
-                if (realfs_at_begin(root_fd, entry->path, &entry_at) == 0) {
-                    linkat(entry_at.fd, entry_at.path, at.fd, at.path, 0);
-                    realfs_at_end(&entry_at);
-                }
+                unlinkat(root_fd, fix_path(path), 0);
+                linkat(root_fd, fix_path(entry->path), root_fd, fix_path(path), 0);
                 found = true;
                 break;
             }
         }
-        realfs_at_end(&at);
         if (!found) {
             entry = malloc(sizeof(struct entry));
             entry->inode = inode;
