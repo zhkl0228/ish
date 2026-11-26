@@ -94,7 +94,7 @@ static void on_usr1(int sig) {
 }
 
 int main(void) {
-    char detail[160];
+    char detail[200];
 
     // 1. each exception and its flag
     check_raises("1/0 raises divbyzero", divide_by_zero, FE_DIVBYZERO);
