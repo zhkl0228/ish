@@ -256,6 +256,16 @@ static int copy_task(struct task *task, dword_t flags, addr_t stack, addr_t ptid
             goto fail_free_fs;
     }
 
+    // The tids before the task joins a group: a failure here has none to
+    // leave (it joined one first, and stayed in its list of threads)
+    err = _EFAULT;
+    if (flags & CLONE_CHILD_SETTID_)
+        if (user_put_task(task, ctid_addr, task->pid))
+            goto fail_free_sighand;
+    if (flags & CLONE_PARENT_SETTID_)
+        if (user_put(ptid_addr, task->pid))
+            goto fail_free_sighand;
+
     struct tgroup *old_group = task->group;
     lock(&pids_lock);
     lock(&old_group->lock);
@@ -273,14 +283,6 @@ static int copy_task(struct task *task, dword_t flags, addr_t stack, addr_t ptid
         // not a pointer to a descriptor structure like x86.
         task->cpu.tls_ptr = tls_addr;
     }
-
-    err = _EFAULT;
-    if (flags & CLONE_CHILD_SETTID_)
-        if (user_put_task(task, ctid_addr, task->pid))
-            goto fail_free_sighand;
-    if (flags & CLONE_PARENT_SETTID_)
-        if (user_put(ptid_addr, task->pid))
-            goto fail_free_sighand;
     if (flags & CLONE_CHILD_CLEARTID_)
         task->clear_tid = ctid_addr;
     task->exit_signal = flags & CSIGNAL_;
@@ -297,6 +299,42 @@ fail_free_files:
 fail_free_mem:
     mm_release(task->mm);
     return err;
+}
+
+// Undoes copy_task for a task whose thread did not start (task_start
+// failed): it leaves its group's list of threads, a new process's group is
+// taken down as reaping one does, and what it holds of its parent's, its
+// memory, files, fs and signal handlers (copied, or shared and retained), is
+// let go; task_destroy frees the rest. task_destroy alone left them all: a
+// failed fork's copies of the parent's files stayed open (a pipe's reader
+// never saw EOF), and the task stayed in the list of threads, its parent's
+// for a thread, read again once freed: by the next thread to exit
+// (delete_timers_if_last; AddressSanitizer's heap-use-after-free), and by
+// rusage_of_group, signals and exit_group. Under pids_lock throughout: /proc
+// finds it whole or not at all.
+static void uncopy_task(struct task *task, dword_t flags) {
+    struct fdtable *files = task->files;
+    struct fs_info *fs = task->fs;
+    struct mm *mm = task->mm;
+    lock(&pids_lock);
+    struct tgroup *group = task->group;
+    lock(&group->lock);
+    list_remove(&task->group_links);
+    unlock(&group->lock);
+    if (!(flags & CLONE_THREAD_)) {
+        cond_destroy(&group->child_exit);
+        cond_destroy(&group->cpu_itimer_armed);
+        task_leave_session(task);
+        list_remove(&group->pgroup);
+        free(group);
+        atomic_fetch_sub_explicit(&ish_live_guest_procs, 1, memory_order_relaxed);   // [T-ish-freeze-watch]
+    }
+    sighand_release(task->sighand);
+    task_destroy(task);
+    unlock(&pids_lock);
+    fs_info_release(fs);
+    fdtable_release(files);
+    mm_release(mm);
 }
 
 static _Atomic uint64_t st_clones, st_clone_threads, st_clone_ns, st_clone_max_ns, st_start_ns, st_start_max_ns;
@@ -403,9 +441,7 @@ dword_t sys_clone(dword_t flags, addr_t stack, addr_t ptid, addr_t tls, addr_t c
             unlock(&task->general_lock);
             cond_destroy(&vfork.cond);
         }
-        lock(&pids_lock);
-        task_destroy(task);
-        unlock(&pids_lock);
+        uncopy_task(task, flags);
         return start_err;
     }
 

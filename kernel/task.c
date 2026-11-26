@@ -335,7 +335,23 @@ __attribute__((constructor)) static void create_attr(void) {
         die("pthread_attr_setstacksize(%zu): %s", TASK_STACK_SIZE, strerror(err));
 }
 
+// ISH_TASK_START_FAIL=<n>: every n-th task_start (init's is the first)
+// fails as with no host thread to give (EAGAIN), for what follows a failed
+// start to be tested (regress_clone_start_fail)
+static unsigned task_start_fail_every(void) {
+    static int every = -1;
+    if (every < 0) {
+        const char *e = getenv("ISH_TASK_START_FAIL");
+        every = e != NULL ? atoi(e) : 0;
+    }
+    return (unsigned) every;
+}
+
 int task_start(struct task *task) {
+    static _Atomic unsigned starts;
+    unsigned every = task_start_fail_every();
+    if (every != 0 && (atomic_fetch_add(&starts, 1) + 1) % every == 0)
+        return _EAGAIN;
     // pthread_create returns an errno directly and never -1, so the old
     // "< 0" test never fired and a failure fell through to a task whose
     // thread was never started. Under thread-stack exhaustion (EAGAIN) that
