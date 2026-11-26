@@ -304,13 +304,17 @@ else
     check_exit() { # want, then the command to run as init
         local want=$1
         shift
-        timeout 20 "$ISH" "$MOUNT_FLAG" "$ROOTFS" "$@" > /dev/null 2>&1
+        # what iSH itself says, shown if its exit is not the one wanted (on
+        # macOS 27 it died of SIGTRAP, 133, with nothing to say why)
+        local said
+        said=$(timeout 20 "$ISH" "$MOUNT_FLAG" "$ROOTFS" "$@" 2>&1 > /dev/null)
         local got=$?
         if [ "$got" = "$want" ]; then
             exit_passed=$((exit_passed + 1))
         else
             exit_failed=$((exit_failed + 1))
             echo "FAIL $*: iSH exited $got, expected $want"
+            [ -z "$said" ] || printf '%s\n' "$said" | tail -n 20 | sed 's/^/    iSH: /'
         fi
     }
     check_exit 3 /bin/sh -c 'exit 3'

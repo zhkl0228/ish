@@ -64,6 +64,17 @@ jobs:
           path: ${{ runner.temp }}/guest-programs
       - name: Build and test
         run: tests/regress/ci-mac.sh "$RUNNER_TEMP/ci" "$RUNNER_TEMP/guest-programs"
+      - name: Keep iSH's crash reports
+        # macOS writes one for each iSH that dies of a signal (the trap of a
+        # pthread call's error, util/sync.h): its threads' stacks, iSH's
+        # symbols in them
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-regress-crash-reports
+          path: ~/Library/Logs/DiagnosticReports/ish*
+          retention-days: 7
+          if-no-files-found: warn
 
   mac:
     # The app as it is built for a phone (archived, unsigned) and its ipa. On
