@@ -122,6 +122,17 @@
         }
       }
     },
+    "Escape" : {
+      "comment" : "The column's escape key, read aloud",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esc 键"
+          }
+        }
+      }
+    },
     "Fair" : {
       "comment" : "Heat: ProcessInfo's thermal state, slightly warm",
       "localizations" : {
@@ -250,6 +261,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "显示 CPU、内存和温度的详情。"
+          }
+        }
+      }
+    },
+    "Slash" : {
+      "comment" : "The column's slash key, read aloud",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "斜杠"
           }
         }
       }

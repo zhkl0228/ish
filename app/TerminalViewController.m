@@ -92,9 +92,10 @@
 // indicator (aboveKeys: applyBottomPad)
 @property NSLayoutConstraint *monitorColumnTop;
 @property NSLayoutConstraint *monitorColumnAboveKeys;
-// Tab, up, down and return at the bottom of the column, while it is shown and
-// the keyboard is down (updateColumnKeys): what a program's menus take
-// (claude's), without the keyboard over the terminal. The meters stay above
+// Esc, tab, /, up, down and return at the bottom of the column, while it is
+// shown and the keyboard is down (updateColumnKeys): what a program's menus
+// take (claude's: / for its commands, esc to leave one), without the keyboard
+// over the terminal. The meters stay above
 // them while they are shown (aboveColumnKeys).
 @property UIStackView *columnKeys;
 @property NSLayoutConstraint *monitorColumnAboveColumnKeys;
@@ -1241,13 +1242,19 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
 
 #pragma mark The column's keys
 
-// Tab (held: shift-tab), up and down (held: repeating) and return, as the
-// bar's keys send them, one over another at the bottom of the column, under
-// the meters' middle, above the home indicator
+// Esc, tab (held: shift-tab), /, up and down (held: repeating) and return, as
+// the bar's keys send them and in its order, one over another at the bottom of
+// the column, under the meters' middle, above the home indicator. Esc and /
+// are named as on the bar; / is only /, its held symbols the bar's (their
+// popup opens over the bar's row).
 - (void)addColumnKeys {
+    BarButton *escape = [self columnKeyNamed:@"esc" name:NSLocalizedString(@"Escape", @"The column's escape key, read aloud")];
+    [escape addTarget:self action:@selector(pressEscape:) forControlEvents:UIControlEventTouchUpInside];
     BarButton *tab = [self columnKey:@"arrow.right.to.line" name:NSLocalizedString(@"Tab", @"The column's tab key, read aloud")];
     [tab addTarget:self action:@selector(pressTab:) forControlEvents:UIControlEventTouchUpInside];
     [tab addGestureRecognizer:[[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(tabKeyHeld:)]];
+    BarButton *slash = [self columnKeyNamed:kSymbolKeySymbol name:NSLocalizedString(@"Slash", @"The column's slash key, read aloud")];
+    [slash addTarget:self action:@selector(pressSymbolKey:) forControlEvents:UIControlEventTouchUpInside];
     BarButton *up = [self columnKey:@"chevron.up" name:NSLocalizedString(@"Up", @"The column's up arrow key, read aloud")];
     up.tag = 1; // arrowKeyFinals
     BarButton *down = [self columnKey:@"chevron.down" name:NSLocalizedString(@"Down", @"The column's down arrow key, read aloud")];
@@ -1260,9 +1267,9 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
     BarButton *enter = [self columnKey:@"return" name:NSLocalizedString(@"Return", @"The column's return key, read aloud")];
     [enter addTarget:self action:@selector(pressReturn:) forControlEvents:UIControlEventTouchUpInside];
 
-    UIStackView *keys = [[UIStackView alloc] initWithArrangedSubviews:@[tab, up, down, enter]];
+    UIStackView *keys = [[UIStackView alloc] initWithArrangedSubviews:@[escape, tab, slash, up, down, enter]];
     keys.axis = UILayoutConstraintAxisVertical;
-    keys.spacing = 6;
+    keys.spacing = 8;
     keys.translatesAutoresizingMaskIntoConstraints = NO;
     keys.hidden = YES;
     [self.view addSubview:keys];
@@ -1277,17 +1284,30 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
 }
 
 - (BarButton *)columnKey:(NSString *)symbol name:(NSString *)name {
-    BarButton *key = [[BarButton alloc] initWithFrame:CGRectZero];
-    key.translatesAutoresizingMaskIntoConstraints = NO;
+    BarButton *key = [self columnKeyNamed:nil name:name];
     [key setImage:[UIImage systemImageNamed:symbol] forState:UIControlStateNormal];
     [key setPreferredSymbolConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:15
                                                                                          weight:UIImageSymbolWeightMedium]
                          forImageInState:UIControlStateNormal];
+    return key;
+}
+
+// A key with its name on it (title, as the bar's esc and /), or nil: drawn
+- (BarButton *)columnKeyNamed:(NSString *)title name:(NSString *)name {
+    BarButton *key = [[BarButton alloc] initWithFrame:CGRectZero];
+    key.translatesAutoresizingMaskIntoConstraints = NO;
+    if (title != nil) {
+        [key setTitle:title forState:UIControlStateNormal];
+        key.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
+    }
     key.accessibilityLabel = name;
     [key addTarget:self action:@selector(columnKeyDown:) forControlEvents:UIControlEventTouchDown];
+    // Round, as the meters over them are rings: 40 points across, a filled
+    // circle looking as large as their 44-point rings
+    key.layer.cornerRadius = 20;
     [NSLayoutConstraint activateConstraints:@[
-        [key.widthAnchor constraintEqualToConstant:44],
-        [key.heightAnchor constraintEqualToConstant:34],
+        [key.widthAnchor constraintEqualToConstant:40],
+        [key.heightAnchor constraintEqualToConstant:40],
     ]];
     return key;
 }
