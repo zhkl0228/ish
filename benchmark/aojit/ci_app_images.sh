@@ -8,9 +8,9 @@
 #   - npm has another version of Claude Code or Kimi Code: ish-install installs
 #     the versions the images were recorded on, so recording the new ones and
 #     publishing them (with the versions) is what updates the app's
-#   - Alpine has another build of nodejs, openjdk25-jdk, maven, python3 or
-#     openssh-client-default (ssh), which ish-install and apk install from the
-#     repositories as they are that day
+#   - Alpine has another build of nodejs, openjdk25-jdk, maven, python3,
+#     openssh-client-default (ssh), git or github-cli (gh), which ish-install
+#     and apk install from the repositories as they are that day
 #   - what they are recorded from changed: a workload, the list of images,
 #     the recording scripts or gen.py (recording_inputs.py), as when Claude
 #     Code's workload came to run it with JavaScriptCore's JIT off
@@ -61,9 +61,9 @@ abi=$(ISH_JIT_PIC=1 guest /bin/cat /proc/ish/jit | grep -o 'abi [0-9a-f]*' | cut
 claude=$(npm view @anthropic-ai/claude-code version)
 kimi=$(npm view @moonshot-ai/kimi-code version)
 guest /sbin/apk update > /dev/null
-apk=$(guest /sbin/apk search -x nodejs openjdk25-jdk maven python3 openssh-client-default | python3 -c "
+apk=$(guest /sbin/apk search -x nodejs openjdk25-jdk maven python3 openssh-client-default git github-cli | python3 -c "
 import re, sys
-want = {'nodejs', 'openjdk25-jdk', 'maven', 'python3', 'openssh-client-default'}
+want = {'nodejs', 'openjdk25-jdk', 'maven', 'python3', 'openssh-client-default', 'git', 'github-cli'}
 found = {}
 for line in sys.stdin:
     m = re.match(r'(.+?)-(\d[^-]*-r\d+)$', line.strip())
@@ -82,7 +82,8 @@ r = d['recorded']
 print(' '.join(['abi=' + d['abi'], '@anthropic-ai/claude-code=' + r['npm']['@anthropic-ai/claude-code'],
                 '@moonshot-ai/kimi-code=' + r['npm']['@moonshot-ai/kimi-code']] +
                ['%s=%s' % (p, r['apk'].get(p, 'none'))
-                for p in sorted(['nodejs', 'openjdk25-jdk', 'maven', 'python3', 'openssh-client-default'])] +
+                for p in sorted(['nodejs', 'openjdk25-jdk', 'maven', 'python3', 'openssh-client-default', 'git',
+                                 'github-cli'])] +
                ['inputs=' + r.get('inputs', 'none')]))")
 echo "now:      $now"
 echo "recorded: $recorded"

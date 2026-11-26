@@ -2,12 +2,17 @@
   "_comment": [
     "AOT images of what the app's users run most: Java and Maven (libjvm.so), Kimi Code (node),",
     "Claude Code (claude.exe, Bun) and musl under all of them, and what their sessions run most:",
-    "bash and python3 (their workloads 2.3 and 4.2 times faster with the images; git's was no",
-    "faster, so it has none). Recorded by record_app_images.sh on the root the app ships, with the",
+    "bash and python3 (their workloads 2.3 and 4.2 times faster with the images); git and gh, which",
+    "Claude Code's sessions run often: their workloads were no faster with images, but with the",
+    "built-in JIT their code went into its code region, more of it than any other program's, where an",
+    "image keeps it out (guest/app/git_train.sh, guest/app/gh_train.sh). Recorded by",
+    "record_app_images.sh on the root the app ships, with the",
     "packages below at the versions apk and npm give that day: an image serves the module it was",
     "recorded from (its ELF build-id), so record again after the app's root or those packages",
-    "change (Claude Code updates itself often). node is recorded in the mode the app runs it in",
-    "with its image, the interpreter (guest/kimi/kimi_train.sh). claude.exe is recorded with",
+    "change (Claude Code updates itself often). node is recorded in both the modes the app runs it",
+    "in with its image (guest/kimi/kimi_image.sh): the interpreter, the JIT not translating, and V8's",
+    "tiers, the JIT translating with room in its code region, where V8's compilers run too (kernel/",
+    "exec.c). claude.exe is recorded with",
     "JavaScriptCore's JIT off, as the app's claude-wrapper runs it, in print mode, a session of",
     "tools and a long session on its interactive screen (guest/claude/claude_image.sh): the app",
     "runs it with no executable memory, where a block the image lacks runs through the gadgets.",
@@ -18,20 +23,22 @@
   ],
   "packages": {
     "apk": ["python3", "nodejs", "npm", "openjdk25-jdk", "maven", "openssh-client", "openssh-keygen", "openssl",
-            "py3-requests"],
+            "py3-requests", "git", "github-cli"],
     "npm": ["@moonshot-ai/kimi-code"],
     "npm_prefix": {"/opt/claude-code": ["@anthropic-ai/claude-code"]}
   },
   "images": {
     "musl": {"module": "ld-musl", "workload": "app/musl_train.sh"},
-    "node": {"module": "/usr/bin/node", "workload": "kimi/kimi_train.sh"},
+    "node": {"module": "/usr/bin/node", "workload": "kimi/kimi_image.sh"},
     "jvm": {"module": "libjvm.so", "workload": "java/java_train.sh"},
     "claude": {"module": "claude.exe", "workload": "claude/claude_image.sh"},
     "bash": {"module": "/bin/bash", "workload": "app/bash_train.sh"},
     "python": {"module": "libpython3", "workload": "app/python_train.sh"},
     "busybox": {"module": "/bin/busybox", "workload": "busybox/busybox_train.sh"},
     "ssh": {"module": "/usr/bin/ssh", "workload": "ssh/ssh_train.sh"},
-    "crypto": {"module": "libcrypto.so", "workload": "app/crypto_train.sh"}
+    "crypto": {"module": "libcrypto.so", "workload": "app/crypto_train.sh"},
+    "git": {"module": "/usr/bin/git", "workload": "app/git_train.sh"},
+    "gh": {"module": "/usr/bin/gh", "workload": "app/gh_train.sh"}
   },
   "sshd": {
     "apk": ["openssh-server", "openssh-sftp-server", "openssh-keygen"],

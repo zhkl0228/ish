@@ -55,9 +55,10 @@ STAGE = os.path.join(REPO, 'build', 'aot-publish')
 BASE_URL = 'https://hk.gzmtx.cn/ish-aot'
 HOST = 'ish-aot@hk.gzmtx.cn'
 # The apk packages whose builds the images serve (musl under all of them; bash, busybox and
-# libcrypto3 with the root, python3 from ish-install, openssh-client-default's ssh from apk)
+# libcrypto3 with the root, python3 from ish-install, openssh-client-default's ssh, git and
+# github-cli's gh from apk)
 APK = ['musl', 'nodejs', 'openjdk25-jdk', 'maven', 'bash', 'python3', 'busybox', 'openssh-client-default',
-       'libcrypto3']
+       'libcrypto3', 'git', 'github-cli']
 # Of them, those of whose code an image is: maven is Java's, which the JVM runs (openjdk25-jdk's
 # libjvm, whose image it is)
 APK_SERVED = [p for p in APK if p != 'maven']
