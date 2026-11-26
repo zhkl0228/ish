@@ -46,6 +46,13 @@ static NSString *ThermalMeaning(NSProcessInfoThermalState state) {
 @property UILabel *brake;
 @property UILabel *heatValue;
 @property UILabel *heatMeaning;
+// The JIT's, shown while it translates
+@property UILabel *jitValue;
+@property UIView *jitHeading;
+@property UILabel *regionAmount;
+@property MeterBar *regionBar;
+@property UIView *regionBarRow;
+@property UILabel *regionFull;
 
 @end
 
@@ -157,6 +164,35 @@ static NSString *ThermalMeaning(NSProcessInfoThermalState state) {
     // with no sign of how (Settings and the View menu do it)
     self.heatValue = [self addHeading:NSLocalizedString(@"Heat", @"Meter details: the heat's heading")];
     self.heatMeaning = [self addDetail];
+    [stack setCustomSpacing:16 afterView:self.heatMeaning];
+
+    // The JIT, while it translates (showReading:): its share of native code,
+    // as the column's gauge has it, and its code region, which fills as it
+    // translates and is never emptied; red once full, what is compiled since
+    // then running as gadgets, unless an image has it
+    self.jitValue = [self addHeading:@"JIT"];
+    self.jitHeading = self.jitValue.superview;
+    self.regionAmount = [self addDetail];
+    MeterBar *regionBar = [MeterBar new];
+    regionBar.horizontal = YES;
+    regionBar.backgroundColor = UIColor.tertiarySystemFillColor;
+    regionBar.translatesAutoresizingMaskIntoConstraints = NO;
+    UIView *regionBarRow = [UIView new];
+    [regionBarRow addSubview:regionBar];
+    [NSLayoutConstraint activateConstraints:@[
+        [regionBar.leadingAnchor constraintEqualToAnchor:regionBarRow.leadingAnchor],
+        [regionBar.trailingAnchor constraintEqualToAnchor:regionBarRow.trailingAnchor],
+        [regionBar.topAnchor constraintEqualToAnchor:regionBarRow.topAnchor constant:6],
+        [regionBar.bottomAnchor constraintEqualToAnchor:regionBarRow.bottomAnchor constant:-6],
+        [regionBar.heightAnchor constraintEqualToConstant:6],
+    ]];
+    [stack addArrangedSubview:regionBarRow];
+    self.regionBar = regionBar;
+    self.regionBarRow = regionBarRow;
+    self.regionFull = [self addDetail];
+    self.regionFull.text = NSLocalizedString(@"Full: what is compiled since runs as gadgets, unless an image has it",
+                                             @"Meter details: the JIT's code region is full");
+    self.regionFull.textColor = UIColor.systemRedColor;
 
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(samplerDidRead:)
                                                name:MonitorSamplerDidReadNotification object:self.sampler];
@@ -246,6 +282,22 @@ static NSString *ThermalMeaning(NSProcessInfoThermalState state) {
     self.heatValue.text = MonitorThermalName(reading.thermalState);
     self.heatValue.textColor = MonitorThermalColor(reading.thermalState, UIColor.labelColor);
     self.heatMeaning.text = ThermalMeaning(reading.thermalState);
+
+    BOOL jit = reading.jitTranslating;
+    for (UIView *view in @[self.jitHeading, self.regionAmount, self.regionBarRow]) {
+        if (view.hidden == jit)
+            view.hidden = !jit;
+    }
+    self.regionFull.hidden = !(jit && reading.codeRegionFull);
+    if (jit) {
+        self.jitValue.text = reading.nativeKnown ? Percent(reading.nativeShare) : @"–";
+        self.regionAmount.text = [NSString stringWithFormat:NSLocalizedString(@"Code region: %1$@ of %2$@",
+                                                                              @"Meter details: the JIT's code region used, of its size"),
+                                  Bytes(reading.codeRegionUsed), Bytes(reading.codeRegionSize)];
+        self.regionBar.fraction = (double) reading.codeRegionUsed / reading.codeRegionSize;
+        self.regionBar.fill.backgroundColor = reading.codeRegionFull ? UIColor.systemRedColor
+                                                                     : [UIColor.labelColor colorWithAlphaComponent:0.55];
+    }
 
     [self updateSize];
 }

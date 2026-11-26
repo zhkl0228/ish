@@ -78,6 +78,17 @@
         }
       }
     },
+    "Code region: %1$@ of %2$@" : {
+      "comment" : "Meter details: the JIT's code region used, of its size",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "代码区：已用 %1$@，共 %2$@"
+          }
+        }
+      }
+    },
     "Critical" : {
       "comment" : "Heat: ProcessInfo's thermal state, too hot",
       "localizations" : {
@@ -118,6 +129,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "偏热"
+          }
+        }
+      }
+    },
+    "Full: what is compiled since runs as gadgets, unless an image has it" : {
+      "comment" : "Meter details: the JIT's code region is full",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已满：此后编译的代码以 gadget 方式运行（有 AOT 镜像的除外）"
           }
         }
       }

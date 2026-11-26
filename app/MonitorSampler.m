@@ -11,6 +11,7 @@
 // is for the app: GuestARM64.xcconfig's ISH_ENABLE_JIT)
 void jit_block_counts(uint64_t *blocks, uint64_t *native);
 bool jit_region_is_full(void);
+bool jit_region_usage(size_t *used, size_t *size);
 
 NSNotificationName const MonitorSamplerDidReadNotification = @"MonitorSamplerDidReadNotification";
 const NSUInteger kMonitorHistoryLength = 60;
@@ -36,6 +37,9 @@ const NSUInteger kMonitorHistoryLength = 60;
 @property BOOL nativeKnown;
 @property double nativeShare;
 @property BOOL codeRegionFull;
+@property BOOL jitTranslating;
+@property uint64_t codeRegionUsed;
+@property uint64_t codeRegionSize;
 @end
 
 @implementation MonitorReading
@@ -202,6 +206,10 @@ static struct ticks_between TicksBetween(struct cpu_usage last, struct cpu_usage
     reading.nativeKnown = _nativeKnown;
     reading.nativeShare = _nativeShare;
     reading.codeRegionFull = jit_region_is_full();
+    size_t used, size;
+    reading.jitTranslating = jit_region_usage(&used, &size);
+    reading.codeRegionUsed = used;
+    reading.codeRegionSize = size;
 
     _reading = reading;
     [NSNotificationCenter.defaultCenter postNotificationName:MonitorSamplerDidReadNotification object:self];

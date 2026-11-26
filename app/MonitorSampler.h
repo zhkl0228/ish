@@ -51,6 +51,12 @@ NS_ASSUME_NONNULL_BEGIN
 // The JIT's code region has filled up (jit_region_is_full): blocks compiled
 // since run as gadgets, unless an AOT image has them
 @property (readonly) BOOL codeRegionFull;
+// The JIT translates (it has its code region), and what its code takes of the
+// region, all of it once full, of its size (jit_region_usage): the details
+// show it. All 0 while it does not.
+@property (readonly) BOOL jitTranslating;
+@property (readonly) uint64_t codeRegionUsed;
+@property (readonly) uint64_t codeRegionSize;
 
 @end
 
