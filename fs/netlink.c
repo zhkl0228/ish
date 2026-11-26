@@ -16,10 +16,12 @@
 #include <net/if_arp.h>
 #endif
 #include <netinet/in.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <time.h>
 
 #include "fs/netlink.h"
 
@@ -374,6 +376,43 @@ void netlink_host_free(struct netlink_host_link *links, struct netlink_host_addr
     free(addrs);
 }
 
+// The answers' snapshot, taken once for requests a moment apart. A burst of
+// them (Go's net.Interfaces asks for the links, then the addresses; a program
+// sends dumps it reads later) cost a getifaddrs() each, no cheap call: an
+// iSH's, under an iSH, asks its host's netlink stub, and a dump took 70 ms
+// there (regress_netlink_stub's 400 unread ones, 30 s). The counters a link's dump has (ip -s link) may
+// be that moment old; /proc/net/dev's, which rates are taken from, are not
+// (they take their own snapshot).
+#define ANSWER_SNAPSHOT_MS 1000
+static pthread_mutex_t answer_snapshot_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct netlink_host_link *answer_links;
+static struct netlink_host_addr *answer_addrs;
+static size_t answer_n_links, answer_n_addrs;
+static uint64_t answer_taken_ms;
+static bool answer_taken;
+
+// The answers' snapshot, a copy (free with netlink_host_free)
+static void answer_snapshot(struct netlink_host_link **links, size_t *n_links,
+                            struct netlink_host_addr **addrs, size_t *n_addrs) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    uint64_t now_ms = (uint64_t) now.tv_sec * 1000 + (uint64_t) now.tv_nsec / 1000000;
+    pthread_mutex_lock(&answer_snapshot_lock);
+    if (!answer_taken || now_ms - answer_taken_ms >= ANSWER_SNAPSHOT_MS) {
+        netlink_host_free(answer_links, answer_addrs);
+        netlink_host_snapshot(&answer_links, &answer_n_links, &answer_addrs, &answer_n_addrs);
+        answer_taken_ms = now_ms;
+        answer_taken = true;
+    }
+    *n_links = answer_n_links;
+    *n_addrs = answer_n_addrs;
+    *links = malloc(answer_n_links * sizeof(**links));
+    *addrs = malloc(answer_n_addrs * sizeof(**addrs));
+    memcpy(*links, answer_links, answer_n_links * sizeof(**links));
+    memcpy(*addrs, answer_addrs, answer_n_addrs * sizeof(**addrs));
+    pthread_mutex_unlock(&answer_snapshot_lock);
+}
+
 // ---- building messages ----------------------------------------------------
 
 struct msg {
@@ -542,7 +581,7 @@ static int answer_getlink(const struct nlmsghdr_l *h, netlink_stub_emit_t emit, 
     struct netlink_host_link *links;
     struct netlink_host_addr *addrs;
     size_t n_links, n_addrs;
-    netlink_host_snapshot(&links, &n_links, &addrs, &n_addrs);
+    answer_snapshot(&links, &n_links, &addrs, &n_addrs);
     int err = 0;
     bool has_body = h->nlmsg_len >= sizeof(*h) + sizeof(struct ifinfomsg_l);
     int32_t want_index = has_body ? ((const struct ifinfomsg_l *) (h + 1))->ifi_index : 0;
@@ -576,7 +615,7 @@ static int answer_getaddr(const struct nlmsghdr_l *h, netlink_stub_emit_t emit, 
     struct netlink_host_link *links;
     struct netlink_host_addr *addrs;
     size_t n_links, n_addrs;
-    netlink_host_snapshot(&links, &n_links, &addrs, &n_addrs);
+    answer_snapshot(&links, &n_links, &addrs, &n_addrs);
     // The first byte after the header is the family in every request
     // shape (ifaddrmsg, rtgenmsg, ifinfomsg); 0 asks for both.
     uint8_t want = h->nlmsg_len > sizeof(*h) ? *(const uint8_t *) (h + 1) : 0;
