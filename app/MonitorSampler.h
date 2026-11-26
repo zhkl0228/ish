@@ -48,8 +48,9 @@ NS_ASSUME_NONNULL_BEGIN
 // were compiled; held while none are, as code run before is run on.
 @property (readonly) BOOL nativeKnown;
 @property (readonly) double nativeShare;
-// The JIT's code region has filled up (jit_region_is_full): blocks compiled
-// since run as gadgets, unless an AOT image has them
+// The JIT's code region has filled up (jit_region_is_full): till it is
+// flushed, a moment, blocks compiled run as gadgets unless an AOT image has
+// them; then every block is translated again once hot
 @property (readonly) BOOL codeRegionFull;
 // The JIT translates (it has its code region), and what its code takes of the
 // region, all of it once full, of its size (jit_region_usage): the details

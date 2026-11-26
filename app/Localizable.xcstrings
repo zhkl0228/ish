@@ -144,13 +144,13 @@
         }
       }
     },
-    "Full: what is compiled since runs as gadgets, unless an image has it" : {
-      "comment" : "Meter details: the JIT's code region is full",
+    "Full: being flushed; blocks are translated again once hot" : {
+      "comment" : "Meter details: the JIT's code region is full, and is being flushed",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已满：此后编译的代码以 gadget 方式运行（有 AOT 镜像的除外）"
+            "value" : "已满：正在清空，代码再次变热后会重新翻译"
           }
         }
       }

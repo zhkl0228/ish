@@ -1011,6 +1011,9 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
     // of its keys esc and tab, under them; the bar has them all
     self.keyboardUp = pad >= 100;
     self.monitorColumn.keyboardUp = self.keyboardUp;
+    // and the meters' details, open, the CPUs and the memory only then
+    if ([self.presentedViewController isKindOfClass:MonitorDetailViewController.class])
+        ((MonitorDetailViewController *) self.presentedViewController).keyboardUp = self.keyboardUp;
     [self updateColumnKeys];
     // Nothing to move: no layout, which would lay out the keyboard's window
     if (![self applyBottomPad])
@@ -1833,6 +1836,7 @@ static NSString *ShellQuoted(NSString *string) {
     MonitorDetailViewController *details = [[MonitorDetailViewController alloc] initWithSampler:self.monitorSampler
                                                                                      sourceView:meters
                                                                                      sourceRect:meters.metersFrame];
+    details.keyboardUp = self.keyboardUp;
     [self presentViewController:details animated:YES completion:nil];
 }
 

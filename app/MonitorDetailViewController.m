@@ -45,6 +45,7 @@ static NSString *ThermalMeaning(NSProcessInfoThermalState state) {
 @property UILabel *memoryLeft;
 @property UILabel *brake;
 @property UILabel *heatValue;
+@property UIView *heatHeading;
 @property UILabel *heatMeaning;
 // The JIT's, shown while it translates
 @property UILabel *jitValue;
@@ -160,12 +161,6 @@ static NSString *ThermalMeaning(NSProcessInfoThermalState state) {
                                         @"Meter details: the kernel's memory governor refuses new memory");
     self.brake.textColor = UIColor.systemRedColor;
 
-    // No button to turn the meters off: a tap that missed one turned them off
-    // with no sign of how (Settings and the View menu do it)
-    self.heatValue = [self addHeading:NSLocalizedString(@"Heat", @"Meter details: the heat's heading")];
-    self.heatMeaning = [self addDetail];
-    [stack setCustomSpacing:16 afterView:self.heatMeaning];
-
     // The JIT, while it translates (showReading:): its share of native code,
     // as the column's gauge has it, and its code region, which fills as it
     // translates and is never emptied; red once full, what is compiled since
@@ -190,9 +185,15 @@ static NSString *ThermalMeaning(NSProcessInfoThermalState state) {
     self.regionBar = regionBar;
     self.regionBarRow = regionBarRow;
     self.regionFull = [self addDetail];
-    self.regionFull.text = NSLocalizedString(@"Full: what is compiled since runs as gadgets, unless an image has it",
-                                             @"Meter details: the JIT's code region is full");
+    self.regionFull.text = NSLocalizedString(@"Full: being flushed; blocks are translated again once hot",
+                                             @"Meter details: the JIT's code region is full, and is being flushed");
     self.regionFull.textColor = UIColor.systemRedColor;
+
+    // No button to turn the meters off: a tap that missed one turned them off
+    // with no sign of how (Settings and the View menu do it)
+    self.heatValue = [self addHeading:NSLocalizedString(@"Heat", @"Meter details: the heat's heading")];
+    self.heatHeading = self.heatValue.superview;
+    self.heatMeaning = [self addDetail];
 
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(samplerDidRead:)
                                                name:MonitorSamplerDidReadNotification object:self.sampler];
@@ -273,22 +274,32 @@ static NSString *ThermalMeaning(NSProcessInfoThermalState state) {
                                                                         @"Meter details: memory left under the app's limit"),
                             Bytes(reading.memoryTotal - reading.memoryUsed)];
     self.brake.hidden = !reading.memoryBraked;
-    // the heat's heading 16 under the memory's last line shown (a hidden
-    // line's spacing is not the stack's)
+    // the next heading 16 under the memory's last line shown (a hidden line's
+    // spacing is not the stack's)
     UIView *last = !self.brake.hidden ? self.brake : !self.memoryLeft.hidden ? self.memoryLeft : self.memoryBarRow;
     for (UIView *view in @[self.memoryBarRow, self.memoryLeft, self.brake])
         [self.stack setCustomSpacing:view == last ? 16 : UIStackViewSpacingUseDefault afterView:view];
 
-    self.heatValue.text = MonitorThermalName(reading.thermalState);
-    self.heatValue.textColor = MonitorThermalColor(reading.thermalState, UIColor.labelColor);
-    self.heatMeaning.text = ThermalMeaning(reading.thermalState);
-
-    BOOL jit = reading.jitTranslating;
+    // the JIT while it translates, and the heat, but with the keyboard up
+    BOOL jit = reading.jitTranslating && !self.keyboardUp;
     for (UIView *view in @[self.jitHeading, self.regionAmount, self.regionBarRow]) {
         if (view.hidden == jit)
             view.hidden = !jit;
     }
-    self.regionFull.hidden = !(jit && reading.codeRegionFull);
+    BOOL full = jit && reading.codeRegionFull;
+    if (self.regionFull.hidden == full)
+        self.regionFull.hidden = !full;
+    // the heat's heading 16 under the JIT's last line shown
+    [self.stack setCustomSpacing:full ? UIStackViewSpacingUseDefault : 16 afterView:self.regionBarRow];
+    [self.stack setCustomSpacing:16 afterView:self.regionFull];
+    BOOL heat = !self.keyboardUp;
+    for (UIView *view in @[self.heatHeading, self.heatMeaning]) {
+        if (view.hidden == heat)
+            view.hidden = !heat;
+    }
+    self.heatValue.text = MonitorThermalName(reading.thermalState);
+    self.heatValue.textColor = MonitorThermalColor(reading.thermalState, UIColor.labelColor);
+    self.heatMeaning.text = ThermalMeaning(reading.thermalState);
     if (jit) {
         self.jitValue.text = reading.nativeKnown ? Percent(reading.nativeShare) : @"–";
         self.regionAmount.text = [NSString stringWithFormat:NSLocalizedString(@"Code region: %1$@ of %2$@",
@@ -300,6 +311,14 @@ static NSString *ThermalMeaning(NSProcessInfoThermalState state) {
     }
 
     [self updateSize];
+}
+
+- (void)setKeyboardUp:(BOOL)keyboardUp {
+    if (_keyboardUp == keyboardUp)
+        return;
+    _keyboardUp = keyboardUp;
+    if (self.isViewLoaded)
+        [self showReading:self.sampler.reading];
 }
 
 // As high as what it shows: the brake's line, or the heat's, may take two

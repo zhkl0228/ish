@@ -291,9 +291,9 @@ static UIColor *GaugeColor(double fraction) {
     UIColor *cpu = GaugeColor(reading.cpuBusy);
     self.cpuGauge.color = cpu;
     self.memoryGauge.color = GaugeColor(reading.memoryFraction);
-    // Green however full: more of it native is better, not a load. Red once the
-    // JIT's code region is full: what is compiled since runs as gadgets, unless
-    // an AOT image has it, and the share falls as new programs run.
+    // Green however full: more of it native is better, not a load. Red while
+    // the JIT's code region is full, till its flush (a moment): what is
+    // compiled then runs as gadgets, unless an AOT image has it.
     self.nativeGauge.color = reading.codeRegionFull ? UIColor.systemRedColor : UIColor.systemGreenColor;
     for (MonitorGaugeView *gauge in @[self.cpuGauge, self.memoryGauge, self.nativeGauge]) {
         gauge.trackColor = track;
