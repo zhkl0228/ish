@@ -15,12 +15,18 @@ static void proc_pid_getname(struct proc_entry *entry, char *buf) {
     sprintf(buf, "%d", entry->pid);
 }
 
+// The task an entry is of, with pids_lock held (which keeps an exited one from
+// being reaped and freed), or NULL. One that has exited but is not gone is
+// too, as Linux shows it (state Z): a zombie its parent has not waited for,
+// and a leader that left before its process's other threads. /proc had
+// neither: ps and top showed no <defunct>, and a process whose main thread
+// had called pthread_exit had no stat (ESRCH) while its threads ran. Such a
+// task's memory, files, fs and signal handlers are gone (NULL), and so may a
+// live one's files and fs be as it exits: each file says what Linux says
+// without them, mostly nothing.
 static struct task *proc_get_task(struct proc_entry *entry) {
     lock(&pids_lock);
-    struct task *task = pid_get_task(entry->pid);
-    // Also reject tasks that are mid-exit: sighand/group may already be freed.
-    if (task != NULL && (task->exiting || task->sighand == NULL || task->group == NULL))
-        task = NULL;
+    struct task *task = pid_get_task_zombie(entry->pid);
     if (task == NULL)
         unlock(&pids_lock);
     return task;
@@ -59,13 +65,35 @@ static void task_mem_pages(struct task *task, unsigned long *total, unsigned lon
 // it is taken for sleeping (S), as near as iSH can tell; the task reading this
 // is running.
 static char task_state(struct task *task) {
-    if (task->zombie)
+    if (task->zombie || task->exiting)
         return 'Z';
     if (task->group->stopped)
         return 'T';
     if (task != current && atomic_load(&task->in_syscall))
         return 'S';
     return 'R';
+}
+
+// The process's threads, as Linux counts them: a leader that has exited, which
+// is no longer on the list, until the process is gone
+static long group_threads(struct tgroup *group) {
+    return list_size(&group->threads) + (group->leader->exiting ? 1 : 0);
+}
+
+// The signals ignored and handled, as bits (signal n is bit n - 1), of those
+// below max; none once the task has exited and let its handlers go
+static void signal_dispositions(struct task *task, int max, uint64_t *ignored, uint64_t *caught) {
+    *ignored = *caught = 0;
+    if (task->sighand == NULL)
+        return;
+    lock(&task->sighand->lock);
+    for (int i = 1; i < max; i++) {
+        if (task->sighand->action[i].handler == SIG_IGN_)
+            *ignored |= 1ull << (i - 1);
+        else if (task->sighand->action[i].handler != SIG_DFL_)
+            *caught |= 1ull << (i - 1);
+    }
+    unlock(&task->sighand->lock);
 }
 
 // in USER_HZ ticks, as /proc/<pid>/stat has times
@@ -88,7 +116,6 @@ static int proc_stat_show(struct proc_entry *entry, struct proc_data *buf, bool 
     struct rusage_ rusage = whole ? rusage_of_group(task->group) : rusage_of_thread(task);
     lock(&task->group->lock);
     struct rusage_ children = task->group->children_rusage;
-    lock(&task->sighand->lock);
 
     proc_printf(buf, "%d ", task->pid);
     proc_printf(buf, "(%.16s) ", task->comm);
@@ -119,7 +146,7 @@ static int proc_stat_show(struct proc_entry *entry, struct proc_data *buf, bool 
     // what nice or renice had made 5
     proc_printf(buf, "%d ", 20 + task->nice); // priority
     proc_printf(buf, "%d ", task->nice); // nice
-    proc_printf(buf, "%ld ", list_size(&task->group->threads));
+    proc_printf(buf, "%ld ", group_threads(task->group));
     proc_printf(buf, "%ld ", 0l); // itimer value (deprecated, always 0)
     proc_printf(buf, "%llu ", (unsigned long long) task->start_ticks); // start, in ticks since boot
 
@@ -137,14 +164,8 @@ static int proc_stat_show(struct proc_entry *entry, struct proc_data *buf, bool 
     proc_printf(buf, "%lu ", (unsigned long) task->pending & 0xffffffff);
     proc_printf(buf, "%lu ", (unsigned long) task->blocked & 0xffffffff);
     // signal n is bit n - 1, as in the masks above (it was bit n)
-    uint32_t ignored = 0;
-    uint32_t caught = 0;
-    for (int i = 1; i <= 32; i++) {
-        if (task->sighand->action[i].handler == SIG_IGN_)
-            ignored |= 1u << (i - 1);
-        else if (task->sighand->action[i].handler != SIG_DFL_)
-            caught |= 1u << (i - 1);
-    }
+    uint64_t ignored, caught;
+    signal_dispositions(task, 33, &ignored, &caught);
     proc_printf(buf, "%lu ", (unsigned long) ignored);
     proc_printf(buf, "%lu ", (unsigned long) caught);
 
@@ -156,7 +177,6 @@ static int proc_stat_show(struct proc_entry *entry, struct proc_data *buf, bool 
     // that's enough for now
     proc_printf(buf, "\n");
 
-    unlock(&task->sighand->lock);
     unlock(&task->group->lock);
     unlock(&task->general_lock);
     proc_put_task(task);
@@ -224,21 +244,14 @@ static int proc_pid_status_show(struct proc_entry *entry, struct proc_data *buf)
     proc_printf(buf, "VmSize:\t%8lu kB\n", pages * (PAGE_SIZE / 1024));
     proc_printf(buf, "VmRSS:\t%8lu kB\n", resident * (PAGE_SIZE / 1024));
     proc_printf(buf, "RssShmem:\t%8lu kB\n", shared * (PAGE_SIZE / 1024));
-    proc_printf(buf, "Threads:\t%d\n", list_size(&task->group->threads));
-    lock(&task->sighand->lock);
-    uint64_t ignored = 0, caught = 0;
-    for (int i = 1; i < NUM_SIGS; i++) {
-        if (task->sighand->action[i].handler == SIG_IGN_)
-            ignored |= 1ull << (i - 1);
-        else if (task->sighand->action[i].handler != SIG_DFL_)
-            caught |= 1ull << (i - 1);
-    }
+    proc_printf(buf, "Threads:\t%ld\n", group_threads(task->group));
+    uint64_t ignored, caught;
+    signal_dispositions(task, NUM_SIGS, &ignored, &caught);
     proc_printf(buf, "SigPnd:\t%016llx\n", (unsigned long long) task->pending);
     proc_printf(buf, "ShdPnd:\t%016llx\n", (unsigned long long) task->group->shared_pending);
     proc_printf(buf, "SigBlk:\t%016llx\n", (unsigned long long) task->blocked);
     proc_printf(buf, "SigIgn:\t%016llx\n", (unsigned long long) ignored);
     proc_printf(buf, "SigCgt:\t%016llx\n", (unsigned long long) caught);
-    unlock(&task->sighand->lock);
 
     proc_put_task(task);
     return 0;
@@ -260,13 +273,15 @@ static int proc_pid_statm_show(struct proc_entry *entry, struct proc_data *buf) 
     task_mem_pages(task, &total, &resident, &shared);
     unlock(&task->general_lock);
 
+    // the fields with a space between them, as Linux's: there was one after
+    // the last
     proc_printf(buf, "%lu ", total);    // total program size
     proc_printf(buf, "%lu ", resident); // resident set size
     proc_printf(buf, "%lu ", shared);   // resident shared pages
     proc_printf(buf, "%lu ", 0);        // text
     proc_printf(buf, "%lu ", 0);        // lib (always 0 since linux 2.6)
     proc_printf(buf, "%lu ", resident); // data + stack
-    proc_printf(buf, "%lu ", 0);        // dirty (always 0 since linux 2.6)
+    proc_printf(buf, "%lu", 0);         // dirty (always 0 since linux 2.6)
     proc_printf(buf, "\n");
 
     proc_put_task(task);
@@ -539,10 +554,12 @@ static ssize_t proc_pid_mem_pread(struct proc_entry *entry, struct proc_data *bu
     if (task == NULL)
         return _ESRCH;
     lock(&task->general_lock);   // [T-ish-exit-mm-general-lock]
-    int result = user_read_task(task, (addr_t)offset, buf->data, buf->size);
+    // none once it has exited: nothing, as Linux's mem_rw
+    ssize_t result = task->mem == NULL ? 0 :
+        user_read_task(task, (addr_t)offset, buf->data, buf->size) ? -1 : (ssize_t) buf->size;
     unlock(&task->general_lock);
     proc_put_task(task);
-    return result ? -1 : buf->size;
+    return result;
 }
 
 static ssize_t proc_pid_mem_pwrite(struct proc_entry *entry, struct proc_data *buf, off_t offset) {
@@ -550,16 +567,21 @@ static ssize_t proc_pid_mem_pwrite(struct proc_entry *entry, struct proc_data *b
     if (task == NULL)
         return _ESRCH;
     lock(&task->general_lock);   // [T-ish-exit-mm-general-lock]
-    int result = user_write_task_ptrace(task, (addr_t)offset, buf->data, buf->size);
+    ssize_t result = task->mem == NULL ? 0 :
+        user_write_task_ptrace(task, (addr_t)offset, buf->data, buf->size) ? -1 : (ssize_t) buf->size;
     unlock(&task->general_lock);
     proc_put_task(task);
-    return result ? -1 : buf->size;
+    return result;
 }
 
 
-static struct proc_dir_entry proc_pid_fd;
+static struct proc_dir_entry proc_pid_fd, proc_tid_fd;
 
-static bool proc_pid_fd_readdir(struct proc_entry *entry, unsigned long *index, struct proc_entry *next_entry) {
+// The entries of a fd directory, each of meta: an entry's meta has one parent
+// directory, so /proc/<pid>/fd's are proc_pid_fd and task/<tid>/fd's
+// proc_tid_fd. None once the task has exited, as Linux's.
+static bool fd_readdir(struct proc_entry *entry, unsigned long *index, struct proc_entry *next_entry,
+                       struct proc_dir_entry *meta) {
     struct task *task = proc_get_task(entry);
     // Task exited while its /proc/<pid>/fd dir was being iterated (e.g.
     // `find /proc` racing short-lived children). This function returns bool —
@@ -568,6 +590,10 @@ static bool proc_pid_fd_readdir(struct proc_entry *entry, unsigned long *index, 
     // proc_entry_getname (EXC_BAD_ACCESS at 0x10). No task = no more entries.
     if (task == NULL)
         return false;
+    if (task->files == NULL) {
+        proc_put_task(task);
+        return false;
+    }
     // Retain the fdtable, then drop pids_lock BEFORE taking files->lock, to
     // avoid the pids_lock -> files->lock ordering (proc_get_task holds
     // pids_lock). Other paths take files->lock and then pids_lock (e.g. via
@@ -583,8 +609,16 @@ static bool proc_pid_fd_readdir(struct proc_entry *entry, unsigned long *index, 
     bool any_left = (unsigned) f < files->size;
     unlock(&files->lock);
     fdtable_release(files);
-    *next_entry = (struct proc_entry) {&proc_pid_fd, .pid = entry->pid, .fd = f};
+    *next_entry = (struct proc_entry) {meta, .pid = entry->pid, .fd = f};
     return any_left;
+}
+
+static bool proc_pid_fd_readdir(struct proc_entry *entry, unsigned long *index, struct proc_entry *next_entry) {
+    return fd_readdir(entry, index, next_entry, &proc_pid_fd);
+}
+
+static bool proc_tid_fd_readdir(struct proc_entry *entry, unsigned long *index, struct proc_entry *next_entry) {
+    return fd_readdir(entry, index, next_entry, &proc_tid_fd);
 }
 
 static void proc_pid_fd_getname(struct proc_entry *entry, char *buf) {
@@ -603,6 +637,10 @@ static int proc_pid_fd_readlink(struct proc_entry *entry, char *buf) {
     // during claude-cli startup when 20+ bun worker threads all scan
     // /proc/self/fd concurrently. Also: fd may be NULL if another thread
     // closed the descriptor (return ENOENT, not a host crash).
+    if (task->files == NULL) {
+        proc_put_task(task);
+        return _ENOENT;
+    }
     lock(&task->files->lock);
     struct fd *fd = fdtable_get(task->files, entry->fd);
     if (fd != NULL)
@@ -622,7 +660,7 @@ static int proc_pid_fd_readlink(struct proc_entry *entry, char *buf) {
 // the file itself (generic_fd_link). NULL if the entry is no such link, or
 // its file has a path (or is none here: logged).
 struct fd *proc_pid_fd_file(struct proc_entry *entry) {
-    if (entry->meta != &proc_pid_fd)
+    if (entry->meta != &proc_pid_fd && entry->meta != &proc_tid_fd)
         return NULL;
     struct task *task = proc_get_task(entry);
     if (task == NULL)
@@ -631,6 +669,10 @@ struct fd *proc_pid_fd_file(struct proc_entry *entry) {
     if (!superuser() && task->uid != current->euid) {
         proc_put_task(task);
         return ERR_PTR(_EACCES);
+    }
+    if (task->files == NULL) {
+        proc_put_task(task);
+        return NULL;
     }
     lock(&task->files->lock);
     struct fd *fd = fdtable_get(task->files, entry->fd);
@@ -721,6 +763,10 @@ static bool proc_pid_task_readdir(struct proc_entry *entry, unsigned long *index
         if ((unsigned long) thread->pid > *index && (next == 0 || thread->pid < next))
             next = thread->pid;
     }
+    // a leader that has exited is off the list, and listed till its process is gone
+    struct task *leader = task->group->leader;
+    if (leader->exiting && (unsigned long) leader->pid > *index && (next == 0 || leader->pid < next))
+        next = leader->pid;
     proc_put_task(task);
     if (next == 0)
         return false;
@@ -858,6 +904,10 @@ static int proc_pid_cwd_readlink(struct proc_entry *entry, char *buf) {
     struct task *task = proc_get_task(entry);
     if (task == NULL)
         return _ESRCH;
+    if (task->fs == NULL) {
+        proc_put_task(task);
+        return _ENOENT;
+    }
     lock(&task->fs->lock);
     int err = generic_getpath(task->fs->pwd, buf);
     unlock(&task->fs->lock);
@@ -889,14 +939,17 @@ struct proc_dir_entry proc_pid = {NULL, S_IFDIR,
 
 static struct proc_dir_entry proc_pid_fd = {NULL, S_IFLNK,
     .getname = proc_pid_fd_getname, .readlink = proc_pid_fd_readlink};
+static struct proc_dir_entry proc_tid_fd = {NULL, S_IFLNK,
+    .getname = proc_pid_fd_getname, .readlink = proc_pid_fd_readlink};
 
 // /proc/<pid>/task/<tid>: one thread's, as Linux's tid_base_stuff. Its stat
 // has the thread's own CPU time, where /proc/<pid>/stat (and /proc/<tid>/stat)
 // has the process's: task/<tid> was a symlink to /proc/<tid>, so every thread
 // said the process's, and top -H and ps -L could not tell which thread took
 // it. The rest are /proc/<pid>'s, which go by the task they name: its name,
-// state and signals in status and comm, its process's memory and files. No
-// fd: its entries' meta has one parent, /proc/<pid>/fd.
+// state and signals in status and comm, its process's memory and files. Its
+// fd's links are proc_tid_fd, /proc/<pid>/fd's of the same files: an entry's
+// meta has one parent. There was no fd (ENOENT).
 static struct proc_children proc_tid_children = PROC_CHILDREN({
     {"auxv", .show = proc_pid_auxv_show},
     {"cmdline", .show = proc_pid_cmdline_show},
@@ -904,6 +957,7 @@ static struct proc_children proc_tid_children = PROC_CHILDREN({
     {"cwd", S_IFLNK, .readlink = proc_pid_cwd_readlink},
     {"environ", S_IFREG | 0400, .show = proc_pid_environ_show},
     {"exe", S_IFLNK, .readlink = proc_pid_exe_readlink},
+    {"fd", S_IFDIR, .readdir = proc_tid_fd_readdir},
     {"maps", .show = proc_pid_maps_show},
     {"smaps", .show = proc_pid_smaps_show},
     {"mem", .pread = proc_pid_mem_pread, .pwrite = proc_pid_mem_pwrite, .show = proc_pid_mem_show},

@@ -24,7 +24,8 @@ int proc_entry_stat(struct proc_entry *entry, struct statbuf *stat) {
     stat->mode = proc_entry_mode(entry);
 
     lock(&pids_lock);
-    struct task *task = pid_get_task(entry->pid);
+    // a zombie's are its owner's too
+    struct task *task = pid_get_task_zombie(entry->pid);
 
     if (task != NULL) {
         stat->uid = task->uid;

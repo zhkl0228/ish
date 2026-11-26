@@ -252,10 +252,11 @@ static bool proc_root_readdir(struct proc_entry *UNUSED(entry), unsigned long *i
         // Processes only, as Linux lists them: a thread is in its process's
         // task/, and found by its tid (/proc/<tid>) without being listed.
         // Listed, top and ps -e showed every thread as a process. A leader
-        // that exits before its threads keeps its pid till the last.
+        // that exits before its threads keeps its pid till the last, and a
+        // zombie till it is waited for (proc_get_task).
         lock(&pids_lock);
         for (pid++; pid <= MAX_PID; pid++) {
-            struct task *task = pid_get_task(pid);
+            struct task *task = pid_get_task_zombie(pid);
             if (task != NULL && task_is_leader(task))
                 break;
         }
@@ -281,7 +282,7 @@ static bool proc_root_lookup(struct proc_entry *UNUSED(entry), const char *name,
     if (strcmp(spelled, name) != 0 || id > MAX_PID)
         return false;
     lock(&pids_lock);
-    bool exists = pid_get_task(id) != NULL;
+    bool exists = pid_get_task_zombie(id) != NULL;
     unlock(&pids_lock);
     if (!exists)
         return false;

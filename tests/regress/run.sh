@@ -1086,6 +1086,17 @@ EOF
         status=1
     fi
     echo
+    echo "########## /proc: zombies, a thread's fd, . and .. ##########"
+    if "$CC_GUEST" -static -O0 -Wall -pthread -o "$GUEST_ROOT/tmp/regress_proc_zombie" tests/regress/regress_proc_zombie.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_proc_zombie 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_proc_zombie"
+    else
+        echo "failed to build regress_proc_zombie" >&2
+        status=1
+    fi
+    echo
     echo "########## /proc/<pid>/environ: the environment a process was started with ##########"
     if "$CC_GUEST" -static -O0 -Wall -pthread -o "$GUEST_ROOT/tmp/regress_proc_environ" tests/regress/regress_proc_environ.c; then
         out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_proc_environ 2>&1)

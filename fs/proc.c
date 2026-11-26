@@ -262,9 +262,25 @@ static ssize_t proc_pwrite(struct fd *fd, const void *buf, size_t bufsize, off_t
     return bufsize;
 }
 
+// "." and "..", then the directory's own entries (its index the offset less
+// two), as every directory of Linux's lists them: none did, and what counts a
+// directory's entries less these two (the files a process has open, in
+// /proc/self/fd) came out two short.
 static int proc_readdir(struct fd *fd, struct dir_entry *entry) {
+    if (fd->offset < 2) {
+        struct proc_dir_entry *meta = fd->proc.entry.meta;
+        // /proc's own parent is no procfs directory
+        if (fd->offset == 1 && meta->parent != NULL)
+            meta = meta->parent;
+        strcpy(entry->name, fd->offset == 0 ? "." : "..");
+        entry->inode = meta->inode;
+        fd->offset++;
+        return 1;
+    }
+    unsigned long index = fd->offset - 2;
     struct proc_entry proc_entry = {0};
-    bool any_left = proc_dir_read(&fd->proc.entry, &fd->offset, &proc_entry);
+    bool any_left = proc_dir_read(&fd->proc.entry, &index, &proc_entry);
+    fd->offset = index + 2;
     if (!any_left)
         return 0;
     proc_entry_getname(&proc_entry, entry->name);

@@ -607,7 +607,8 @@ static void apply_exec_semantics(const char *guest_file) {
     lock(&current->general_lock);
     const char *base = strrchr(guest_file, '/');
     base = base ? base + 1 : guest_file;
-    strncpy(current->comm, base, sizeof(current->comm));
+    // at most 15 bytes and a NUL, as exec's (kernel/exec.c)
+    snprintf(current->comm, sizeof(current->comm), "%s", base);
     unlock(&current->general_lock);
     update_thread_name();
 
