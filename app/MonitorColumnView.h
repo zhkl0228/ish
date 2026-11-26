@@ -10,11 +10,11 @@
 //  at its bottom, in green, orange past 75%, red past 90%, the percent in its
 //  middle, its name in the opening), the CPU's last minute as a line over
 //  them; the share of lately compiled code that runs natively (JIT: an AOT
-//  image's or the JIT's), a gauge too; then, as figures with their names
-//  under them as the gauges have theirs (a rate or a count has no full ring),
-//  the network down and up a second, and the guest's processes; the heat, by
-//  name, while it is more than nominal. A tap (VoiceOver's activation) shows
-//  their details (MonitorDetailViewController).
+//  image's or the JIT's), a gauge too, red once the code region is full; the
+//  heat, by name, while it is more than nominal. A tap (VoiceOver's
+//  activation) shows their details (MonitorDetailViewController). Under them,
+//  at the column's bottom, the terminal's keys (TerminalViewController's
+//  columnKeys) have the room the network's rates and the processes had.
 //
 
 #import <UIKit/UIKit.h>
@@ -43,19 +43,14 @@ NS_ASSUME_NONNULL_BEGIN
 @property (readonly) UILabel *nameLabel;
 @end
 
-// A figure as a gauge's value is drawn, its name under it as a gauge's is,
-// as wide as a gauge: its value of so many lines, shrunk to fit its width
-@interface MonitorTileView : UIView
-- (instancetype)initWithName:(NSString *)name lines:(NSInteger)lines fontSize:(CGFloat)fontSize;
-@property (readonly) UILabel *valueLabel;
-@property (readonly) UILabel *nameLabel;
-@end
-
 @interface MonitorColumnView : MonitorView
 // The keyboard up (TerminalViewController's keyboardMoved:): the CPU, its
 // line and the memory only, what is under them hidden, the keys taking their
 // room
 @property (nonatomic) BOOL keyboardUp;
+// The meters' middle, which is kStatusInset left of the column's: what is put
+// under them in the column lines up with it (TerminalViewController's keys)
+@property (readonly) NSLayoutXAxisAnchor *metersCenterXAnchor;
 @end
 
 NS_ASSUME_NONNULL_END

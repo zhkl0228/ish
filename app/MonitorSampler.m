@@ -4,11 +4,8 @@
 //
 
 #import "MonitorSampler.h"
-#include <ifaddrs.h>
-#include <net/if.h>
 #include "platform/platform.h"
 #include "kernel/mm.h"
-#include "kernel/task.h"
 
 // asbestos/guest-arm64/jit.h's (a header for builds with ISH_JIT, which libish
 // is for the app: GuestARM64.xcconfig's ISH_ENABLE_JIT)
@@ -39,10 +36,6 @@ const NSUInteger kMonitorHistoryLength = 60;
 @property BOOL nativeKnown;
 @property double nativeShare;
 @property BOOL codeRegionFull;
-@property BOOL networkCounted;
-@property double networkIn;
-@property double networkOut;
-@property int64_t processes;
 @end
 
 @implementation MonitorReading
@@ -81,10 +74,6 @@ static struct ticks_between TicksBetween(struct cpu_usage last, struct cpu_usage
     unsigned _windowNext;
     BOOL _nativeKnown;
     double _nativeShare;
-    // Each uplink's counters at the last reading, in and out by its name
-    // (none yet while nil), and when
-    NSDictionary<NSString *, NSArray<NSNumber *> *> *_lastLinks;
-    NSTimeInterval _lastLinksTime;
 }
 
 - (instancetype)init {
@@ -124,7 +113,6 @@ static struct ticks_between TicksBetween(struct cpu_usage last, struct cpu_usage
     _hasTicks = NO;
     _lastCoreCount = 0;
     _hasBlocks = NO;
-    _lastLinks = nil;
     // The history is kept: started again (the app back in the foreground, the
     // column shown again, the device folded or unfolded), the line goes on
     // where it was, the time it was stopped left out. Emptied here, the line
@@ -214,47 +202,6 @@ static struct ticks_between TicksBetween(struct cpu_usage last, struct cpu_usage
     reading.nativeKnown = _nativeKnown;
     reading.nativeShare = _nativeShare;
     reading.codeRegionFull = jit_region_is_full();
-
-    // The uplinks' bytes a second since the reading before. Their counters
-    // are 32 bits (if_data), and a difference taken in 32 bits is right
-    // across a wrap; one that was not there before counts from the next.
-    NSMutableDictionary<NSString *, NSArray<NSNumber *> *> *links = [NSMutableDictionary new];
-    struct ifaddrs *addrs;
-    if (getifaddrs(&addrs) != 0) {
-        static BOOL logged;
-        if (!logged) {
-            logged = YES;
-            NSLog(@"MonitorSampler: getifaddrs: %s: the network is not counted", strerror(errno));
-        }
-    } else {
-        for (struct ifaddrs *a = addrs; a != NULL; a = a->ifa_next) {
-            if (a->ifa_addr == NULL || a->ifa_addr->sa_family != AF_LINK)
-                continue;
-            if (strncmp(a->ifa_name, "en", 2) != 0 && strncmp(a->ifa_name, "pdp_ip", 6) != 0)
-                continue;
-            const struct if_data *data = a->ifa_data;
-            links[@(a->ifa_name)] = @[@(data->ifi_ibytes), @(data->ifi_obytes)];
-        }
-        freeifaddrs(addrs);
-    }
-    NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
-    if (_lastLinks != nil && links.count != 0) {
-        uint64_t in = 0, out = 0;
-        for (NSString *name in links) {
-            NSArray<NSNumber *> *last = _lastLinks[name];
-            if (last == nil)
-                continue;
-            in += (uint32_t) (links[name][0].unsignedIntValue - last[0].unsignedIntValue);
-            out += (uint32_t) (links[name][1].unsignedIntValue - last[1].unsignedIntValue);
-        }
-        reading.networkCounted = YES;
-        reading.networkIn = in / (now - _lastLinksTime);
-        reading.networkOut = out / (now - _lastLinksTime);
-    }
-    _lastLinks = links.count != 0 ? links : nil;
-    _lastLinksTime = now;
-
-    reading.processes = atomic_load_explicit(&ish_live_guest_procs, memory_order_relaxed);
 
     _reading = reading;
     [NSNotificationCenter.defaultCenter postNotificationName:MonitorSamplerDidReadNotification object:self];

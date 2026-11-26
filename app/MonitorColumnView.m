@@ -151,59 +151,6 @@ static const CGFloat kStatusInset = 6;
 
 @end
 
-@implementation MonitorTileView
-
-- (instancetype)initWithName:(NSString *)name lines:(NSInteger)lines fontSize:(CGFloat)fontSize {
-    if (self = [super initWithFrame:CGRectZero]) {
-        _valueLabel = [UILabel new];
-        _valueLabel.font = [UIFont monospacedDigitSystemFontOfSize:fontSize weight:UIFontWeightBold];
-        _valueLabel.textAlignment = NSTextAlignmentCenter;
-        _valueLabel.numberOfLines = lines;
-        _valueLabel.adjustsFontSizeToFitWidth = YES;
-        _valueLabel.minimumScaleFactor = 0.6;
-        // a line of a dash for each line of the value, till the first reading
-        NSMutableArray<NSString *> *dashes = [NSMutableArray new];
-        for (NSInteger i = 0; i < lines; i++)
-            [dashes addObject:@"–"];
-        _valueLabel.text = [dashes componentsJoinedByString:@"\n"];
-        _nameLabel = [UILabel new];
-        _nameLabel.font = [UIFont systemFontOfSize:8 weight:UIFontWeightSemibold];
-        _nameLabel.textAlignment = NSTextAlignmentCenter;
-        _nameLabel.text = name;
-        UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[_valueLabel, _nameLabel]];
-        stack.axis = UILayoutConstraintAxisVertical;
-        stack.spacing = 1;
-        stack.translatesAutoresizingMaskIntoConstraints = NO;
-        [self addSubview:stack];
-        [NSLayoutConstraint activateConstraints:@[
-            [stack.topAnchor constraintEqualToAnchor:self.topAnchor],
-            [stack.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
-            [stack.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
-            [stack.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
-        ]];
-    }
-    return self;
-}
-
-@end
-
-// Bytes a second in four characters, digits and a unit only, so that the
-// down's line and the up's are as wide as each other: three digits, zeros
-// before (000B, 512B, 009K, 830K, 001M, 075M). A tenth's point was narrower
-// than the digits (monospaced digits, not the point), and a line with one
-// stood off the other's. 1024 a step, as top's; one that would round to 1000
-// is the next unit's (001M, not 1000K).
-static NSString *Rate(double bytes) {
-    NSArray<NSString *> *units = @[@"B", @"K", @"M", @"G"];
-    double value = bytes;
-    NSUInteger unit = 0;
-    while (round(value) >= 1000 && unit + 1 < units.count) {
-        value /= 1024;
-        unit++;
-    }
-    return [NSString stringWithFormat:@"%03.0f%@", value, units[unit]];
-}
-
 // A gauge's color: green, then as the memory's (orange past 75%, red past 90%)
 static UIColor *GaugeColor(double fraction) {
     return MonitorMemoryColor(fraction, UIColor.systemGreenColor);
@@ -216,8 +163,6 @@ static UIColor *GaugeColor(double fraction) {
 @property MonitorSparkView *cpuLine;
 @property MonitorGaugeView *memoryGauge;
 @property MonitorGaugeView *nativeGauge;
-@property MonitorTileView *networkTile;
-@property MonitorTileView *processTile;
 @property UIStackView *heatRow;
 @property UIImageView *heatIcon;
 @property UILabel *heatLabel;
@@ -264,14 +209,7 @@ static UIColor *GaugeColor(double fraction) {
         self.memoryGauge = [self addGauge:NSLocalizedString(@"MEM", @"The memory gauge's name, under it: a few letters")];
         [stack setCustomSpacing:10 afterView:self.memoryGauge];
         self.nativeGauge = [self addGauge:@"JIT"];
-        [stack setCustomSpacing:10 afterView:self.nativeGauge];
-        // down over up, each in a gauge's width: one line of both did not fit
-        self.networkTile = [self addTile:NSLocalizedString(@"NET", @"The network's name, under its rates: a few letters")
-                                   lines:2 fontSize:11];
-        [stack setCustomSpacing:8 afterView:self.networkTile];
-        self.processTile = [self addTile:NSLocalizedString(@"PROC", @"The processes' name, under their count: a few letters")
-                                   lines:1 fontSize:13];
-        [stack setCustomSpacing:8 afterView:self.processTile];
+        [stack setCustomSpacing:8 afterView:self.nativeGauge];
 
         // The heat while more than nominal: a thermometer and its name
         UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:9 weight:UIImageSymbolWeightSemibold];
@@ -314,10 +252,8 @@ static UIColor *GaugeColor(double fraction) {
 // What is under the memory, hidden while the keyboard is up; the heat's row
 // shown only while it is more than nominal
 - (void)showRows {
-    for (UIView *row in @[self.nativeGauge, self.networkTile, self.processTile]) {
-        if (row.hidden != self.keyboardUp)
-            row.hidden = self.keyboardUp;
-    }
+    if (self.nativeGauge.hidden != self.keyboardUp)
+        self.nativeGauge.hidden = self.keyboardUp;
     BOOL heat = self.hot && !self.keyboardUp;
     if (self.heatRow.hidden == heat)
         self.heatRow.hidden = !heat;
@@ -335,16 +271,12 @@ static UIColor *GaugeColor(double fraction) {
     return gauge;
 }
 
-- (MonitorTileView *)addTile:(NSString *)name lines:(NSInteger)lines fontSize:(CGFloat)fontSize {
-    MonitorTileView *tile = [[MonitorTileView alloc] initWithName:name lines:lines fontSize:fontSize];
-    tile.translatesAutoresizingMaskIntoConstraints = NO;
-    [tile.widthAnchor constraintEqualToConstant:kGaugeSize].active = YES;
-    [self.stack addArrangedSubview:tile];
-    return tile;
-}
-
 - (CGRect)metersFrame {
     return self.stack.frame;
+}
+
+- (NSLayoutXAxisAnchor *)metersCenterXAnchor {
+    return self.stack.centerXAnchor;
 }
 
 - (void)tapped:(UITapGestureRecognizer *)tap {
@@ -368,10 +300,6 @@ static UIColor *GaugeColor(double fraction) {
         gauge.valueLabel.textColor = foreground;
         gauge.nameLabel.textColor = [foreground colorWithAlphaComponent:0.6];
     }
-    for (MonitorTileView *tile in @[self.networkTile, self.processTile]) {
-        tile.valueLabel.textColor = foreground;
-        tile.nameLabel.textColor = [foreground colorWithAlphaComponent:0.6];
-    }
     self.cpuLine.lineColor = cpu;
     self.cpuLine.areaColor = [cpu colorWithAlphaComponent:0.15];
     UIColor *heat = MonitorThermalColor(reading.thermalState, foreground);
@@ -390,16 +318,11 @@ static UIColor *GaugeColor(double fraction) {
     self.cpuLine.values = self.sampler.cpuHistory;
     self.memoryGauge.valueLabel.text = [NSString stringWithFormat:@"%d", memory];
     self.memoryGauge.fraction = reading.memoryFraction;
-    // the native share, the network and the processes as they were till
-    // known, counted again
+    // the native share as it was till known
     if (reading.nativeKnown) {
         self.nativeGauge.valueLabel.text = [NSString stringWithFormat:@"%d", (int) round(reading.nativeShare * 100)];
         self.nativeGauge.fraction = reading.nativeShare;
     }
-    if (reading.networkCounted)
-        self.networkTile.valueLabel.text = [NSString stringWithFormat:@"↓%@\n↑%@", Rate(reading.networkIn),
-                                            Rate(reading.networkOut)];
-    self.processTile.valueLabel.text = [NSString stringWithFormat:@"%lld", (long long) reading.processes];
     self.hot = reading.thermalState != NSProcessInfoThermalStateNominal;
     self.heatLabel.text = MonitorThermalName(reading.thermalState);
     [self showRows];
@@ -414,14 +337,9 @@ static UIColor *GaugeColor(double fraction) {
         native = [NSString stringWithFormat:NSLocalizedString(@"%@, its code region full",
                                                               @"The JIT gauge read aloud once the code region is full"),
                   native];
-    NSString *down = [NSByteCountFormatter stringFromByteCount:(long long) reading.networkIn
-                                                    countStyle:NSByteCountFormatterCountStyleMemory];
-    NSString *up = [NSByteCountFormatter stringFromByteCount:(long long) reading.networkOut
-                                                  countStyle:NSByteCountFormatterCountStyleMemory];
     self.accessibilityLabel = [NSString stringWithFormat:NSLocalizedString(
-        @"%1$@, JIT %2$@, network down %3$@ a second, up %4$@ a second, %5$lld processes",
-        @"The column's meters read aloud: the strip's, then the JIT's share, the network, the processes"),
-        MonitorSpokenReading(reading), native, down, up, (long long) reading.processes];
+        @"%1$@, JIT %2$@", @"The column's meters read aloud: the strip's, then the JIT's share"),
+        MonitorSpokenReading(reading), native];
 }
 
 @end

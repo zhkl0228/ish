@@ -92,6 +92,16 @@
 // indicator (aboveKeys: applyBottomPad)
 @property NSLayoutConstraint *monitorColumnTop;
 @property NSLayoutConstraint *monitorColumnAboveKeys;
+// Tab, up, down and return at the bottom of the column, while it is shown and
+// the keyboard is down (updateColumnKeys): what a program's menus take
+// (claude's), without the keyboard over the terminal. The meters stay above
+// them while they are shown (aboveColumnKeys).
+@property UIStackView *columnKeys;
+@property NSLayoutConstraint *monitorColumnAboveColumnKeys;
+// A tap of one: the keyboard's click is heard only while a keyboard shows
+@property UIImpactFeedbackGenerator *columnKeyFeedback;
+// The on-screen keyboard up (keyboardMoved:)
+@property BOOL keyboardUp;
 // The layout updateMonitorColumn last logged
 @property (nullable) NSString *monitorColumnLayout;
 
@@ -325,6 +335,7 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
         self.monitorColumnAboveKeys,
         self.monitorColumnTop,
     ]];
+    [self addColumnKeys];
     __weak typeof(self) weakSelf = self;
     self.termView.marginTapped = self.monitorStrip.activated = ^{
         [weakSelf showMeterDetailsFrom:weakSelf.monitorStrip];
@@ -876,6 +887,11 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
         }
         self.monitorStrip.foregroundColor = foreground;
         self.monitorColumn.foregroundColor = foreground;
+        for (BarButton *key in self.columnKeys.arrangedSubviews) {
+            [key setKeyColor:[background ish_blendedWithColor:foreground fraction:0.18]
+                pressedColor:[background ish_blendedWithColor:foreground fraction:0.36]
+                   textColor:foreground];
+        }
         // the gaps between the keys and the rest of the row
         self.barView.backgroundColor = self.view.backgroundColor;
     }];
@@ -985,8 +1001,11 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
     self.keyboardPad = pad;
     // The on-screen keyboard up (100 points of it or more over the terminal,
     // as hasExternalKeyboard tells it from the bar of extra keys alone, or a
-    // floating keyboard's): the column keeps the CPU and the memory only
-    self.monitorColumn.keyboardUp = pad >= 100;
+    // floating keyboard's): the column keeps the CPU and the memory only, and
+    // its keys go, the bar having them
+    self.keyboardUp = pad >= 100;
+    self.monitorColumn.keyboardUp = self.keyboardUp;
+    [self updateColumnKeys];
     // Nothing to move: no layout, which would lay out the keyboard's window
     if (![self applyBottomPad])
         return;
@@ -1214,6 +1233,77 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
 - (IBAction)arrowKeyUp:(id)sender {
     [self.arrowRepeat invalidate];
     self.arrowRepeat = nil;
+}
+
+- (IBAction)pressReturn:(id)sender {
+    [self pressKey:@"\r"];
+}
+
+#pragma mark The column's keys
+
+// Tab (held: shift-tab), up and down (held: repeating) and return, as the
+// bar's keys send them, one over another at the bottom of the column, under
+// the meters' middle, above the home indicator
+- (void)addColumnKeys {
+    BarButton *tab = [self columnKey:@"arrow.right.to.line" name:NSLocalizedString(@"Tab", @"The column's tab key, read aloud")];
+    [tab addTarget:self action:@selector(pressTab:) forControlEvents:UIControlEventTouchUpInside];
+    [tab addGestureRecognizer:[[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(tabKeyHeld:)]];
+    BarButton *up = [self columnKey:@"chevron.up" name:NSLocalizedString(@"Up", @"The column's up arrow key, read aloud")];
+    up.tag = 1; // arrowKeyFinals
+    BarButton *down = [self columnKey:@"chevron.down" name:NSLocalizedString(@"Down", @"The column's down arrow key, read aloud")];
+    down.tag = 2;
+    for (BarButton *arrow in @[up, down]) {
+        [arrow addTarget:self action:@selector(arrowKeyDown:) forControlEvents:UIControlEventTouchDown];
+        [arrow addTarget:self action:@selector(arrowKeyUp:)
+            forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside | UIControlEventTouchCancel];
+    }
+    BarButton *enter = [self columnKey:@"return" name:NSLocalizedString(@"Return", @"The column's return key, read aloud")];
+    [enter addTarget:self action:@selector(pressReturn:) forControlEvents:UIControlEventTouchUpInside];
+
+    UIStackView *keys = [[UIStackView alloc] initWithArrangedSubviews:@[tab, up, down, enter]];
+    keys.axis = UILayoutConstraintAxisVertical;
+    keys.spacing = 6;
+    keys.translatesAutoresizingMaskIntoConstraints = NO;
+    keys.hidden = YES;
+    [self.view addSubview:keys];
+    self.columnKeys = keys;
+    self.monitorColumnAboveColumnKeys = [self.monitorColumn.bottomAnchor constraintLessThanOrEqualToAnchor:keys.topAnchor
+                                                                                                   constant:-8];
+    [NSLayoutConstraint activateConstraints:@[
+        [keys.centerXAnchor constraintEqualToAnchor:self.monitorColumn.metersCenterXAnchor],
+        [keys.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-8],
+    ]];
+    self.columnKeyFeedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+}
+
+- (BarButton *)columnKey:(NSString *)symbol name:(NSString *)name {
+    BarButton *key = [[BarButton alloc] initWithFrame:CGRectZero];
+    key.translatesAutoresizingMaskIntoConstraints = NO;
+    [key setImage:[UIImage systemImageNamed:symbol] forState:UIControlStateNormal];
+    [key setPreferredSymbolConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:15
+                                                                                         weight:UIImageSymbolWeightMedium]
+                         forImageInState:UIControlStateNormal];
+    key.accessibilityLabel = name;
+    [key addTarget:self action:@selector(columnKeyDown:) forControlEvents:UIControlEventTouchDown];
+    [NSLayoutConstraint activateConstraints:@[
+        [key.widthAnchor constraintEqualToConstant:44],
+        [key.heightAnchor constraintEqualToConstant:34],
+    ]];
+    return key;
+}
+
+- (void)columnKeyDown:(UIButton *)key {
+    [self.columnKeyFeedback impactOccurred];
+}
+
+// Shown while the column is and the keyboard is down: up, the bar has the
+// same keys, and the column the room for its CPU and memory only
+- (void)updateColumnKeys {
+    BOOL shown = !self.monitorColumn.hidden && !self.keyboardUp;
+    if (self.columnKeys.hidden == shown)
+        self.columnKeys.hidden = !shown;
+    if (self.monitorColumnAboveColumnKeys.active != shown)
+        self.monitorColumnAboveColumnKeys.active = shown;
 }
 
 #pragma mark Commands
@@ -1665,6 +1755,7 @@ static const CGFloat kMetersUnfoldedWidth = 700;
 
     if (self.monitorColumn.hidden != !column)
         self.monitorColumn.hidden = !column;
+    [self updateColumnKeys];
     if (column && self.monitorColumnTop.constant != top + 8)
         self.monitorColumnTop.constant = top + 8;
 }

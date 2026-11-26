@@ -51,16 +51,6 @@ NS_ASSUME_NONNULL_BEGIN
 // The JIT's code region has filled up (jit_region_is_full): blocks compiled
 // since run as gadgets, unless an AOT image has them
 @property (readonly) BOOL codeRegionFull;
-// The device's network since the reading before, bytes a second in and out
-// over its uplinks: Wi-Fi and the like (en*) and cellular (pdp_ip*), not the
-// tunnels (utun*, ipsec*), whose bytes those carry too. iOS counts no app's
-// own. Not counted at the first reading after start.
-@property (readonly) BOOL networkCounted;
-@property (readonly) double networkIn;
-@property (readonly) double networkOut;
-// The guest's processes as ps lists them: thread groups made and not yet
-// waited for (ish_live_guest_procs), the zombies with them
-@property (readonly) int64_t processes;
 
 @end
 

@@ -23,13 +23,13 @@
         }
       }
     },
-    "%1$@, JIT %2$@, network down %3$@ a second, up %4$@ a second, %5$lld processes" : {
-      "comment" : "The column's meters read aloud: the strip's, then the JIT's share, the network, the processes",
+    "%1$@, JIT %2$@" : {
+      "comment" : "The column's meters read aloud: the strip's, then the JIT's share",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@，JIT %2$@，网络下行每秒 %3$@，上行每秒 %4$@，%5$lld 个进程"
+            "value" : "%1$@，JIT %2$@"
           }
         }
       }
@@ -100,6 +100,17 @@
         }
       }
     },
+    "Down" : {
+      "comment" : "The column's down arrow key, read aloud",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下"
+          }
+        }
+      }
+    },
     "Fair" : {
       "comment" : "Heat: ProcessInfo's thermal state, slightly warm",
       "localizations" : {
@@ -166,17 +177,6 @@
         }
       }
     },
-    "NET" : {
-      "comment" : "The network's name, under its rates: a few letters",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "网络"
-          }
-        }
-      }
-    },
     "Nominal" : {
       "comment" : "Heat: ProcessInfo's thermal state, not warm",
       "localizations" : {
@@ -199,13 +199,13 @@
         }
       }
     },
-    "PROC" : {
-      "comment" : "The processes' name, under their count: a few letters",
+    "Return" : {
+      "comment" : "The column's return key, read aloud",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "进程"
+            "value" : "回车"
           }
         }
       }
@@ -243,6 +243,17 @@
         }
       }
     },
+    "Tab" : {
+      "comment" : "The column's tab key, read aloud",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tab 键"
+          }
+        }
+      }
+    },
     "Too hot: iOS slows everything down until the device cools." : {
       "comment" : "Heat details: critical",
       "localizations" : {
@@ -250,6 +261,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "太热：iOS 会让一切变慢，直到设备降温。"
+          }
+        }
+      }
+    },
+    "Up" : {
+      "comment" : "The column's up arrow key, read aloud",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上"
           }
         }
       }
