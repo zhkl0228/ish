@@ -39,6 +39,11 @@ int_t sys_memfd_create(addr_t name, uint_t flags);
 int do_execve(const char *file, size_t argc, const char *argv, const char *envp);
 dword_t sys_exit(dword_t status);
 noreturn void do_exit(int status);
+// For a task whose thread did not start (task_start failed), current on the
+// thread that made it: it exits as one that ran and exited at once with
+// status would, and its parent is told; current is NULL after. A leader is
+// left a zombie: the app reaps init's children itself (reap_init_child).
+void exit_unstarted(int status);
 noreturn void do_exit_group(int status);
 dword_t sys_exit_group(dword_t status);
 dword_t sys_wait4(pid_t_ pid, addr_t status_addr, dword_t options, addr_t rusage_addr);

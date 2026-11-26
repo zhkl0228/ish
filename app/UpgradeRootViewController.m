@@ -98,11 +98,19 @@
     err = do_execve("/sbin/apk", 2, "/sbin/apk\0upgrade\0", "TERM=xterm-256color\0");
     if (err < 0)
         return err;
-    self.upgradePid = current->pid;
-    // no thread for it (the host out of them): the upgrade fails, said so
+    int pid = current->pid;
     err = task_start(current);
+    if (err < 0) {
+        // No thread for it (the host out of them): it exits as one that never
+        // ran and is reaped here (no upgradePid: processExited: lets its
+        // notice go), and the upgrade fails, said so
+        exit_unstarted(127 << 8);
+        reap_init_child(pid);
+        return err;
+    }
+    self.upgradePid = pid;
     current = NULL;
-    return err;
+    return 0;
 }
 
 - (IBAction)upgrade:(id)sender {

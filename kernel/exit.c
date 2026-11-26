@@ -109,6 +109,8 @@ static struct task *find_new_parent(struct task *task) {
     return pid_get_task(1);
 }
 
+static void exit_current(int status, bool ran);
+
 noreturn void do_exit(int status) {
     /* pid 1 dumps to stderr (the original behaviour). With ISH_PC_HIST_DIR set,
      * EVERY exiting process also dumps its own per-pid histogram file, so a
@@ -130,6 +132,19 @@ noreturn void do_exit(int status) {
         current = NULL;
         pthread_exit(NULL);
     }
+    exit_current(status, true);
+    pthread_exit(NULL);
+}
+
+void exit_unstarted(int status) {
+    exit_current(status, false);
+}
+
+// do_exit's work, on the exiting thread or, for a task whose thread never
+// started (exit_unstarted), on the one that made it: its resources released,
+// its parent told, a leader left a zombie for the parent to reap. current is
+// NULL after. ran: the calling thread is the task's, whose CPU time it had.
+static void exit_current(int status, bool ran) {
     // [T-ish-exit-valve-progress] From here on this thread is leaving; tell
     // do_exit_group's safety valve not to give up on it while it waits for
     // pids_lock below.
@@ -204,7 +219,7 @@ noreturn void do_exit(int status) {
 
     // save things that our parent might be interested in
     current->exit_code = status; // FIXME locking
-    struct rusage_ rusage = rusage_get_current();
+    struct rusage_ rusage = ran ? rusage_get_current() : (struct rusage_) {};
     lock(&current->group->lock);
     rusage_add(&current->group->rusage, &rusage);
     struct rusage_ group_rusage = current->group->rusage;
@@ -311,8 +326,6 @@ noreturn void do_exit(int status) {
         current = NULL;
     }
     unlock(&pids_lock);
-
-    pthread_exit(NULL);
 }
 
 noreturn void do_exit_group(int status) {
