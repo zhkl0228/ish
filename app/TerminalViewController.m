@@ -95,10 +95,15 @@
 // Esc, tab, /, up, down and return at the bottom of the column, while it is
 // shown and the keyboard is down (updateColumnKeys): what a program's menus
 // take (claude's: / for its commands, esc to leave one), without the keyboard
-// over the terminal. The meters stay above
-// them while they are shown (aboveColumnKeys).
+// over the terminal. The meters stay above them (aboveColumnKeys). With the
+// keyboard up, esc and tab only, under the memory (underMeters), above the
+// keyboard (aboveKeyboard); the bar over the keyboard has them too.
 @property UIStackView *columnKeys;
+@property NSArray<UIView *> *columnKeysKeyboardDown;
 @property NSLayoutConstraint *monitorColumnAboveColumnKeys;
+@property NSLayoutConstraint *columnKeysAtBottom;
+@property NSLayoutConstraint *columnKeysUnderMeters;
+@property NSLayoutConstraint *columnKeysAboveKeyboard;
 // A tap of one: the keyboard's click is heard only while a keyboard shows
 @property UIImpactFeedbackGenerator *columnKeyFeedback;
 // The on-screen keyboard up (keyboardMoved:)
@@ -1003,7 +1008,7 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
     // The on-screen keyboard up (100 points of it or more over the terminal,
     // as hasExternalKeyboard tells it from the bar of extra keys alone, or a
     // floating keyboard's): the column keeps the CPU and the memory only, and
-    // its keys go, the bar having them
+    // of its keys esc and tab, under them; the bar has them all
     self.keyboardUp = pad >= 100;
     self.monitorColumn.keyboardUp = self.keyboardUp;
     [self updateColumnKeys];
@@ -1037,6 +1042,8 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
     CGFloat pad = MAX(self.keyboardPad, self.view.safeAreaInsets.bottom);
     if (self.monitorColumnAboveKeys.constant != -(pad + 8))
         self.monitorColumnAboveKeys.constant = -(pad + 8);
+    if (self.columnKeysAboveKeyboard.constant != -(pad + 8))
+        self.columnKeysAboveKeyboard.constant = -(pad + 8);
     if (self.bottomConstraint.constant == pad)
         return NO;
     self.bottomConstraint.constant = pad;
@@ -1274,12 +1281,15 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
     keys.hidden = YES;
     [self.view addSubview:keys];
     self.columnKeys = keys;
+    self.columnKeysKeyboardDown = @[slash, up, down, enter];
     self.monitorColumnAboveColumnKeys = [self.monitorColumn.bottomAnchor constraintLessThanOrEqualToAnchor:keys.topAnchor
                                                                                                    constant:-8];
-    [NSLayoutConstraint activateConstraints:@[
-        [keys.centerXAnchor constraintEqualToAnchor:self.monitorColumn.metersCenterXAnchor],
-        [keys.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-8],
-    ]];
+    self.columnKeysAtBottom = [keys.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor
+                                                                constant:-8];
+    self.columnKeysUnderMeters = [keys.topAnchor constraintEqualToAnchor:self.monitorColumn.bottomAnchor constant:8];
+    // as the meters are (applyBottomPad)
+    self.columnKeysAboveKeyboard = [keys.bottomAnchor constraintLessThanOrEqualToAnchor:self.view.bottomAnchor];
+    [keys.centerXAnchor constraintEqualToAnchor:self.monitorColumn.metersCenterXAnchor].active = YES;
     self.columnKeyFeedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
 }
 
@@ -1316,14 +1326,28 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
     [self.columnKeyFeedback impactOccurred];
 }
 
-// Shown while the column is and the keyboard is down: up, the bar has the
-// same keys, and the column the room for its CPU and memory only
+// Shown while the column is: with the keyboard down all six at its bottom,
+// up esc and tab under the memory, the column's last meter then (the bar over
+// the keyboard has them too, folded or with the column hidden their only
+// place; it keeps them, so that its keys do not move as the phone unfolds)
 - (void)updateColumnKeys {
-    BOOL shown = !self.monitorColumn.hidden && !self.keyboardUp;
+    BOOL shown = !self.monitorColumn.hidden;
+    BOOL up = self.keyboardUp;
     if (self.columnKeys.hidden == shown)
         self.columnKeys.hidden = !shown;
-    if (self.monitorColumnAboveColumnKeys.active != shown)
-        self.monitorColumnAboveColumnKeys.active = shown;
+    for (UIView *key in self.columnKeysKeyboardDown) {
+        if (key.hidden != up)
+            key.hidden = up;
+    }
+    // the ones to go first, so that no two hold at once
+    NSArray<NSLayoutConstraint *> *atBottom = @[self.monitorColumnAboveColumnKeys, self.columnKeysAtBottom];
+    NSArray<NSLayoutConstraint *> *underMeters = @[self.columnKeysUnderMeters, self.columnKeysAboveKeyboard];
+    // hidden, at the bottom still (a place of its own), the meters free of it
+    NSArray<NSLayoutConstraint *> *on = !shown ? @[self.columnKeysAtBottom] : up ? underMeters : atBottom;
+    NSArray<NSLayoutConstraint *> *off = !shown ? [underMeters arrayByAddingObject:self.monitorColumnAboveColumnKeys]
+                                       : up ? atBottom : underMeters;
+    [NSLayoutConstraint deactivateConstraints:off];
+    [NSLayoutConstraint activateConstraints:on];
 }
 
 #pragma mark Commands
