@@ -983,6 +983,17 @@ EOF
         status=1
     fi
     echo
+    echo "########## access(X_OK) as root of a file no one may execute: EACCES (0) ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_access_exec" tests/regress/regress_access_exec.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_access_exec 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_access_exec"
+    else
+        echo "failed to build regress_access_exec" >&2
+        status=1
+    fi
+    echo
     echo "########## socket of a protocol the type does not have: EPROTONOSUPPORT (EINVAL) ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_socket_protocol" tests/regress/regress_socket_protocol.c; then
         out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_socket_protocol 2>&1)

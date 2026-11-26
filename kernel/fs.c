@@ -30,8 +30,15 @@ static void apply_umask(mode_t_ *mode) {
 }
 
 int access_check(struct statbuf *stat, int check) {
-    if (superuser()) return 0;
     if (check == 0) return 0;
+    // As Linux's CAP_DAC_OVERRIDE (generic_permission): root may read and
+    // write anything and search any directory, but execute a file only if
+    // one of its execute bits is set, as exec itself requires.
+    if (superuser()) {
+        if (!(check & AC_X) || S_ISDIR(stat->mode) || (stat->mode & 0111))
+            return 0;
+        return _EACCES;
+    }
     // Align check with the correct bits in mode
     if (current->euid == stat->uid) {
         check <<= 6;
