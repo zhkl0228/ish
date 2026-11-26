@@ -130,6 +130,7 @@
 		AA000043AF96D90D00FFB7A4 /* Settings.bundle in Resources */ = {isa = PBXBuildFile; fileRef = BBBF7B5B2415CDBB00EC4C14 /* Settings.bundle */; };
 		AA000401AF96D90D00FFB7A4 /* RootfsPatch.bundle in Resources */ = {isa = PBXBuildFile; fileRef = AA000400AF96D90D00FFB7A4 /* RootfsPatch.bundle */; };
 		AA000044AF96D90D00FFB7A4 /* Icons.plist in Resources */ = {isa = PBXBuildFile; fileRef = BB0F552D239F8A790032A2A1 /* Icons.plist */; };
+		89970616AD0E6EE36F154B7A /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 7F1101FEA94662783BD33327 /* Localizable.xcstrings */; };
 		AA000045AF96D90D00FFB7A4 /* About.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = BBBCE7E521D2F02200CA00B3 /* About.storyboard */; };
 		AA000046AF96D90D00FFB7A4 /* Roots.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = BB10E5CF248DC21D009C7A74 /* Roots.storyboard */; };
 		AA000047AF96D90D00FFB7A4 /* xterm_all.js in Resources */ = {isa = PBXBuildFile; fileRef = BB2B4DAB231D94C300CB578B /* xterm_all.js */; };
@@ -547,6 +548,7 @@
 		BB23F58C231E1D1400585522 /* ScrollbarView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = ScrollbarView.m; sourceTree = "<group>"; };
 		343AD69E5B94D3810979AE03 /* MonitorStripView.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MonitorStripView.h; sourceTree = "<group>"; };
 		33A5ED90BCF94E8F02CF71F1 /* MonitorStripView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MonitorStripView.m; sourceTree = "<group>"; };
+		7F1101FEA94662783BD33327 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
 		5AA2200FC3D9942B80D9DE0D /* MonitorDetailViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MonitorDetailViewController.h; sourceTree = "<group>"; };
 		9B33E330436B7DAFF9CB4C2A /* MonitorDetailViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MonitorDetailViewController.m; sourceTree = "<group>"; };
 		39D7AD2FC5FFC645E2347106 /* MonitorSampler.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MonitorSampler.h; sourceTree = "<group>"; };
@@ -898,6 +900,7 @@
 				9B33E330436B7DAFF9CB4C2A /* MonitorDetailViewController.m */,
 				39D7AD2FC5FFC645E2347106 /* MonitorSampler.h */,
 				FC16CCE0F1BA542252CD40CC /* MonitorSampler.m */,
+				7F1101FEA94662783BD33327 /* Localizable.xcstrings */,
 				B8EF8ACD8DF1B96D45A7A7A6 /* MonitorColumnView.h */,
 				EE2BB9D646014739B7043C22 /* MonitorColumnView.m */,
 				BB4A53991FAA40FD00A72ACE /* terminal */,
@@ -1387,6 +1390,7 @@
 			knownRegions = (
 				en,
 				Base,
+				"zh-Hans",
 			);
 			mainGroup = BB792B451F96D8E000FFB7A4;
 			productRefGroup = BB792B511F96D90D00FFB7A4 /* Products */;
@@ -1435,6 +1439,7 @@
 				AA000043AF96D90D00FFB7A4 /* Settings.bundle in Resources */,
 				AA000401AF96D90D00FFB7A4 /* RootfsPatch.bundle in Resources */,
 				AA000044AF96D90D00FFB7A4 /* Icons.plist in Resources */,
+				89970616AD0E6EE36F154B7A /* Localizable.xcstrings in Resources */,
 				AA000045AF96D90D00FFB7A4 /* About.storyboard in Resources */,
 				AA000046AF96D90D00FFB7A4 /* Roots.storyboard in Resources */,
 				AA000047AF96D90D00FFB7A4 /* xterm_all.js in Resources */,

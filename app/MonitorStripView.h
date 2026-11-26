@@ -21,7 +21,12 @@ NS_ASSUME_NONNULL_BEGIN
 UIColor *MonitorMemoryColor(double fraction, UIColor *normal);
 // The heat's: the given color while nominal, then yellow, orange, red
 UIColor *MonitorThermalColor(NSProcessInfoThermalState state, UIColor *normal);
+// The meters' text, in the app's language (Localizable.xcstrings: English
+// and Simplified Chinese): the heat's name, ProcessInfo's thermal state; a
+// reading as VoiceOver reads the meters; and what activating them does
 NSString *MonitorThermalName(NSProcessInfoThermalState state);
+NSString *MonitorSpokenReading(MonitorReading *reading);
+NSString *MonitorDetailsHint(void);
 extern const double kMonitorMemoryBrake;
 
 // A meter's bar: how full, from the bottom up (or from the left, horizontal),

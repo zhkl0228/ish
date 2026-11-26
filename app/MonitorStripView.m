@@ -27,11 +27,27 @@ UIColor *MonitorThermalColor(NSProcessInfoThermalState state, UIColor *normal) {
 
 NSString *MonitorThermalName(NSProcessInfoThermalState state) {
     switch (state) {
-        case NSProcessInfoThermalStateNominal: return @"Nominal";
-        case NSProcessInfoThermalStateFair: return @"Fair";
-        case NSProcessInfoThermalStateSerious: return @"Serious";
-        case NSProcessInfoThermalStateCritical: return @"Critical";
+        case NSProcessInfoThermalStateNominal: return NSLocalizedString(@"Nominal", @"Heat: ProcessInfo's thermal state, not warm");
+        case NSProcessInfoThermalStateFair: return NSLocalizedString(@"Fair", @"Heat: ProcessInfo's thermal state, slightly warm");
+        case NSProcessInfoThermalStateSerious: return NSLocalizedString(@"Serious", @"Heat: ProcessInfo's thermal state, hot");
+        case NSProcessInfoThermalStateCritical: return NSLocalizedString(@"Critical", @"Heat: ProcessInfo's thermal state, too hot");
     }
+}
+
+NSString *MonitorSpokenReading(MonitorReading *reading) {
+    int cpu = (int) round(reading.cpuBusy * 100);
+    int memory = (int) round(reading.memoryFraction * 100);
+    NSString *heat = MonitorThermalName(reading.thermalState).lowercaseString;
+    if (!reading.counted)
+        return [NSString stringWithFormat:NSLocalizedString(@"Memory %1$d%%, heat %2$@",
+                                                            @"The meters read aloud, the CPU not counted yet"),
+                memory, heat];
+    return [NSString stringWithFormat:NSLocalizedString(@"CPU %1$d%%, memory %2$d%%, heat %3$@", @"The meters read aloud"),
+            cpu, memory, heat];
+}
+
+NSString *MonitorDetailsHint(void) {
+    return NSLocalizedString(@"Shows the CPUs, the memory and the heat in detail.", @"The meters' accessibility hint");
 }
 
 @implementation MeterBar
@@ -191,7 +207,7 @@ NSString *MonitorThermalName(NSProcessInfoThermalState state) {
         self.clipsToBounds = YES;
         self.isAccessibilityElement = YES;
         self.accessibilityTraits = UIAccessibilityTraitButton | UIAccessibilityTraitUpdatesFrequently;
-        self.accessibilityHint = @"Shows the CPUs, the memory and the heat in detail.";
+        self.accessibilityHint = MonitorDetailsHint();
 
         UIStackView *stack = [UIStackView new];
         stack.axis = UILayoutConstraintAxisVertical;
@@ -298,9 +314,7 @@ NSString *MonitorThermalName(NSProcessInfoThermalState state) {
         [self.memoryBar layoutIfNeeded];
     }];
 
-    NSString *cpuText = reading.counted ? [NSString stringWithFormat:@"CPU %d%%, ", cpu] : @"";
-    self.accessibilityLabel = [NSString stringWithFormat:@"%@memory %d%%, heat %@", cpuText, memory,
-                               MonitorThermalName(reading.thermalState).lowercaseString];
+    self.accessibilityLabel = MonitorSpokenReading(reading);
 }
 
 @end

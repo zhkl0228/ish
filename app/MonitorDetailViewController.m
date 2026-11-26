@@ -21,10 +21,12 @@ static NSString *Bytes(uint64_t bytes) {
 // What the heat does, as ProcessInfo's thermal states are told of
 static NSString *ThermalMeaning(NSProcessInfoThermalState state) {
     switch (state) {
-        case NSProcessInfoThermalStateNominal: return @"Not warm.";
-        case NSProcessInfoThermalStateFair: return @"Slightly warm.";
-        case NSProcessInfoThermalStateSerious: return @"Hot: iOS slows the CPUs down, and the guest's programs with them.";
-        case NSProcessInfoThermalStateCritical: return @"Too hot: iOS slows everything down until the device cools.";
+        case NSProcessInfoThermalStateNominal: return NSLocalizedString(@"Not warm.", @"Heat details: nominal");
+        case NSProcessInfoThermalStateFair: return NSLocalizedString(@"Slightly warm.", @"Heat details: fair");
+        case NSProcessInfoThermalStateSerious:
+            return NSLocalizedString(@"Hot: iOS slows the CPUs down, and the guest's programs with them.", @"Heat details: serious");
+        case NSProcessInfoThermalStateCritical:
+            return NSLocalizedString(@"Too hot: iOS slows everything down until the device cools.", @"Heat details: critical");
     }
 }
 
@@ -114,7 +116,7 @@ static NSString *ThermalMeaning(NSProcessInfoThermalState state) {
     [stack setCustomSpacing:16 afterView:self.load];
 
     // The memory: of the app's limit, a mark on its bar where the brake is
-    self.memoryValue = [self addHeading:@"Memory"];
+    self.memoryValue = [self addHeading:NSLocalizedString(@"Memory", @"Meter details: the memory's heading")];
     self.memoryAmount = [self addDetail];
     MeterBar *bar = [MeterBar new];
     bar.horizontal = YES;
@@ -147,7 +149,7 @@ static NSString *ThermalMeaning(NSProcessInfoThermalState state) {
 
     // No button to turn the meters off: a tap that missed one turned them off
     // with no sign of how (Settings and the View menu do it)
-    self.heatValue = [self addHeading:@"Heat"];
+    self.heatValue = [self addHeading:NSLocalizedString(@"Heat", @"Meter details: the heat's heading")];
     self.heatMeaning = [self addDetail];
 
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(samplerDidRead:)
@@ -200,7 +202,8 @@ static NSString *ThermalMeaning(NSProcessInfoThermalState state) {
     // scene comes back)
     if (reading.counted) {
         self.cpuValue.text = Percent(reading.cpuBusy);
-        self.cpuSplit.text = [NSString stringWithFormat:@"User %@ · System %@", Percent(reading.cpuUser), Percent(reading.cpuSystem)];
+        self.cpuSplit.text = [NSString stringWithFormat:NSLocalizedString(@"User %1$@ · System %2$@", @"Meter details: the CPUs' user and system shares"),
+                              Percent(reading.cpuUser), Percent(reading.cpuSystem)];
     }
     NSArray<NSNumber *> *coreBusy = reading.coreBusy;
     if (coreBusy.count != 0 && self.cores.arrangedSubviews.count != coreBusy.count) {
@@ -212,20 +215,29 @@ static NSString *ThermalMeaning(NSProcessInfoThermalState state) {
     [coreBusy enumerateObjectsUsingBlock:^(NSNumber *busy, NSUInteger i, BOOL *_) {
         ((MeterBar *) self.cores.arrangedSubviews[i]).fraction = busy.doubleValue;
     }];
-    self.load.text = [NSString stringWithFormat:@"Device load %.2f · %.2f · %.2f", reading.load1, reading.load5, reading.load15];
+    self.load.text = [NSString stringWithFormat:NSLocalizedString(@"Device load %1$.2f · %2$.2f · %3$.2f",
+                                                                  @"Meter details: the load averages over 1, 5 and 15 minutes"),
+                      reading.load1, reading.load5, reading.load15];
 
     self.memoryValue.text = Percent(reading.memoryFraction);
-    self.memoryAmount.text = [NSString stringWithFormat:@"%@ of %@ %@", Bytes(reading.memoryUsed),
-                              reading.appLimit ? @"the app's" : @"the device's", Bytes(reading.memoryTotal)];
+    NSString *amount = reading.appLimit
+        ? NSLocalizedString(@"%1$@ of the app's %2$@", @"Meter details: memory used of what iOS lets the app have")
+        : NSLocalizedString(@"%1$@ of the device's %2$@", @"Meter details: memory used of the device's, with no limit");
+    self.memoryAmount.text = [NSString stringWithFormat:amount, Bytes(reading.memoryUsed), Bytes(reading.memoryTotal)];
     self.memoryBar.fraction = reading.memoryFraction;
     self.memoryBar.fill.backgroundColor = MonitorMemoryColor(reading.memoryFraction, [UIColor.labelColor colorWithAlphaComponent:0.55]);
     self.memoryLeft.hidden = !reading.appLimit;
-    self.memoryLeft.text = [NSString stringWithFormat:@"%@ more and iOS ends the app", Bytes(reading.memoryTotal - reading.memoryUsed)];
+    self.memoryLeft.text = [NSString stringWithFormat:NSLocalizedString(@"%@ more and iOS ends the app",
+                                                                        @"Meter details: memory left under the app's limit"),
+                            Bytes(reading.memoryTotal - reading.memoryUsed)];
     if (reading.memoryBraked) {
-        self.brake.text = @"Braked: the guest's new memory is refused (ENOMEM)";
+        self.brake.text = NSLocalizedString(@"Braked: the guest's new memory is refused (ENOMEM)",
+                                            @"Meter details: the kernel's memory governor refuses new memory");
         self.brake.textColor = UIColor.systemRedColor;
     } else {
-        self.brake.text = [NSString stringWithFormat:@"Past %@, the guest's new memory is refused", Percent(kMonitorMemoryBrake)];
+        self.brake.text = [NSString stringWithFormat:NSLocalizedString(@"Past %@, the guest's new memory is refused",
+                                                                       @"Meter details: where the memory governor starts refusing"),
+                           Percent(kMonitorMemoryBrake)];
         self.brake.textColor = UIColor.secondaryLabelColor;
     }
 

@@ -175,7 +175,7 @@ static UIColor *GaugeColor(double fraction) {
         self.clipsToBounds = YES;
         self.isAccessibilityElement = YES;
         self.accessibilityTraits = UIAccessibilityTraitButton | UIAccessibilityTraitUpdatesFrequently;
-        self.accessibilityHint = @"Shows the CPUs, the memory and the heat in detail.";
+        self.accessibilityHint = MonitorDetailsHint();
         [self addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(tapped:)]];
 
         UIStackView *stack = [UIStackView new];
@@ -202,7 +202,7 @@ static UIColor *GaugeColor(double fraction) {
         self.cpuLine = line;
         self.cpuGauge = [self addGauge:@"CPU"];
         [stack setCustomSpacing:10 afterView:self.cpuGauge];
-        self.memoryGauge = [self addGauge:@"MEM"];
+        self.memoryGauge = [self addGauge:NSLocalizedString(@"MEM", @"The memory gauge's name, under it: a few letters")];
         [stack setCustomSpacing:8 afterView:self.memoryGauge];
 
         // The heat while more than nominal: a thermometer and its name
@@ -297,9 +297,7 @@ static UIColor *GaugeColor(double fraction) {
         [self applyColors];
     }];
 
-    NSString *cpuText = reading.counted ? [NSString stringWithFormat:@"CPU %d%%, ", cpu] : @"";
-    self.accessibilityLabel = [NSString stringWithFormat:@"%@memory %d%%, heat %@", cpuText, memory,
-                               MonitorThermalName(reading.thermalState).lowercaseString];
+    self.accessibilityLabel = MonitorSpokenReading(reading);
 }
 
 @end
