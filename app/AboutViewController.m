@@ -165,8 +165,12 @@
     return [super tableView:tableView heightForRowAtIndexPath:indexPath];
 }
 
+// The section of Filesystems, Upgrade Repositories and Reset Rootfs, as
+// About.storyboard orders them: after the general one and the JIT's
+static const NSInteger kFilesystemsSection = 2;
+
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
-    if (section == 1) { // filesystems / upgrade
+    if (section == kFilesystemsSection) {
         // Nothing to say about a filesystem whose repositories iSH does not
         // keep: its Upgrade Repositories row is hidden (heightForRow above).
         if (!FsIsManaged()) {
