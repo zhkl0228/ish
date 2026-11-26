@@ -1015,10 +1015,15 @@ static dword_t execve_file(const char *filename, addr_t argv_addr, addr_t envp_a
                 "--single-generation",
             };
             // With an AOT image of node in use (jit_aot_serves) its interpreter and builtins are
-            // native code, while what V8 generates at run time still runs through the gadgets:
-            // JS stays in the interpreter. Measured 2026-10-01 on the Mac CLI (pure AOT build,
-            // node image recorded in this mode) against the tiers: 9 agent workloads 15.6s ->
-            // 14.0s, 13 MCP servers start 10-27% faster (mcp-remote only starts in this mode).
+            // native code, while what V8 generates at run time runs through the gadgets unless
+            // the JIT translates with room in its code region (jit_translates_with_room): only
+            // then do the tiers stay. Measured 2026-10-01 on the Mac CLI (pure AOT build, node
+            // image recorded in this mode) against the tiers: 9 agent workloads 15.6s -> 14.0s,
+            // 13 MCP servers start 10-27% faster (mcp-remote only starts in this mode). With
+            // the built-in JIT translating, on the phone (2026-11-26, iSH 2.2.1, node 24 and its
+            // image), the tiers against this set: JS compute 1.57 s -> 0.60 s, a TUI's text
+            // (wrapping, regex, JSON) 0.9 s -> 0.8 s, node -e 0 the same; the code region took
+            // 9-12 MB for each the first time and nothing when run again (its translations kept).
             // An image covers the node it was recorded from, in this mode.
             static const char *inject_args_interpreter[] = {
                 "--no-sparkplug",
@@ -1071,7 +1076,7 @@ static dword_t execve_file(const char *filename, addr_t argv_addr, addr_t envp_a
             size_t inject_count = 0;
 #ifdef ISH_JIT
             if (!forced)
-                interpreter = jit_aot_serves(filename);
+                interpreter = jit_aot_serves(filename) && !jit_translates_with_room();
 #else
             (void) forced;  // no images without the JIT: the tiers unless asked
 #endif
