@@ -31,16 +31,6 @@
 		66080F174C96D8E25CBD0BA3 /* MainMenu.m in Sources */ = {isa = PBXBuildFile; fileRef = 85763DE5C6EB38FA09DCC0FF /* MainMenu.m */; };
 		F0BBE9CF42F2DC05873F9BD0 /* TabBarView.m in Sources */ = {isa = PBXBuildFile; fileRef = 68D2CA8679F943DF899D0875 /* TabBarView.m */; };
 		CE4CDA11B43C589BB120A366 /* TerminalSession.m in Sources */ = {isa = PBXBuildFile; fileRef = EA9B2EB67F8F46F5879B5A0A /* TerminalSession.m */; };
-		E827062C78B7D0AC84773CE0 /* BackgroundKeepAlive.m in Sources */ = {isa = PBXBuildFile; fileRef = A1C0FFEE0000000000000003 /* BackgroundKeepAlive.m */; };
-		2330FCF1562AE4B848668D77 /* ClipboardItemViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = C9F5184E00E5A825E6039CDE /* ClipboardItemViewController.m */; };
-		6424550AE36BF9B3DDCB369D /* ClipboardSettingsViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = CE331FAA24D08D73A2254BAF /* ClipboardSettingsViewController.m */; };
-		F065A1C284CC4549C1ACC990 /* ClipboardShelfView.m in Sources */ = {isa = PBXBuildFile; fileRef = C441768938A29F56E1ACBDCA /* ClipboardShelfView.m */; };
-		B12E9EED9AD9B9A25E78454D /* ClipboardStackView.m in Sources */ = {isa = PBXBuildFile; fileRef = 41C8EF669BC2DFC88083DF7E /* ClipboardStackView.m */; };
-		993565976FBAF662F6A730B7 /* ClipboardStore.m in Sources */ = {isa = PBXBuildFile; fileRef = 8D10F1C4C0DFFAEB97105C78 /* ClipboardStore.m */; };
-		A22EA180C5C2C2AF3977A654 /* ClipboardUI.m in Sources */ = {isa = PBXBuildFile; fileRef = C8DC27DF5D78EF3EAB026982 /* ClipboardUI.m */; };
-		952C466E473A17978DF08078 /* MainMenu.m in Sources */ = {isa = PBXBuildFile; fileRef = 85763DE5C6EB38FA09DCC0FF /* MainMenu.m */; };
-		7F006745F3194A3B381E53E7 /* TabBarView.m in Sources */ = {isa = PBXBuildFile; fileRef = 68D2CA8679F943DF899D0875 /* TabBarView.m */; };
-		C498B6E73648245EDAFA3A38 /* TerminalSession.m in Sources */ = {isa = PBXBuildFile; fileRef = EA9B2EB67F8F46F5879B5A0A /* TerminalSession.m */; };
 		491B31E62883BF22008EEFB0 /* ThemeViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 491B31E52883BF22008EEFB0 /* ThemeViewController.m */; };
 		49302D8E277669D300C9885A /* ish.c in Sources */ = {isa = PBXBuildFile; fileRef = 49302D8D277669D300C9885A /* ish.c */; };
 		496C7AB227CC697E005D7613 /* Theme.m in Sources */ = {isa = PBXBuildFile; fileRef = 491C4C1E27C8FB65008B1DFA /* Theme.m */; };
@@ -1934,16 +1924,6 @@
 				66080F174C96D8E25CBD0BA3 /* MainMenu.m in Sources */,
 				F0BBE9CF42F2DC05873F9BD0 /* TabBarView.m in Sources */,
 				CE4CDA11B43C589BB120A366 /* TerminalSession.m in Sources */,
-				E827062C78B7D0AC84773CE0 /* BackgroundKeepAlive.m in Sources */,
-				2330FCF1562AE4B848668D77 /* ClipboardItemViewController.m in Sources */,
-				6424550AE36BF9B3DDCB369D /* ClipboardSettingsViewController.m in Sources */,
-				F065A1C284CC4549C1ACC990 /* ClipboardShelfView.m in Sources */,
-				B12E9EED9AD9B9A25E78454D /* ClipboardStackView.m in Sources */,
-				993565976FBAF662F6A730B7 /* ClipboardStore.m in Sources */,
-				A22EA180C5C2C2AF3977A654 /* ClipboardUI.m in Sources */,
-				952C466E473A17978DF08078 /* MainMenu.m in Sources */,
-				7F006745F3194A3B381E53E7 /* TabBarView.m in Sources */,
-				C498B6E73648245EDAFA3A38 /* TerminalSession.m in Sources */,
 				3E280507715D05CE850E06AC /* BuiltinJIT.m in Sources */,
 				1153F84ACAF9D723AFA4FBC8 /* BuiltinJITViewController.m in Sources */,
 				E0654F36D17D87DC20085DBC /* OnDevicePairing.m in Sources */,

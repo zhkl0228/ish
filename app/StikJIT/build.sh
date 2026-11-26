@@ -37,10 +37,18 @@ done
 # StikJIT.DDIPaths is read as the type's member, and the helper did not
 # build against it (Xcode 16.4; StikJIT's releases are built with Xcode 27,
 # and earlier ones, it says, may not read their interfaces), unless module
-# names there are aliased
+# names there are aliased. Xcode 27.2's Swift writes module selectors there
+# (StikJIT::DDIPaths) and ignores the alias flag, said obsoleted by them.
+read -r name version <<< "$(xcodebuild -version | head -1)"
+[ "$name" = Xcode ] || { echo "app/StikJIT/build.sh: xcodebuild -version said \"$name $version\"" >&2; exit 1; }
+IFS=. read -r major minor rest <<< "$version"
+swift_flags='$(inherited)'
+if (( major * 100 + minor < 2702 )); then
+    swift_flags='$(inherited) -alias-module-names-in-module-interface'
+fi
 xcodebuild archive -project "$out/src/StikJIT.xcodeproj" -scheme StikJIT -destination 'generic/platform=iOS' \
     -archivePath "$out/StikJIT" BUILD_LIBRARY_FOR_DISTRIBUTION=YES SKIP_INSTALL=NO CODE_SIGNING_ALLOWED=NO \
-    'OTHER_SWIFT_FLAGS=$(inherited) -alias-module-names-in-module-interface'
+    "OTHER_SWIFT_FLAGS=$swift_flags"
 xcodebuild -create-xcframework -framework "$out/StikJIT.xcarchive/Products/Library/Frameworks/StikJIT.framework" \
     -output "$out/StikJIT.xcframework"
 echo "$stamp" > "$out/stamp"

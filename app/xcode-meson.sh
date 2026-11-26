@@ -23,6 +23,7 @@ if [[ $? -ne 0 ]]; then
     [binaries]
     c = 'clang'
     ar = 'ar'
+    strip = 'strip'
 
     [host_machine]
     system = 'darwin'

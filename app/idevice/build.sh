@@ -39,8 +39,10 @@ curl -fsSL -o "$out/src.tar.gz" "https://github.com/jkcoxson/idevice/archive/$CO
 tar -xzf "$out/src.tar.gz" -C "$out/src" --strip-components=1
 # The app's deployment target, for objects the app's link takes as its own;
 # no LTO, which leaves LLVM bitcode in the archive that Xcode's linker does
-# not read (tctiSH's experience)
-export IPHONEOS_DEPLOYMENT_TARGET=16.0 CARGO_PROFILE_RELEASE_LTO=false
+# not read (tctiSH's experience). Its lints capped, as cargo caps a registry
+# dependency's: with a few of its features, code the others use is unused
+# here (an import, a function), which it warned of.
+export IPHONEOS_DEPLOYMENT_TARGET=18.0 CARGO_PROFILE_RELEASE_LTO=false RUSTFLAGS="--cap-lints allow"
 (cd "$out/src/ffi" && cargo build --locked --release --target "$TARGET" --no-default-features --features "$FEATURES")
 
 library="$out/src/target/$TARGET/release/libidevice_ffi.a"
@@ -50,6 +52,11 @@ for symbol in _pairable_host_prepare _pairable_host_accept_fd _pairable_host_fre
         { echo "app/idevice/build.sh: $library exports no $symbol" >&2; exit 1; }
 done
 cp "$library" "$out/libidevice_ffi.a"
-cp "$out/src/ffi/idevice.h" "$out/idevice.h"
+# libplist's libplist_version() is declared with no prototype, which the
+# app's -Wstrict-prototypes warned of in OnDevicePairing.m: (void), as it is
+sed 's/^    PLIST_API const char\* libplist_version();$/    PLIST_API const char* libplist_version(void);/' \
+    "$out/src/ffi/idevice.h" > "$out/idevice.h"
+grep -q "^    PLIST_API const char\* libplist_version(void);$" "$out/idevice.h" ||
+    { echo "app/idevice/build.sh: idevice.h declares no libplist_version() to give a prototype" >&2; exit 1; }
 echo "$stamp" > "$out/stamp"
 echo "libidevice_ffi.a: built from $stamp ($(du -h "$out/libidevice_ffi.a" | cut -f1))"
