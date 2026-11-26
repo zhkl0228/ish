@@ -11,6 +11,7 @@
 #include "kernel/task.h"
 #include "kernel/errno.h"
 #include "kernel/inotify.h"
+#include "fs/pipe.h"
 #include "fs/real.h"
 
 struct mount *find_mount_and_trim_path(char *path) {
@@ -147,6 +148,8 @@ static struct fd *generic_openat_path(struct fd *at, const char *path_raw, int f
         struct statbuf before;
         existed = mount->fs->stat(mount, path, &before) >= 0;
     }
+    // before a reader's open of a FIFO waits for a writer (fifo_opened)
+    uint64_t fifo_epoch = fifo_open_epoch();
     struct fd *fd = mount->fs->open(mount, path, flags, mode);
     if (IS_ERR(fd)) {
         // if an error happens after this point, fd_close will release the
@@ -232,6 +235,13 @@ static struct fd *generic_openat_path(struct fd *at, const char *path_raw, int f
     err = _EISDIR;
     if (S_ISDIR(fd->type) && flags & (O_RDWR_ | O_WRONLY_))
         goto error;
+    // A FIFO of realfs's or fakefs's, the host's own FIFO: its writers
+    // counted, for its readers' POLLHUP (fs/pipe.h)
+    if (S_ISFIFO(fd->type) && fd->ops->poll == realfs_poll) {
+        err = fifo_opened(fd, flags, fifo_epoch);
+        if (err < 0)
+            goto error;
+    }
     fd->inotify_opened = true;
     inotify_fd(fd, IN_OPEN_);
     if (existed && (flags & O_TRUNC_) && S_ISREG(fd->type) && (flags & (O_WRONLY_ | O_RDWR_)))

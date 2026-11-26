@@ -197,10 +197,17 @@ struct fd {
     // IN_CLOSE_WRITE or IN_CLOSE_NOWRITE (kernel/inotify.h)
     bool inotify_opened;
     struct statbuf stat; // for adhoc fs
-    // A pipe's or FIFO's capacity, as F_GETPIPE_SZ and F_SETPIPE_SZ have it
-    // (fs/pipe.c), shared with its other ends; NULL for another file, and for
-    // a FIFO until it is first asked of. A reference, let go of on close.
+    // A pipe's or FIFO's state (fs/pipe.c): its capacity, as F_GETPIPE_SZ and
+    // F_SETPIPE_SZ have it, shared with its other ends, and a FIFO's writers;
+    // NULL for another file. A reference, let go of on close.
     struct pipe_size *pipe_size;
+    // A FIFO's open (fifo_opened): a writer, a reader (on its FIFO's readers,
+    // whose polls its last writer's close wakes), and the count of writers'
+    // opens of any FIFO as it began to open (fifo_open_epoch)
+    bool fifo_writer;
+    bool fifo_reader;
+    uint64_t fifo_opened_at;
+    struct list fifo_readers;
     struct fd_sockrestart sockrestart; // argh
 
     // these are used for a variety of things related to the fd

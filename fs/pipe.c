@@ -1,10 +1,13 @@
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 #include "kernel/calls.h"
+#include "kernel/fs.h"
 #include "fs/fd.h"
 #include "fs/pipe.h"
+#include "fs/poll.h"
 #include "fs/real.h"
 #include "debug.h"
 #include "util/list.h"
@@ -20,6 +23,9 @@
 // whatever it is set to, so a smaller one takes more before a write waits
 // than Linux's would, and one set below what it holds is not EBUSY. More
 // than 64KB it cannot hold: EPERM, as a Linux whose pipe-max-size is that.
+//
+// A FIFO's is made as it is opened (fifo_opened), and counts its writers
+// (fs/pipe.h): its read ends' POLLHUP.
 struct pipe_size {
     unsigned refs;
     unsigned size;
@@ -27,16 +33,46 @@ struct pipe_size {
     dev_t dev;
     ino_t ino;
     struct list links;
+    // a FIFO's writers now, and the count of writers' opens (fifo_writer_opens)
+    // at its last writer's open
+    unsigned writers;
+    uint64_t last_writer_open;
+    // a FIFO's read ends (fd->fifo_readers), under fifo_wake_lock
+    struct list readers;
 };
 
 #define PIPE_SIZE_DEFAULT (16 * PAGE_SIZE) // Linux's, 64KB
 #define PIPE_SIZE_MAX 65536 // a Darwin pipe's at most
 
+// refs, size, writers, last_writer_open and the fds' pipe_size
 static lock_t pipe_sizes_lock = LOCK_INITIALIZER;
 static struct list fifo_sizes = LIST_INITIALIZER(fifo_sizes);
+// The readers lists: a last writer's close wakes their polls holding it, not
+// pipe_sizes_lock, which a poll's check (fifo_hangup) takes under its poll's
+// lock that poll_wakeup takes
+static lock_t fifo_wake_lock = LOCK_INITIALIZER;
+static _Atomic uint64_t fifo_writer_opens;
 
 void pipe_size_release(struct fd *fd) {
     struct pipe_size *ps = fd->pipe_size;
+    if (fd->fifo_reader) {
+        lock(&fifo_wake_lock);
+        list_remove(&fd->fifo_readers);
+        unlock(&fifo_wake_lock);
+    }
+    bool last_writer = false;
+    if (fd->fifo_writer) {
+        lock(&pipe_sizes_lock);
+        last_writer = --ps->writers == 0;
+        unlock(&pipe_sizes_lock);
+    }
+    if (last_writer) {
+        lock(&fifo_wake_lock);
+        struct fd *reader;
+        list_for_each_entry(&ps->readers, reader, fifo_readers)
+            poll_wakeup(reader, POLL_HUP);
+        unlock(&fifo_wake_lock);
+    }
     fd->pipe_size = NULL;
     lock(&pipe_sizes_lock);
     if (--ps->refs == 0) {
@@ -64,9 +100,47 @@ static int fifo_size_attach(struct fd *fd) {
     if (ps == NULL)
         return _ENOMEM;
     *ps = (struct pipe_size) {.refs = 1, .size = PIPE_SIZE_DEFAULT, .dev = st.st_dev, .ino = st.st_ino};
+    list_init(&ps->readers);
     list_add(&fifo_sizes, &ps->links);
     fd->pipe_size = ps;
     return 0;
+}
+
+uint64_t fifo_open_epoch(void) {
+    return atomic_load(&fifo_writer_opens);
+}
+
+int fifo_opened(struct fd *fd, int flags, uint64_t epoch) {
+    lock(&pipe_sizes_lock);
+    int err = fifo_size_attach(fd);
+    if (err < 0) {
+        unlock(&pipe_sizes_lock);
+        return err;
+    }
+    struct pipe_size *ps = fd->pipe_size;
+    if (flags & (O_WRONLY_ | O_RDWR_)) {
+        ps->writers++;
+        ps->last_writer_open = atomic_fetch_add(&fifo_writer_opens, 1) + 1;
+        fd->fifo_writer = true;
+    }
+    unlock(&pipe_sizes_lock);
+    if (!(flags & O_WRONLY_)) {
+        fd->fifo_reader = true;
+        fd->fifo_opened_at = epoch;
+        lock(&fifo_wake_lock);
+        list_add(&ps->readers, &fd->fifo_readers);
+        unlock(&fifo_wake_lock);
+    }
+    return 0;
+}
+
+bool fifo_hangup(struct fd *fd) {
+    if (!fd->fifo_reader)
+        return false;
+    lock(&pipe_sizes_lock);
+    bool hup = fd->pipe_size->writers == 0 && fd->pipe_size->last_writer_open > fd->fifo_opened_at;
+    unlock(&pipe_sizes_lock);
+    return hup;
 }
 
 int_t pipe_fcntl_size(struct fd *fd, bool set, dword_t arg) {
@@ -154,6 +228,7 @@ int_t sys_pipe2(addr_t pipe_addr, int_t flags) {
     }
     // on no list: links null
     *ps = (struct pipe_size) {.refs = 1, .size = PIPE_SIZE_DEFAULT};
+    list_init(&ps->readers);
     err = fp[0] = pipe_f_create(p[0], inode, ps, flags);
     if (fp[0] < 0) {
         close(p[1]);
