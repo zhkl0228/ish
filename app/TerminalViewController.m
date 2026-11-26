@@ -1342,15 +1342,24 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
         if (key.hidden != up)
             key.hidden = up;
     }
-    // the ones to go first, so that no two hold at once
     NSArray<NSLayoutConstraint *> *atBottom = @[self.monitorColumnAboveColumnKeys, self.columnKeysAtBottom];
     NSArray<NSLayoutConstraint *> *underMeters = @[self.columnKeysUnderMeters, self.columnKeysAboveKeyboard];
     // hidden, at the bottom still (a place of its own), the meters free of it
     NSArray<NSLayoutConstraint *> *on = !shown ? @[self.columnKeysAtBottom] : up ? underMeters : atBottom;
     NSArray<NSLayoutConstraint *> *off = !shown ? [underMeters arrayByAddingObject:self.monitorColumnAboveColumnKeys]
                                        : up ? atBottom : underMeters;
-    [NSLayoutConstraint deactivateConstraints:off];
-    [NSLayoutConstraint activateConstraints:on];
+    // Only what changes, as everything updateMonitorColumn sets, the ones to
+    // go first, so that no two hold at once: it runs in updateViewConstraints,
+    // where a constraint set may ask for the constraints again (814 set them
+    // every time).
+    for (NSLayoutConstraint *constraint in off) {
+        if (constraint.active)
+            constraint.active = NO;
+    }
+    for (NSLayoutConstraint *constraint in on) {
+        if (!constraint.active)
+            constraint.active = YES;
+    }
 }
 
 #pragma mark Commands
