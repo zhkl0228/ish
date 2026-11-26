@@ -91,7 +91,6 @@
 // above the keyboard and the keys over it (the paste key's row), or the home
 // indicator (aboveKeys: applyBottomPad)
 @property NSLayoutConstraint *monitorColumnTop;
-@property NSLayoutConstraint *monitorColumnAboveKeys;
 // Esc, tab, /, up, down and return at the bottom of the column, while it is
 // shown and the keyboard is down (updateColumnKeys): what a program's menus
 // take (claude's: / for its commands, esc to leave one), without the keyboard
@@ -100,9 +99,7 @@
 // keyboard (aboveKeyboard); the bar over the keyboard has them too.
 @property UIStackView *columnKeys;
 @property NSArray<UIView *> *columnKeysKeyboardDown;
-@property NSLayoutConstraint *monitorColumnAboveColumnKeys;
 @property NSLayoutConstraint *columnKeysAtBottom;
-@property NSLayoutConstraint *columnKeysUnderMeters;
 @property NSLayoutConstraint *columnKeysAboveKeyboard;
 // A tap of one: the keyboard's click is heard only while a keyboard shows
 @property UIImpactFeedbackGenerator *columnKeyFeedback;
@@ -321,10 +318,10 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
     ]];
     [self tabsDidChange];
 
-    // The meters, while Settings or the View menu have them shown: in what
-    // the terminal leaves right of its last column, and in the column right
-    // of the terminal where the window has one (updateMonitorColumn). A tap
-    // on them (VoiceOver's activation) shows their details.
+    // The meters, while Settings or the View menu have them shown: in the
+    // column right of the terminal where the window has one, or else in what
+    // the terminal leaves right of its last column (updateMonitorColumn). A
+    // tap on them (VoiceOver's activation) shows their details.
     self.monitorSampler = [MonitorSampler new];
     self.monitorStrip = [[MonitorStripView alloc] initWithSampler:self.monitorSampler];
     MonitorColumnView *column = [[MonitorColumnView alloc] initWithSampler:self.monitorSampler];
@@ -334,11 +331,9 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
     self.monitorColumn = column;
     UILayoutGuide *safe = self.view.safeAreaLayoutGuide;
     self.monitorColumnTop = [column.topAnchor constraintEqualToAnchor:self.view.topAnchor];
-    self.monitorColumnAboveKeys = [column.bottomAnchor constraintLessThanOrEqualToAnchor:self.view.bottomAnchor];
     [NSLayoutConstraint activateConstraints:@[
         [column.leadingAnchor constraintEqualToAnchor:safe.trailingAnchor],
         [column.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
-        self.monitorColumnAboveKeys,
         self.monitorColumnTop,
     ]];
     [self addColumnKeys];
@@ -1008,7 +1003,8 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
     // The on-screen keyboard up (100 points of it or more over the terminal,
     // as hasExternalKeyboard tells it from the bar of extra keys alone, or a
     // floating keyboard's): the column keeps the CPU and the memory only, and
-    // of its keys esc and tab, under them; the bar has them all
+    // of its keys esc and tab, over the keyboard where the memory leaves them
+    // the room; the bar has them all
     self.keyboardUp = pad >= 100;
     self.monitorColumn.keyboardUp = self.keyboardUp;
     // and the meters' details, open, the CPUs and the memory only then
@@ -1037,14 +1033,12 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
 
 // The terminal's bottom: above the keyboard, and with it away (put down, or
 // none on screen) above the home indicator, whose bar would be over the last
-// line. Whether that moved it. The column's meters are 8 points above the same
-// (the keyboard's window over them hid them), the last minute's line giving
-// way first where they have not the room (MonitorColumnView); they move with
-// the terminal, in the layout pass that moves it.
+// line. Whether that moved it. The column's keys, the keyboard up, are 8
+// points above the same (the keyboard's window over them hid them), the
+// meters over them; they move with the terminal, in the layout pass that
+// moves it.
 - (BOOL)applyBottomPad {
     CGFloat pad = MAX(self.keyboardPad, self.view.safeAreaInsets.bottom);
-    if (self.monitorColumnAboveKeys.constant != -(pad + 8))
-        self.monitorColumnAboveKeys.constant = -(pad + 8);
     if (self.columnKeysAboveKeyboard.constant != -(pad + 8))
         self.columnKeysAboveKeyboard.constant = -(pad + 8);
     if (self.bottomConstraint.constant == pad)
@@ -1285,13 +1279,13 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
     [self.view addSubview:keys];
     self.columnKeys = keys;
     self.columnKeysKeyboardDown = @[slash, up, down, enter];
-    self.monitorColumnAboveColumnKeys = [self.monitorColumn.bottomAnchor constraintLessThanOrEqualToAnchor:keys.topAnchor
-                                                                                                   constant:-8];
+    // The meters' room is the column's, down to the keys: the rows that fit
+    // in it show (MonitorColumnView's fitRows)
+    [self.monitorColumn.bottomAnchor constraintEqualToAnchor:keys.topAnchor constant:-8].active = YES;
     self.columnKeysAtBottom = [keys.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor
                                                                 constant:-8];
-    self.columnKeysUnderMeters = [keys.topAnchor constraintEqualToAnchor:self.monitorColumn.bottomAnchor constant:8];
-    // as the meters are (applyBottomPad)
-    self.columnKeysAboveKeyboard = [keys.bottomAnchor constraintLessThanOrEqualToAnchor:self.view.bottomAnchor];
+    // as the terminal's bottom is (applyBottomPad)
+    self.columnKeysAboveKeyboard = [keys.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor];
     [keys.centerXAnchor constraintEqualToAnchor:self.monitorColumn.metersCenterXAnchor].active = YES;
     self.columnKeyFeedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
 }
@@ -1329,37 +1323,51 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
     [self.columnKeyFeedback impactOccurred];
 }
 
-// Shown while the column is: with the keyboard down all six at its bottom,
-// up esc and tab under the memory, the column's last meter then (the bar over
-// the keyboard has them too, folded or with the column hidden their only
-// place; it keeps them, so that its keys do not move as the phone unfolds)
+// Shown while the column is, at its bottom, the meters over them: with the
+// keyboard down all six, above the home indicator; up esc and tab, above the
+// keyboard's bar, while the CPU and the memory have the room over them (the
+// bar has them too, folded or with the column hidden their only place; it
+// keeps them, so that its keys do not move as the phone unfolds). Up, they
+// were under the memory, the column's last meter then, as far from the
+// keyboard as the meters had room for. Folded, the column has not the room
+// for both from the status bar's region (174) to the bar (371): it squashed
+// the memory, and the bar's own esc and tab are under the left thumb there;
+// unfolded, the bar's esc is the width of the screen from the right one.
 - (void)updateColumnKeys {
     BOOL shown = !self.monitorColumn.hidden;
     BOOL up = self.keyboardUp;
     if (self.columnKeys.hidden == shown)
         self.columnKeys.hidden = !shown;
-    for (UIView *key in self.columnKeysKeyboardDown) {
-        if (key.hidden != up)
-            key.hidden = up;
+    NSMutableArray<UIView *> *upKeys = [self.columnKeys.arrangedSubviews mutableCopy];
+    [upKeys removeObjectsInArray:self.columnKeysKeyboardDown];
+    BOOL upKeysFit = up && [self columnHasRoomForKeys:upKeys];
+    for (UIView *key in self.columnKeys.arrangedSubviews) {
+        BOOL hidden = up && !(upKeysFit && [upKeys containsObject:key]);
+        if (key.hidden != hidden)
+            key.hidden = hidden;
     }
-    NSArray<NSLayoutConstraint *> *atBottom = @[self.monitorColumnAboveColumnKeys, self.columnKeysAtBottom];
-    NSArray<NSLayoutConstraint *> *underMeters = @[self.columnKeysUnderMeters, self.columnKeysAboveKeyboard];
-    // hidden, at the bottom still (a place of its own), the meters free of it
-    NSArray<NSLayoutConstraint *> *on = !shown ? @[self.columnKeysAtBottom] : up ? underMeters : atBottom;
-    NSArray<NSLayoutConstraint *> *off = !shown ? [underMeters arrayByAddingObject:self.monitorColumnAboveColumnKeys]
-                                       : up ? atBottom : underMeters;
-    // Only what changes, as everything updateMonitorColumn sets, the ones to
-    // go first, so that no two hold at once: it runs in updateViewConstraints,
-    // where a constraint set may ask for the constraints again (814 set them
-    // every time).
-    for (NSLayoutConstraint *constraint in off) {
-        if (constraint.active)
-            constraint.active = NO;
-    }
-    for (NSLayoutConstraint *constraint in on) {
-        if (!constraint.active)
-            constraint.active = YES;
-    }
+    // Hidden, at the bottom still (a place of its own). Only what changes, as
+    // everything updateMonitorColumn sets, the one to go first, so that both
+    // never hold at once: it runs in updateViewConstraints, where a constraint
+    // set may ask for the constraints again (814 set them every time).
+    NSLayoutConstraint *on = shown && up ? self.columnKeysAboveKeyboard : self.columnKeysAtBottom;
+    NSLayoutConstraint *off = on == self.columnKeysAtBottom ? self.columnKeysAboveKeyboard : self.columnKeysAtBottom;
+    if (off.active)
+        off.active = NO;
+    if (!on.active)
+        on.active = YES;
+}
+
+// Whether the column, the keyboard up, has the room for these keys under its
+// CPU and memory: from where the meters begin (updateMonitorColumn) to 8
+// points over the keyboard (applyBottomPad), 8 between the meters and the
+// keys (addColumnKeys)
+- (BOOL)columnHasRoomForKeys:(NSArray<UIView *> *)keys {
+    CGFloat height = self.monitorColumn.leastHeight + 8 - self.columnKeys.spacing;
+    for (UIView *key in keys)
+        height += self.columnKeys.spacing + [key systemLayoutSizeFittingSize:UILayoutFittingCompressedSize].height;
+    CGFloat bottom = self.view.bounds.size.height - MAX(self.keyboardPad, self.view.safeAreaInsets.bottom) - 8;
+    return self.monitorColumnTop.constant + height <= bottom;
 }
 
 #pragma mark Commands
@@ -1749,7 +1757,6 @@ static NSString *ShellQuoted(NSString *string) {
 // Off, the meters leave the window, and read nothing (MonitorStripView). The
 // room they had stays the scroll bar's: the terminal keeps its columns.
 - (void)applyShowMeters {
-    self.termView.marginView = UserPreferences.shared.showMeters ? self.monitorStrip : nil;
     [self updateMonitorColumn];
 }
 
@@ -1762,12 +1769,16 @@ static NSString *ShellQuoted(NSString *string) {
 // UIKit says where that ends (iOS 27.1): the occlusion regions at the column's
 // top (reservedRegionsOfKind:), and where a bar on the right edge as wide as
 // the column begins (layoutRegionForBarOnEdge:extent:), the lowest of them,
-// and the status bar's frame where that is the column's. The status bar's
-// frame alone is not: it is the window's top, 2 points high, on that phone. A
-// status bar end measured from its screenshots (151 points folded) was passed
-// by an indicator the status bar showed under the battery, and the meters
-// covered it. With the status bar hidden, or nothing said of where it ends,
-// at the column's top, under the tab bar. Each layout is logged, and kept for
+// and 8 points under the status bar's frame where that is the column's. The
+// regions' frames have their margins in them: 8 more under them were 31
+// points under the status bar's dots folded (the column's region {{382, 0},
+// {84, 174}}, the dots ending at 151, the bar's insets' top 174 too). Not
+// under the dots: the room under them is the indicators' the status bar shows
+// there, which a status bar end measured from its screenshots (151 points
+// folded) had the meters cover. The status bar's frame alone says nothing: it
+// is the window's top, 2 points high, on that phone. With the status bar
+// hidden, or nothing said of where it ends, 8 points under the tab bar. Each
+// layout is logged, and kept for
 // /proc/ish/defaults/meters_column, with all it was laid out by, to place them
 // by on the phone. Called as the safe area, the traits and the status bar
 // change, and from updateViewConstraints, where UIKit notes the reserved
@@ -1786,12 +1797,13 @@ static NSString *ShellQuoted(NSString *string) {
     CGFloat columnLeft = size.width - insets.right;
     BOOL statusInColumn = !statusHidden && CGRectGetMinX(status) >= columnLeft - 8 &&
         CGRectGetMaxX(status) >= size.width - 1 && CGRectGetMaxY(status) > 0 && CGRectGetMaxY(status) < size.height / 2;
+    // where the meters begin
     CGFloat top = 0;
     NSMutableArray<NSString *> *by = [NSMutableArray array];
     if (!statusHidden) {
         if (statusInColumn) {
-            top = CGRectGetMaxY(status);
-            [by addObject:[NSString stringWithFormat:@"the status bar's frame, to %.0f", top]];
+            top = CGRectGetMaxY(status) + 8;
+            [by addObject:[NSString stringWithFormat:@"the status bar's frame, to %.0f", CGRectGetMaxY(status)]];
         }
         // UIKit's say of it is iOS 27.1's: an SDK before has none of it (Xcode
         // 16.4 failed to compile it), where the status bar's frame is all
@@ -1802,8 +1814,9 @@ static NSString *ShellQuoted(NSString *string) {
                 BOOL columnTop = CGRectGetMaxX(frame) > columnLeft && CGRectGetMinY(frame) < size.height / 2;
                 if (columnTop)
                     top = MAX(top, CGRectGetMaxY(frame));
-                [by addObject:[NSString stringWithFormat:@"occlusion %@%@", NSStringFromCGRect(frame),
-                               columnTop ? @"" : @" (not at the column's top)"]];
+                [by addObject:[NSString stringWithFormat:@"occlusion %@ %@, its margins %@%@%@", region.identifier,
+                               NSStringFromCGRect(frame), NSStringFromUIEdgeInsets(region.margins),
+                               region.active ? @"" : @" (inactive)", columnTop ? @"" : @" (not at the column's top)"]];
             }
             UIViewLayoutRegion *bar = [UIViewLayoutRegion layoutRegionForBarOnEdge:UIRectEdgeRight extent:insets.right];
             UIEdgeInsets barInsets = [view edgeInsetsForLayoutRegion:bar];
@@ -1814,13 +1827,13 @@ static NSString *ShellQuoted(NSString *string) {
 #endif
     }
     if (top == 0) {
-        top = MAX(insets.top, CGRectGetMaxY(self.tabBar.frame));
+        top = MAX(insets.top, CGRectGetMaxY(self.tabBar.frame)) + 8;
         [by addObject:statusHidden ? @"the status bar hidden: under the tab bar"
                                    : @"nothing said of where the status bar ends: under the tab bar"];
     }
 
     NSString *layout = [NSString stringWithFormat:@"%@ (%@); safe area insets %@, view %@, status bar %@",
-                        column ? [NSString stringWithFormat:@"from %.0f", top + 8] : @"none",
+                        column ? [NSString stringWithFormat:@"from %.0f", top] : @"none",
                         [by componentsJoinedByString:@"; "],
                         NSStringFromUIEdgeInsets(insets), NSStringFromCGSize(size),
                         statusHidden ? @"hidden" : NSStringFromCGRect(status)];
@@ -1832,9 +1845,15 @@ static NSString *ShellQuoted(NSString *string) {
 
     if (self.monitorColumn.hidden != !column)
         self.monitorColumn.hidden = !column;
+    // The strip in the terminal's margin only where the column is not: beside
+    // it, its CPU, memory and heat were the column's again
+    UIView *margin = UserPreferences.shared.showMeters && !column ? self.monitorStrip : nil;
+    if (self.termView.marginView != margin)
+        self.termView.marginView = margin;
+    // before the keys, which go by it
+    if (column && self.monitorColumnTop.constant != top)
+        self.monitorColumnTop.constant = top;
     [self updateColumnKeys];
-    if (column && self.monitorColumnTop.constant != top + 8)
-        self.monitorColumnTop.constant = top + 8;
 }
 
 // The reserved regions updateMonitorColumn reads here are UIKit's to watch:

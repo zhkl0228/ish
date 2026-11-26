@@ -13,6 +13,7 @@
 - (instancetype)initWithFrame:(CGRect)frame {
     if (self = [super initWithFrame:frame]) {
         _values = @[];
+        _leastTop = 1;
         _area = [CAShapeLayer layer];
         _line = [CAShapeLayer layer];
         _line.fillColor = NULL;
@@ -53,11 +54,14 @@
     } else {
         CGFloat width = bounds.size.width, height = bounds.size.height;
         CGFloat step = width / (kMonitorHistoryLength - 1);
+        double top = self.leastTop;
+        for (NSNumber *value in self.values)
+            top = MAX(top, value.doubleValue);
         UIBezierPath *line = [UIBezierPath bezierPath];
         for (NSUInteger i = 0; i < count; i++) {
             // half the line's width clear of the top and the bottom
             CGPoint point = CGPointMake(width - (count - 1 - i) * step,
-                                        0.5 + (height - 1) * (1 - self.values[i].doubleValue));
+                                        0.5 + (height - 1) * (1 - self.values[i].doubleValue / top));
             if (i == 0)
                 [line moveToPoint:point];
             else
@@ -167,8 +171,8 @@ static UIColor *GaugeColor(double fraction) {
 @property UIImageView *heatIcon;
 @property UILabel *heatLabel;
 // The last reading's heat more than nominal: the heat's row shown, the
-// keyboard down
-@property BOOL hot;
+// keyboard down, where it fits (fitRows)
+@property (nonatomic) BOOL hot;
 
 @end
 
@@ -190,13 +194,16 @@ static UIColor *GaugeColor(double fraction) {
         [self addSubview:stack];
         self.stack = stack;
 
-        // The CPU's last minute over its gauge, first under the status bar. The
-        // line gives way first where the column has not the room (the keyboard
-        // up under it), to nothing; the clip keeps the rest off the keys.
+        // The CPU's last minute over its gauge, first under the status bar, its
+        // top a CPU's whole share at least (the guest's one thread busy) or
+        // the minute's highest: of all the CPUs, a busy thread's share a sixth
+        // of six, the line was a flat one at the bottom of its 14 points. 999:
+        // hidden (fitRows), the stack's own height of 0 for it holds.
         MonitorSparkView *line = [MonitorSparkView new];
+        line.leastTop = 1.0 / NSProcessInfo.processInfo.activeProcessorCount;
         line.translatesAutoresizingMaskIntoConstraints = NO;
         NSLayoutConstraint *lineHeight = [line.heightAnchor constraintEqualToConstant:14];
-        lineHeight.priority = UILayoutPriorityDefaultLow;
+        lineHeight.priority = UILayoutPriorityRequired - 1;
         [NSLayoutConstraint activateConstraints:@[
             [line.widthAnchor constraintEqualToConstant:kGaugeSize],
             lineHeight,
@@ -230,12 +237,11 @@ static UIColor *GaugeColor(double fraction) {
         self.heatLabel = heat;
 
         // Under the status bar's battery, kStatusInset left of the column's
-        // middle as the status bar is; as tall as the meters are, which the
-        // column's constraints keep under the status bar and above the keys
-        // (TerminalViewController)
+        // middle as the status bar is; from the column's top, as tall as the
+        // rows that fit in it (fitRows), the column's height being the room
+        // the status bar and the keys leave (TerminalViewController)
         [NSLayoutConstraint activateConstraints:@[
             [stack.topAnchor constraintEqualToAnchor:self.topAnchor],
-            [stack.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
             [stack.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
             [stack.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-2 * kStatusInset],
         ]];
@@ -245,18 +251,74 @@ static UIColor *GaugeColor(double fraction) {
 }
 
 - (void)setKeyboardUp:(BOOL)keyboardUp {
+    if (keyboardUp == _keyboardUp)
+        return;
     _keyboardUp = keyboardUp;
-    [self showRows];
+    [self setNeedsLayout];
 }
 
-// What is under the memory, hidden while the keyboard is up; the heat's row
-// shown only while it is more than nominal
-- (void)showRows {
-    if (self.nativeGauge.hidden != self.keyboardUp)
-        self.nativeGauge.hidden = self.keyboardUp;
-    BOOL heat = self.hot && !self.keyboardUp;
-    if (self.heatRow.hidden == heat)
-        self.heatRow.hidden = !heat;
+- (void)setHot:(BOOL)hot {
+    if (hot == _hot)
+        return;
+    _hot = hot;
+    [self setNeedsLayout];
+}
+
+// The rows chosen for the room the column has, before the stack is laid out
+// in it: its height is the room, whatever the rows (TerminalViewController),
+// so that choosing them lays out nothing again
+- (void)layoutSubviews {
+    [self fitRows];
+    [super layoutSubviews];
+}
+
+// The rows the column shows: the CPU; the memory; under them the heat's
+// while it is more than nominal and the JIT's, with the keyboard down; over
+// them the CPU's last minute: each, in that order, while the column has the
+// room for it and those before it. One without goes whole: squashed (the
+// stack as tall as the column), the line was flat, the heat's row a dot,
+// and the memory's ring, the keyboard up, half its size under its name.
+- (void)fitRows {
+    CGFloat room = self.bounds.size.height;
+    NSMutableSet<UIView *> *shown = [NSMutableSet setWithObject:self.cpuGauge];
+    NSMutableArray<UIView *> *wanted = [NSMutableArray arrayWithObject:self.memoryGauge];
+    if (self.hot && !self.keyboardUp)
+        [wanted addObject:self.heatRow];
+    if (!self.keyboardUp)
+        [wanted addObject:self.nativeGauge];
+    [wanted addObject:self.cpuLine];
+    for (UIView *row in wanted) {
+        [shown addObject:row];
+        if ([self heightOfRows:shown] > room)
+            [shown removeObject:row];
+    }
+    for (UIView *row in @[self.cpuLine, self.memoryGauge, self.nativeGauge, self.heatRow]) {
+        BOOL hidden = ![shown containsObject:row];
+        if (row.hidden != hidden)
+            row.hidden = hidden;
+    }
+}
+
+- (CGFloat)leastHeight {
+    return [self heightOfRows:[NSSet setWithObjects:self.cpuGauge, self.memoryGauge, nil]];
+}
+
+// The stack's height with these rows of it shown: theirs, and the spacing
+// after each but the last
+- (CGFloat)heightOfRows:(NSSet<UIView *> *)rows {
+    CGFloat height = 0;
+    UIView *previous = nil;
+    for (UIView *row in self.stack.arrangedSubviews) {
+        if (![rows containsObject:row])
+            continue;
+        if (previous != nil) {
+            CGFloat spacing = [self.stack customSpacingAfterView:previous];
+            height += spacing == UIStackViewSpacingUseDefault ? self.stack.spacing : spacing;
+        }
+        height += [row systemLayoutSizeFittingSize:UILayoutFittingCompressedSize].height;
+        previous = row;
+    }
+    return height;
 }
 
 - (MonitorGaugeView *)addGauge:(NSString *)name {
@@ -325,7 +387,6 @@ static UIColor *GaugeColor(double fraction) {
     }
     self.hot = reading.thermalState != NSProcessInfoThermalStateNominal;
     self.heatLabel.text = MonitorThermalName(reading.thermalState);
-    [self showRows];
     [UIView animateWithDuration:0.3 animations:^{
         [self applyColors];
     }];
