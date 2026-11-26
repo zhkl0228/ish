@@ -12383,11 +12383,18 @@ make_fcvt_to_int fcvtzu, fcvtzu, fcvtzu, fcvtzu, fcvtzu
     ldr s1, [x14]
 
 .Lfcmp_do:
+    // bit 24: FCMPE
     cbz x11, .Lfcmp_do_single
+    tbnz x8, #24, 1f
     fcmp d0, d1
     b .Lfcmp_store
+1:  fcmpe d0, d1
+    b .Lfcmp_store
 .Lfcmp_do_single:
+    tbnz x8, #24, 2f
     fcmp s0, s1
+    b .Lfcmp_store
+2:  fcmpe s0, s1
 
 .Lfcmp_store:
     mrs x17, nzcv
@@ -12411,13 +12418,20 @@ make_fcvt_to_int fcvtzu, fcvtzu, fcvtzu, fcvtzu, fcvtzu
     lsl x13, x9, #4
     add x12, x12, x13
 
+    // bit 24: FCMPE
     cbz x11, .Lfcmp_zero_single
     ldr d0, [x12]
+    tbnz x8, #24, 1f
     fcmp d0, #0.0
+    b .Lfcmp_zero_store
+1:  fcmpe d0, #0.0
     b .Lfcmp_zero_store
 .Lfcmp_zero_single:
     ldr s0, [x12]
+    tbnz x8, #24, 2f
     fcmp s0, #0.0
+    b .Lfcmp_zero_store
+2:  fcmpe s0, #0.0
 
 .Lfcmp_zero_store:
     mrs x17, nzcv
@@ -13024,16 +13038,25 @@ make_fcvt_to_int fcvtzu, fcvtzu, fcvtzu, fcvtzu, fcvtzu
     lsl x15, x10, #4
     add x15, x13, x15       // &Vm
 
+    // bit 28: FCCMPE
     cbz x12, .Lfccmp_single
     ldr d0, [x14]
     ldr d1, [x15]
+    tbnz x8, #28, 1f
     fcmp d0, d1
+    store_flags
+    gret
+1:  fcmpe d0, d1
     store_flags
     gret
 .Lfccmp_single:
     ldr s0, [x14]
     ldr s1, [x15]
+    tbnz x8, #28, 2f
     fcmp s0, s1
+    store_flags
+    gret
+2:  fcmpe s0, s1
     store_flags
     gret
 
@@ -13222,6 +13245,8 @@ make_fcvt_to_int fcvtzu, fcvtzu, fcvtzu, fcvtzu, fcvtzu
     b.eq .Lfp_dp1_fcvt_to_d
     cmp x17, #4
     b.eq .Lfp_dp1_fcvt_to_s
+    cmp x17, #7
+    b.eq .Lfp_dp1_fcvt_to_h
     cmp x17, #8
     b.eq .Lfp_dp1_frintn
     cmp x17, #9
@@ -13271,6 +13296,17 @@ make_fcvt_to_int fcvtzu, fcvtzu, fcvtzu, fcvtzu, fcvtzu
     fcvt s0, d0
     mov w12, #0              // result is single
     b .Lfp_dp1_store
+
+.Lfp_dp1_fcvt_to_h:
+    // FCVT Hd, Sn / FCVT Hd, Dn (to half precision, FPCR.AHP's): it was
+    // taken for FMOV, the single or double left as it was. A write of Hd
+    // zeroes the rest of the register: all of it stored.
+    cbz x12, 1f
+    fcvt h0, d0
+    b 2f
+1:  fcvt h0, s0
+2:  str q0, [x15]
+    gret
 
 .Lfp_dp1_frintn:
     cbz x12, 1f

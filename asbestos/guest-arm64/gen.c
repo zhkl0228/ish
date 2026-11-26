@@ -6144,17 +6144,20 @@ skip_three_different:
             gen_interrupt(state, INT_UNDEFINED);
             return 0;
         }
+        // Bit 4: FCMPE, whose any NaN raises Invalid Operation (FCMP's
+        // only a signalling one)
+        uint32_t e = (insn >> 4) & 1;
         if (insn & 0x08) {
             // Bit 3 set: FCMP/FCMPE with zero
             gen(state, (unsigned long) gadget_fcmp_zero_scalar);
-            // Pack: rn | type<<16
-            gen(state, rn | (type << 16));
+            // Pack: rn | type<<16 | e<<24
+            gen(state, rn | (type << 16) | (e << 24));
         } else {
             // Bit 3 clear: FCMP/FCMPE with register
             uint32_t rm = (insn >> 16) & 0x1f;
             gen(state, (unsigned long) gadget_fcmp_scalar);
-            // Pack: rn | rm<<8 | type<<16
-            gen(state, rn | (rm << 8) | (type << 16));
+            // Pack: rn | rm<<8 | type<<16 | e<<24
+            gen(state, rn | (rm << 8) | (type << 16) | (e << 24));
         }
         return 1;
     }
@@ -6172,9 +6175,11 @@ skip_three_different:
             gen_interrupt(state, INT_UNDEFINED);
             return 0;
         }
+        // Bit 4: FCCMPE, as FCMPE
+        uint32_t e = (insn >> 4) & 1;
         gen(state, (unsigned long) gadget_fccmp_scalar);
-        // Pack: rn | rm<<8 | ftype<<16 | cond<<20 | nzcv<<24
-        gen(state, rn | (rm << 8) | (ftype << 16) | (cond << 20) | (nzcv << 24));
+        // Pack: rn | rm<<8 | ftype<<16 | cond<<20 | nzcv<<24 | e<<28
+        gen(state, rn | (rm << 8) | (ftype << 16) | (cond << 20) | (nzcv << 24) | (e << 28));
         return 1;
     }
 
