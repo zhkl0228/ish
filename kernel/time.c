@@ -791,6 +791,7 @@ int_t sys_timer_create(dword_t clock, addr_t sigevent_addr, addr_t timer_addr) {
     struct posix_timer *timer = &group->posix_timers[timer_id];
     timer->timer_id = timer_id;
     timer->timer = timer_new(real_clockid, (timer_callback_t) posix_timer_callback, timer);
+    timer->timer->silent = sigev.method == SIGEV_NONE_;
     timer->signal = sigev.signo;
     timer->sig_value = sigev.value;
     timer->method = sigev.method;

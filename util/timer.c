@@ -11,6 +11,7 @@ struct timer *timer_new(clockid_t clockid, timer_callback_t callback, void *data
     timer->callback = callback;
     timer->data = data;
     timer->active = false;
+    timer->silent = false;
     timer->thread_running = false;
     lock_init(&timer->lock);
     timer->dead = false;
@@ -63,13 +64,20 @@ static void *timer_thread(void *param) {
 // What is left of it, as Linux says: 0 if it is disarmed, which a one-shot
 // timer is once it fired (its end, in the past, said a time below 0: what
 // setitimer, timer_settime and alarm said of one); 1ns if it is due and its
-// callback has yet to run, as an armed timer never says 0.
+// callback has yet to run, as an armed timer with a signal to deliver never
+// says 0. A silent one-shot is 0 from its end (Linux's common_timer_get: "A
+// single shot SIGEV_NONE timer must return 0, when it is expired!"): on a
+// loaded host the thread wakes up late, and it said 1ns 80ms after its end.
 static struct timer_spec timer_get_locked(struct timer *timer, struct timespec now) {
     struct timer_spec spec = {.interval = timer->interval};
     if (timer->active) {
         spec.value = timespec_subtract(timer->end, now);
-        if (!timespec_positive(spec.value))
-            spec.value = (struct timespec) {.tv_sec = 0, .tv_nsec = 1};
+        if (!timespec_positive(spec.value)) {
+            if (timer->silent && !timespec_positive(timer->interval))
+                spec.value = (struct timespec) {0};
+            else
+                spec.value = (struct timespec) {.tv_sec = 0, .tv_nsec = 1};
+        }
     }
     return spec;
 }

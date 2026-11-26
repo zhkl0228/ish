@@ -57,6 +57,9 @@ struct timer {
     struct timespec interval;
 
     bool active;
+    // Its firing delivers nothing (a POSIX timer's SIGEV_NONE): a one-shot
+    // reads as fired from its end, whenever the thread gets to it
+    bool silent;
     bool thread_running;
     pthread_t thread;
     timer_callback_t callback;
