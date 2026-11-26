@@ -1,7 +1,8 @@
 #!/bin/sh
 # What CI runs on macOS (.github/workflows/ci.yml's mac-regress): the CLI built
-# for Darwin, the app's host as iOS is, as a release, a warning an error, and
-# tests/regress run with it on the Alpine minirootfs the linux job ran them on.
+# for Darwin, the app's host as iOS is, as a release, a compiler's warning an
+# error, and tests/regress run with it on the Alpine minirootfs the linux job
+# ran them on.
 # What only Darwin does the linux job cannot see (a FIFO's hangup that Darwin's
 # poll does not report; HOST_CPU_LOAD_INFO's 32-bit counts, which wrapped on a
 # Mac up a month, below its CPUs' in /proc/stat). Darwin has no compiler for
@@ -29,9 +30,13 @@ ALPINE_SHA256=4b14c18f7e90a063b61462ea1462a5732c154bf6adad594974fe6487cd98a8de
 mkdir "$work"
 work=$(cd "$work" && pwd)
 
-# Homebrew's libarchive is keg-only: pkg-config finds it by its own path
+# Homebrew's libarchive is keg-only: pkg-config finds it by its own path. A
+# warning an error when compiling (-Werror), not when linking, which
+# -Dwerror=true would make so too (ld -fatal_warnings): Homebrew's bottle is
+# built on a newer macOS than the image may be (27.2's on xcode-27's 27.0),
+# and ld warns of it ("linking with dylib ... built for newer version")
 PKG_CONFIG_PATH="$(brew --prefix libarchive)/lib/pkgconfig" CC=clang \
-    meson setup "$work/build" --buildtype=release -Dwerror=true
+    meson setup "$work/build" --buildtype=release -Dc_args=-Werror
 ninja -C "$work/build" ish tools/fakefsify
 
 printf '#!/bin/sh\nexec python3 -I %s/tests/regress/cc_guest.py prebuilt %s "$@"\n' "$repo" "$programs" > "$work/cc-guest"
