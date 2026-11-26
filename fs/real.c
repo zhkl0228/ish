@@ -19,6 +19,7 @@
 #include <sys/un.h>
 
 #include "debug.h"
+#include "fs/pipe.h"
 #include "misc.h"
 #include "kernel/errno.h"
 #include "kernel/calls.h"
@@ -162,6 +163,8 @@ struct fd *realfs_open(struct mount *mount, const char *path, int flags, int mod
 int realfs_close(struct fd *fd) {
     if (fd->dir != NULL)
         closedir(fd->dir);
+    if (fd->pipe_size != NULL)
+        pipe_size_release(fd);
     int proxy = atomic_load(&fd->flock_proxy);
     if (proxy != 0)
         close(proxy - 1);   // drops this description's flock, like closing the file would

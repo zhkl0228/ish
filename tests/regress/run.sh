@@ -1064,6 +1064,17 @@ EOF
         status=1
     fi
     echo
+    echo "########## a pipe's capacity: F_GETPIPE_SZ, F_SETPIPE_SZ ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_pipe_size" tests/regress/regress_pipe_size.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_pipe_size 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_pipe_size"
+    else
+        echo "failed to build regress_pipe_size" >&2
+        status=1
+    fi
+    echo
     echo "########## /proc/<pid>/map_files: a link for each mapping of a file, to it ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_map_files" tests/regress/regress_map_files.c; then
         out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_map_files 2>&1)
