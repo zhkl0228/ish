@@ -107,7 +107,11 @@ def abi_of(ish, root):
 
 
 def master_set():
-    """The set master's lock names, which the server keeps: builds of master fetch it."""
+    """The set master's lock names, which the server keeps: builds of master fetch it. Master as it is now,
+    fetched: a clone's origin/master is as it was when the clone was made, and another run may have committed
+    since. Read from that, a run's upload deleted the set master had just been given (2026-11-26: a scheduled
+    run cloned 31 seconds before a run by hand committed its set, and kept the set before)."""
+    subprocess.run(['git', '-C', REPO, 'fetch', '-q', 'origin', 'master'], check=True)
     out = subprocess.run(['git', '-C', REPO, 'show', 'origin/master:benchmark/aojit/app-images.lock.json'],
                          capture_output=True, text=True)
     if out.returncode != 0:

@@ -53,6 +53,18 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The branch as it is now, not as it was when the run was made: a run
+      # queued behind another (concurrency) checked out the commit before the
+      # other's set, and recorded the same images again; and its commit, on
+      # that, could not go onto master, nor its pull request be pushed (a
+      # branch whose workflow files differ from master's needs the workflows
+      # permission). 2026-11-26: a scheduled run cloned 31 seconds before a
+      # run by hand committed its set.
+      - name: The branch as it is now
+        run: |
+          git fetch -q origin "$GITHUB_REF_NAME"
+          git reset -q --hard FETCH_HEAD
+
       - name: Tools
         run: |
           sudo apt-get update -qq
