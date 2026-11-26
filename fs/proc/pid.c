@@ -101,6 +101,30 @@ static unsigned long timeval_ticks(struct timeval_ tv) {
     return (unsigned long) tv.sec * 100 + (unsigned long) tv.usec / 10000;
 }
 
+// The system call the thread is in, as Linux's /proc/<pid>/syscall says it:
+// its number, its six arguments, the stack pointer and the pc (all but the
+// number in hex). A thread that is not in one is "running", as Linux says of
+// one running: it runs guest code, whose pc iSH has only as of its last
+// leaving translated code (stat's kstkeip has that). A hung program's threads,
+// waiting in futex, poll or read, say where they wait.
+static int proc_pid_syscall_show(struct proc_entry *entry, struct proc_data *buf) {
+    struct task *task = proc_get_task(entry);
+    if (task == NULL)
+        return _ESRCH;
+    if (!task->zombie && atomic_load(&task->in_syscall)) {
+        const struct cpu_state *cpu = &task->cpu;
+        proc_printf(buf, "%d 0x%llx 0x%llx 0x%llx 0x%llx 0x%llx 0x%llx 0x%llx 0x%llx\n", (int) cpu->regs[8],
+                    (unsigned long long) cpu->regs[0], (unsigned long long) cpu->regs[1],
+                    (unsigned long long) cpu->regs[2], (unsigned long long) cpu->regs[3],
+                    (unsigned long long) cpu->regs[4], (unsigned long long) cpu->regs[5],
+                    (unsigned long long) cpu->sp, (unsigned long long) cpu->pc);
+    } else {
+        proc_printf(buf, "running\n");
+    }
+    proc_put_task(task);
+    return 0;
+}
+
 // stat of the process (whole), or of one thread (/proc/<pid>/task/<tid>/stat),
 // as Linux's do_task_stat: the same but for the CPU time, the thread's own
 static int proc_stat_show(struct proc_entry *entry, struct proc_data *buf, bool whole) {
@@ -158,8 +182,12 @@ static int proc_stat_show(struct proc_entry *entry, struct proc_data *buf, bool 
     proc_printf(buf, "%lu ", 0l); // startcode
     proc_printf(buf, "%lu ", 0l); // endcode
     proc_printf(buf, "%lu ", task->mm ? task->mm->stack_start : 0);
-    proc_printf(buf, "%lu ", 0l); // kstkesp
-    proc_printf(buf, "%lu ", 0l); // kstkeip
+    // where the thread's stack and code were when it last left translated
+    // code (a system call, a block's end): Linux has them 0 now, but ps -o
+    // esp,eip reads them, and a thread running guest code has no other
+    // (/proc/<pid>/syscall says "running" of it)
+    proc_printf(buf, "%llu ", task->zombie ? 0ull : (unsigned long long) task->cpu.sp); // kstkesp
+    proc_printf(buf, "%llu ", task->zombie ? 0ull : (unsigned long long) task->cpu.pc); // kstkeip
 
     proc_printf(buf, "%lu ", (unsigned long) task->pending & 0xffffffff);
     proc_printf(buf, "%lu ", (unsigned long) task->blocked & 0xffffffff);
@@ -931,6 +959,7 @@ struct proc_children proc_pid_children = PROC_CHILDREN({
     {"stat", .show = proc_pid_stat_show},
     {"statm", .show = proc_pid_statm_show},
     {"status", .show = proc_pid_status_show},
+    {"syscall", S_IFREG | 0400, .show = proc_pid_syscall_show},
     {"task", S_IFDIR, .readdir = proc_pid_task_readdir},
 });
 
@@ -964,6 +993,7 @@ static struct proc_children proc_tid_children = PROC_CHILDREN({
     {"stat", .show = proc_tid_stat_show},
     {"statm", .show = proc_pid_statm_show},
     {"status", .show = proc_pid_status_show},
+    {"syscall", S_IFREG | 0400, .show = proc_pid_syscall_show},
 });
 
 static struct proc_dir_entry proc_pid_task = {NULL, S_IFDIR,
