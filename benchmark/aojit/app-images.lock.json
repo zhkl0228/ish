@@ -5,77 +5,93 @@
     "them in the app's build (base_url/set/<file>, objects xz-compressed) and checks",
     "each sha256. Written by publish_app_images.py; do not edit."
   ],
-  "abi": "6b04c691",
+  "abi": "3a8d7c3a",
   "base_url": "https://hk.gzmtx.cn/ish-aot",
   "images": {
     "bash": {
       "module": "/bin/bash",
       "object": "aot_bash_ios.o",
-      "sha256": "08fb1a61753d42eb6e28a604c0bc13d66464b53e6a811563fd7ac9b44cabd860",
-      "size": 6760280,
-      "xz_size": 968200
+      "sha256": "76f59bfba2030db5653b37037aa3a502d2ceac685b9d002b792ce626f5dadf38",
+      "size": 6760312,
+      "xz_size": 970208
     },
     "busybox": {
       "module": "/bin/busybox",
       "object": "aot_busybox_ios.o",
-      "sha256": "4a8f91056f0ff80c5b38be18c42ec2aaae0c45efd74a6a3c6fef638ad45d0a2f",
-      "size": 4428392,
-      "xz_size": 654900
+      "sha256": "b0426061add262b30022273bb0f3b15b878026d7c082eed6e626d1e636201c2e",
+      "size": 4430856,
+      "xz_size": 650004
     },
     "claude": {
       "module": "claude.exe",
       "object": "aot_claude_ios.o",
-      "sha256": "7c293cb03ff02734f00ad4ce2d3d3225a30f6674fbf2edaa1ce487cb93702cf1",
-      "size": 181763128,
-      "xz_size": 22078300
+      "sha256": "e1a4e125072b9b214058169fa1c7b7968333a76cf6f8dc1285e282356ff2e06a",
+      "size": 181411840,
+      "xz_size": 21805704
     },
     "crypto": {
       "module": "libcrypto.so",
       "object": "aot_crypto_ios.o",
-      "sha256": "bd5d9ba737c76db15ce1779d6edd7345b43a8f0f3a1d19041ca3f03efa258700",
-      "size": 18617712,
-      "xz_size": 2452680
+      "sha256": "3a3a1e954ec3cd7c0b8bc555509581f669d731666bdcd9816359e4c6c408ec67",
+      "size": 18617000,
+      "xz_size": 2456476
+    },
+    "gh": {
+      "module": "/usr/bin/gh",
+      "object": "aot_gh_ios.o",
+      "sha256": "b7f17ed1cded71f9d8fa7fee16f4b4c182eb0f4f062ca71b968bcfe406bb3fc8",
+      "size": 75472360,
+      "xz_size": 8825176
+    },
+    "git": {
+      "module": "/usr/bin/git",
+      "object": "aot_git_ios.o",
+      "sha256": "cf4406fda74e2f33866faeec1180e12fb58e47e6450e92220042175974e2b255",
+      "size": 26882928,
+      "xz_size": 3684152
     },
     "jvm": {
       "module": "libjvm.so",
       "object": "aot_jvm_ios.o",
-      "sha256": "05bfea47f1ffe651a0d24b5f0da98505c993316f100b8942d385ef3d68bc18ab",
-      "size": 168236424,
-      "xz_size": 20024728
+      "sha256": "8ffcde9d4f290b975a3179715a1da9fbac62210e081a2a87fe681bd6d370a277",
+      "size": 168337048,
+      "xz_size": 20243500
     },
     "musl": {
       "module": "ld-musl",
       "object": "aot_musl_ios.o",
-      "sha256": "f9b1fc97eeb4cb72c9d056c63a71754bcaade76b068e5c9b0c36d57e88ca5b0f",
-      "size": 4838664,
-      "xz_size": 735344
+      "sha256": "ce274c6af8cc506239068a0690c8291660d942122403307bf134eac39831d56b",
+      "size": 4822752,
+      "xz_size": 728888
     },
     "node": {
       "module": "/usr/bin/node",
       "object": "aot_node_ios.o",
-      "sha256": "85fe09abb6a137b0230b6906a43f5aa02f53abff5b82a3382b156f4d9be2be3b",
-      "size": 149225256,
-      "xz_size": 18229888
+      "sha256": "81adabfca8ad6adb92d7d7d4e4161ad2e5b46b464d41598d3da6027077cbdc28",
+      "size": 217670208,
+      "xz_size": 25976724
     },
     "python": {
       "module": "libpython3",
       "object": "aot_python_ios.o",
-      "sha256": "ae4ff37d1fc65342380f23db530cd3e1f1d4826af32f0ef15ca7efb481541699",
-      "size": 38099144,
-      "xz_size": 4870436
+      "sha256": "03b190a9aacd44fcafb73305185a11c78d7db9a268254f3073debd024c5e7bce",
+      "size": 38096512,
+      "xz_size": 4886500
     },
     "ssh": {
       "module": "/usr/bin/ssh",
       "object": "aot_ssh_ios.o",
-      "sha256": "d4a5eada5fb067b6771e11a8a16054a503dfe358566cc449ce00626f083820fc",
-      "size": 6278440,
-      "xz_size": 871344
+      "sha256": "542ea225b9e1c2d923be2379d1695719bb486408688d0c1ed0c2307696171ea3",
+      "size": 6298072,
+      "xz_size": 875980
     }
   },
   "recorded": {
     "apk": {
       "bash": "5.3.9-r1",
       "busybox": "1.37.0-r31",
+      "git": "2.54.1-r0",
+      "github-cli": "2.97.0-r2",
       "libcrypto3": "3.5.9-r1",
       "maven": "3.9.16-r0",
       "musl": "1.2.6-r3",
@@ -84,7 +100,7 @@
       "openssh-client-default": "10.3_p1-r2",
       "python3": "3.14.10-r2"
     },
-    "inputs": "fef29ec6bded21ef",
+    "inputs": "a701fa251252ef62",
     "npm": {
       "@anthropic-ai/claude-code": "2.1.332",
       "@moonshot-ai/kimi-code": "2.8.0"
@@ -95,5 +111,5 @@
     "sha256": "6d6ee01668af8c120ce44bd8ec3da1b42e6301a9eb090783fc7ed232da3aeded",
     "size": 30239249
   },
-  "set": "6b04c691-20261126-67e62ead"
+  "set": "3a8d7c3a-20261126-bac18cc8"
 }

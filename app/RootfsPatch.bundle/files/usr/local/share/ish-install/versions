@@ -6,6 +6,8 @@ npm @anthropic-ai/claude-code 2.1.332
 npm @moonshot-ai/kimi-code 2.8.0
 apk bash 5.3.9-r1
 apk busybox 1.37.0-r31
+apk git 2.54.1-r0
+apk github-cli 2.97.0-r2
 apk libcrypto3 3.5.9-r1
 apk musl 1.2.6-r3
 apk nodejs 24.22.3-r0
