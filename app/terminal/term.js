@@ -182,6 +182,41 @@ term.parser.registerOscHandler(777, (data) => {
     return true;
 });
 
+// DEC mode 2031, as contour, kitty and ghostty have it: a program that sets it
+// is told as the terminal turns dark or light (CSI ? 997 ; 1 n dark, 2 light;
+// updateStyle), and CSI ? 996 n asks which it is. Claude Code 2.1.332's
+// "auto" theme sets it and, told, asks the background again (OSC 11, which
+// xterm.js answers from the theme): without it the system's appearance
+// changed under a running claude was its own only at its next start.
+let themeNotify = false;
+// dark (updateStyle): undefined until the first style
+let themeDark;
+function reportTheme() {
+    native.sendInput(`\x1b[?997;${themeDark ? 1 : 2}n`);
+}
+// set or reset with other modes: xterm.js's own handler goes on to them
+term.parser.registerCsiHandler({prefix: '?', final: 'h'}, (params) => {
+    if (params.includes(2031))
+        themeNotify = true;
+    return false;
+});
+term.parser.registerCsiHandler({prefix: '?', final: 'l'}, (params) => {
+    if (params.includes(2031))
+        themeNotify = false;
+    return false;
+});
+term.parser.registerCsiHandler({prefix: '?', final: 'n'}, (params) => {
+    if (params.length != 1 || params[0] != 996)
+        return false;
+    reportTheme();
+    return true;
+});
+// a reset (RIS) resets it, as it does the modes xterm.js keeps
+term.parser.registerEscHandler({final: 'c'}, () => {
+    themeNotify = false;
+    return false;
+});
+
 // focus: the app's. A tap on the terminal gives it the keyboard; one while
 // there is a selection is the selection's.
 term.element.addEventListener('mousedown', () => {
@@ -350,6 +385,14 @@ exports.updateStyle = ({foregroundColor, backgroundColor, fontFamily, fontSize, 
     if (colorPaletteOverrides)
         colorPaletteOverrides.forEach((color, i) => theme[paletteNames[i]] = color);
     term.options.theme = theme;
+    // dark as its background is, by luminance (Rec. 709), which a program
+    // told of it reads back with OSC 11 (mode 2031)
+    const [red, green, blue] = rgb(backgroundColor);
+    const dark = 0.2126 * red + 0.7152 * green + 0.0722 * blue < 128;
+    const turned = themeDark !== undefined && dark != themeDark;
+    themeDark = dark;
+    if (turned && themeNotify)
+        reportTheme();
     term.options.fontFamily = fontFamily;
     term.options.fontSize = fontSize;
     term.options.cursorBlink = blinkCursor;
