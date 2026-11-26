@@ -427,11 +427,21 @@ static int start_process(NSArray<NSString *> *command, NSString *directory, Term
         [terminal sendOutput:output.bytes length:(int) output.length];
     if (boot_is_awaited())
         current->before_run = wait_for_boot;
-    task_start(current);
+    int err = task_start(current);
     // The task now runs on its own thread. If main kept pointing at it, signals sent
     // from main (e.g. SIGHUP on close) would take the "signalling myself" path and
     // not wake the task's thread.
     current = NULL;
+    if (err < 0) {
+        // No thread for it (the host out of them): no session, the error said,
+        // rather than a terminal whose process never runs. The task is left
+        // as it is, with no thread.
+        [self.mutableSessions removeObject:session];
+        [self.livePids removeObject:@(pid)];
+        if (errorOut != NULL)
+            *errorOut = err;
+        return nil;
+    }
     return session;
 }
 

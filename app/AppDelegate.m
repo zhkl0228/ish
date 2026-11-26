@@ -278,10 +278,9 @@ static void mount_documents(void) {
     err = do_execve(command[0].UTF8String, command.count, argv, envp);
     if (err < 0)
         return err;
-    task_start(current);
-
-    
-    return 0;
+    // no thread for it (the host out of them): the boot fails, said so,
+    // rather than waiting on an init that never runs
+    return task_start(current);
 }
 
 

@@ -99,9 +99,10 @@
     if (err < 0)
         return err;
     self.upgradePid = current->pid;
-    task_start(current);
+    // no thread for it (the host out of them): the upgrade fails, said so
+    err = task_start(current);
     current = NULL;
-    return 0;
+    return err;
 }
 
 - (IBAction)upgrade:(id)sender {
