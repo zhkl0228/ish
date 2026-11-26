@@ -156,7 +156,8 @@ typedef dword_t uid_t_;
 typedef word_t mode_t_;
 typedef sqword_t off_t_;
 typedef sqword_t time_t_;
-typedef dword_t clock_t_;
+// AArch64 Linux: a long, in struct tms, SIGCHLD's siginfo and times()'s result
+typedef sqword_t clock_t_;
 
 #define uint(size) glue3(uint,size,_t)
 #define sint(size) glue3(int,size,_t)

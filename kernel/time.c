@@ -11,6 +11,7 @@
 #include "kernel/resource.h"
 #include "kernel/time.h"
 #include "fs/poll.h"
+#include "platform/platform.h"
 
 #define TIMER_ABSTIME_ (1 << 0)
 
@@ -663,19 +664,28 @@ dword_t sys_clock_nanosleep(dword_t clock, dword_t flags, addr_t req_addr, addr_
     return nanosleep_interruptible(&req, (flags & TIMER_ABSTIME_) ? 0 : rem_addr);
 }
 
-dword_t sys_times(addr_t tbuf) {
+// The process's CPU time (all its threads', as Linux), that of its children it
+// waited for, and the clock ticks since boot, which callers take differences
+// of (/proc/uptime's, in USER_HZ: 100 a second)
+sqword_t sys_times(addr_t tbuf) {
     STRACE("times(0x%x)", tbuf);
     if (tbuf) {
-        struct tms_ tmp;
-        struct rusage_ rusage = rusage_get_current();
-        tmp.tms_utime = clock_from_timeval(rusage.utime);
-        tmp.tms_stime = clock_from_timeval(rusage.stime);
-        tmp.tms_cutime = tmp.tms_utime;
-        tmp.tms_cstime = tmp.tms_stime;
+        lock(&pids_lock);
+        struct rusage_ self = rusage_of_group(current->group);
+        unlock(&pids_lock);
+        lock(&current->group->lock);
+        struct rusage_ children = current->group->children_rusage;
+        unlock(&current->group->lock);
+        struct tms_ tmp = {
+            .tms_utime = clock_from_timeval(self.utime),
+            .tms_stime = clock_from_timeval(self.stime),
+            .tms_cutime = clock_from_timeval(children.utime),
+            .tms_cstime = clock_from_timeval(children.stime),
+        };
         if (user_put(tbuf, tmp))
             return _EFAULT;
     }
-    return 0;
+    return get_uptime().uptime_ticks;
 }
 
 dword_t sys_gettimeofday(addr_t tv, addr_t tz) {

@@ -202,7 +202,7 @@ dword_t sys_mkdirat(fd_t at_f, addr_t path_addr, mode_t_ mode);
 dword_t sys_utimensat(fd_t at_f, addr_t path_addr, addr_t times_addr, dword_t flags);
 dword_t sys_utimes(addr_t path_addr, addr_t times_addr);
 dword_t sys_utime(addr_t path_addr, addr_t times_addr);
-dword_t sys_times( addr_t tbuf);
+sqword_t sys_times(addr_t tbuf);
 dword_t sys_umask(dword_t mask);
 
 dword_t sys_sendfile(fd_t out_fd, fd_t in_fd, addr_t offset_addr, dword_t count);

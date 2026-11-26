@@ -82,7 +82,7 @@ fd_t sys_timerfd_create(int_t clockid, int_t flags);
 int_t sys_timerfd_settime(fd_t f, int_t flags, addr_t new_value_addr, addr_t old_value_addr);
 int_t sys_timerfd_gettime(fd_t f, addr_t curr_value_addr);
 
-dword_t sys_times(addr_t tbuf);
+sqword_t sys_times(addr_t tbuf);
 dword_t sys_nanosleep(addr_t req, addr_t rem);
 dword_t sys_restart_syscall(void);
 dword_t sys_clock_nanosleep(dword_t clock, dword_t flags, addr_t req, addr_t rem);

@@ -1415,6 +1415,17 @@ EOF
         status=1
     fi
     echo
+    echo "########## times() and SIGCHLD's CPU times (clock_t a long) ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_times" tests/regress/regress_times.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_times 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_times"
+    else
+        echo "failed to build regress_times" >&2
+        status=1
+    fi
+    echo
     echo "########## read-only file mappings shared between processes ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_shared_map" tests/regress/regress_shared_map.c; then
         out=$(timeout 120 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_shared_map 2>&1)
