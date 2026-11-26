@@ -18,5 +18,5 @@ FRAMEWORK_SEARCH_PATHS = $(inherited) $(SRCROOT)/build/StikJIT
 
 // Must match the host app (AppARM64.xcconfig): iOS rejects an extension
 // whose version differs from its containing app.
-MARKETING_VERSION = 2.3.2
-CURRENT_PROJECT_VERSION = 825
+MARKETING_VERSION = 2.3.3
+CURRENT_PROJECT_VERSION = 826
