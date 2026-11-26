@@ -5,7 +5,6 @@
 #include "debug.h"
 #include <time.h>
 #include <signal.h>
-#include <sched.h>
 #include <sys/time.h>
 #include "kernel/calls.h"
 #include "kernel/errno.h"
@@ -598,13 +597,21 @@ dword_t sys_nanosleep(addr_t req_addr, addr_t rem_addr) {
         return _EFAULT;
     STRACE("nanosleep({%lld, %lld}, 0x%x", (long long)req_ts.sec, (long long)req_ts.nsec, rem_addr);
 
-    // Short-circuit only truly tiny sleeps (<=50us: Go's usleep(3..20) inside
-    // scheduler spin loops) into a yield. This used to be <=1ms, which turned
-    // every Go timer / sysmon back-off sleep into a spin — the twin of the
-    // futex sub-ms bug fixed in kernel/futex.c ([T-ish-futex-subms-timeout]).
-    // 50us..1ms now sleep for real through the interruptible helper below.
+    // A tiny sleep (<=50us: Go's usleep(3..20) in its scheduler's spin loops,
+    // a lock's back-off) sleeps on the host, for at least as long as asked,
+    // as Linux's does (and its timer slack longer). It was a sched_yield, and
+    // before that every sleep up to 1ms was ([T-ish-futex-subms-timeout] is
+    // the futex's twin of that): a back-off of 2us returned in 0.2us, a
+    // spin. An iSH running in iSH, whose locks back off so (util/sync.h),
+    // spun on all of the phone's six cores while six processes started
+    // their threads, and a lock's holder got no CPU: 96 threads took 10 to
+    // 20 s to start, where 80 took 0.2 (regress_leaked_thread_exit's 8 x
+    // 16 failed its 30 s alarm). Not interruptible, as the helper below is:
+    // a signal is seen 50us later at most. The host's SIGUSR1 (a guest
+    // signal's kick) interrupts it; it sleeps on what is left.
     if (req_ts.sec == 0 && req_ts.nsec <= 50000) {
-        sched_yield();
+        struct timespec left = {.tv_sec = 0, .tv_nsec = (long) req_ts.nsec};
+        while (nanosleep(&left, &left) < 0 && errno == EINTR) {}
         if (rem_addr != 0) {
             struct timespec_ rem_ts = {.sec = 0, .nsec = 0};
             if (user_put(rem_addr, rem_ts))
