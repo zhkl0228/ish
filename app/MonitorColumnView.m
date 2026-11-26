@@ -187,17 +187,21 @@ static const CGFloat kStatusInset = 6;
 
 @end
 
-// Bytes a second, in at most five characters to fit a gauge's width with an
-// arrow before it: 512B, 9.5K, 830K, 1.2M, 75M, 1.1G (1024 a step, as top's)
+// Bytes a second in four characters, so that the down's line and the up's are
+// as wide as each other: zeros before a whole number (005B, 512B, 095K, 830K,
+// 075M), a tenth under ten of a unit (9.5K, 1.2M). 1024 a step, as top's; one
+// that would round to 1000 is the next unit's (1.0M, not 1000K).
 static NSString *Rate(double bytes) {
-    NSArray<NSString *> *units = @[@"K", @"M", @"G"];
-    if (bytes < 1024)
-        return [NSString stringWithFormat:@"%.0fB", bytes];
+    NSArray<NSString *> *units = @[@"B", @"K", @"M", @"G"];
     double value = bytes;
     NSUInteger unit = 0;
-    for (value /= 1024; value >= 1024 && unit + 1 < units.count; value /= 1024)
+    while (round(value) >= 1000 && unit + 1 < units.count) {
+        value /= 1024;
         unit++;
-    return [NSString stringWithFormat:value < 10 ? @"%.1f%@" : @"%.0f%@", value, units[unit]];
+    }
+    if (unit > 0 && value < 9.95)
+        return [NSString stringWithFormat:@"%.1f%@", value, units[unit]];
+    return [NSString stringWithFormat:@"%03.0f%@", value, units[unit]];
 }
 
 // A gauge's color: green, then as the memory's (orange past 75%, red past 90%)
@@ -217,6 +221,9 @@ static UIColor *GaugeColor(double fraction) {
 @property UIStackView *heatRow;
 @property UIImageView *heatIcon;
 @property UILabel *heatLabel;
+// The last reading's heat more than nominal: the heat's row shown, the
+// keyboard down
+@property BOOL hot;
 
 @end
 
@@ -299,6 +306,23 @@ static UIColor *GaugeColor(double fraction) {
     return self;
 }
 
+- (void)setKeyboardUp:(BOOL)keyboardUp {
+    _keyboardUp = keyboardUp;
+    [self showRows];
+}
+
+// What is under the memory, hidden while the keyboard is up; the heat's row
+// shown only while it is more than nominal
+- (void)showRows {
+    for (UIView *row in @[self.nativeGauge, self.networkTile, self.processTile]) {
+        if (row.hidden != self.keyboardUp)
+            row.hidden = self.keyboardUp;
+    }
+    BOOL heat = self.hot && !self.keyboardUp;
+    if (self.heatRow.hidden == heat)
+        self.heatRow.hidden = !heat;
+}
+
 - (MonitorGaugeView *)addGauge:(NSString *)name {
     MonitorGaugeView *gauge = [MonitorGaugeView new];
     gauge.nameLabel.text = name;
@@ -374,10 +398,9 @@ static UIColor *GaugeColor(double fraction) {
         self.networkTile.valueLabel.text = [NSString stringWithFormat:@"↓%@\n↑%@", Rate(reading.networkIn),
                                             Rate(reading.networkOut)];
     self.processTile.valueLabel.text = [NSString stringWithFormat:@"%lld", (long long) reading.processes];
-    BOOL hot = reading.thermalState != NSProcessInfoThermalStateNominal;
+    self.hot = reading.thermalState != NSProcessInfoThermalStateNominal;
     self.heatLabel.text = MonitorThermalName(reading.thermalState);
-    if (self.heatRow.hidden == hot)
-        self.heatRow.hidden = !hot;
+    [self showRows];
     [UIView animateWithDuration:0.3 animations:^{
         [self applyColors];
     }];

@@ -52,6 +52,10 @@ NS_ASSUME_NONNULL_BEGIN
 @end
 
 @interface MonitorColumnView : MonitorView
+// The keyboard up (TerminalViewController's keyboardMoved:): the CPU, its
+// line and the memory only, what is under them hidden, the keys taking their
+// room
+@property (nonatomic) BOOL keyboardUp;
 @end
 
 NS_ASSUME_NONNULL_END

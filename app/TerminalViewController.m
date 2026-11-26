@@ -983,6 +983,10 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
     NSLog(@"%@ keyboard %@ -> pad %.1f; extra keys at %@ (window %@)", notification.name, @(keyboardFrame), pad,
           @([self.view convertRect:extraKeys.bounds fromView:extraKeys]), extraKeys.window != nil ? @"yes" : @"no");
     self.keyboardPad = pad;
+    // The on-screen keyboard up (100 points of it or more over the terminal,
+    // as hasExternalKeyboard tells it from the bar of extra keys alone, or a
+    // floating keyboard's): the column keeps the CPU and the memory only
+    self.monitorColumn.keyboardUp = pad >= 100;
     // Nothing to move: no layout, which would lay out the keyboard's window
     if (![self applyBottomPad])
         return;
