@@ -155,6 +155,19 @@ else
     fi
 
     echo
+    echo "########## scalar saturating add and subtract (SQADD, UQADD, SQSUB, UQSUB) ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_scalar_saturating" \
+            tests/regress/regress_scalar_saturating.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_scalar_saturating 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_scalar_saturating"
+    else
+        echo "failed to build regress_scalar_saturating" >&2
+        status=1
+    fi
+
+    echo
     echo "########## per-thread sigaltstack ##########"
     if "$CC_GUEST" -static -O0 -Wall -pthread -o "$GUEST_ROOT/tmp/regress_sigaltstack" \
             tests/regress/regress_sigaltstack.c; then

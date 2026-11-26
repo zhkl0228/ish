@@ -7642,6 +7642,54 @@ make_vec_shift_three_same uqadd, uqadd
 make_vec_shift_three_same sqsub, sqsub
 make_vec_shift_three_same uqsub, uqsub
 
+/*
+ * SQADD/UQADD/SQSUB/UQSUB (scalar): Bd/Hd/Sd/Dd = Bn op Bm saturated, the
+ * rest of Vd zeroed as a scalar write does. The host instruction, which sets
+ * FPSR.QC (the guest's while it runs) when it saturates.
+ * Code stream: [gadget addr][rd | rn<<8 | rm<<16 | size<<24]
+ */
+.macro make_scalar_saturating name
+.gadget \name\()_scalar
+    ldr x8, [_pc]
+    add _pc, _pc, #8
+
+    and x9, x8, #0x1f       // rd
+    ubfx x10, x8, #8, #5    // rn
+    ubfx x11, x8, #16, #5   // rm
+    ubfx x12, x8, #24, #2   // size
+
+    add x13, _cpu, #CPU_fp
+    add x15, x13, x10, lsl #4    // &Vn
+    add x16, x13, x11, lsl #4    // &Vm
+    ldr q0, [x15]
+    ldr q1, [x16]
+
+    cmp x12, #1
+    b.lo .L\name\()_scalar_b
+    b.eq .L\name\()_scalar_h
+    cmp x12, #2
+    b.eq .L\name\()_scalar_s
+    \name d0, d0, d1
+    b .L\name\()_scalar_store
+.L\name\()_scalar_b:
+    \name b0, b0, b1
+    b .L\name\()_scalar_store
+.L\name\()_scalar_h:
+    \name h0, h0, h1
+    b .L\name\()_scalar_store
+.L\name\()_scalar_s:
+    \name s0, s0, s1
+.L\name\()_scalar_store:
+    add x14, x13, x9, lsl #4     // &Vd
+    str q0, [x14]
+    gret
+.endm
+
+make_scalar_saturating sqadd
+make_scalar_saturating uqadd
+make_scalar_saturating sqsub
+make_scalar_saturating uqsub
+
 // Halving sub (B/H/S only — no D variant; gen.c rejects size=3)
 // Use a dedicated macro that omits the .2d path
 .macro make_vec_three_same_noD name, insn

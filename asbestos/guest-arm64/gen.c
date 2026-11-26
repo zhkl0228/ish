@@ -538,6 +538,10 @@ extern void gadget_sqadd_vec(void);        // SQADD Vd, Vn, Vm (signed saturatin
 extern void gadget_uqadd_vec(void);        // UQADD Vd, Vn, Vm (unsigned saturating add)
 extern void gadget_sqsub_vec(void);        // SQSUB Vd, Vn, Vm (signed saturating sub)
 extern void gadget_uqsub_vec(void);        // UQSUB Vd, Vn, Vm (unsigned saturating sub)
+extern void gadget_sqadd_scalar(void);     // SQADD Bd/Hd/Sd/Dd (scalar signed saturating add)
+extern void gadget_uqadd_scalar(void);     // UQADD (scalar unsigned saturating add)
+extern void gadget_sqsub_scalar(void);     // SQSUB (scalar signed saturating sub)
+extern void gadget_uqsub_scalar(void);     // UQSUB (scalar unsigned saturating sub)
 extern void gadget_shsub_vec(void);        // SHSUB Vd, Vn, Vm (signed halving sub)
 extern void gadget_uhsub_vec(void);        // UHSUB Vd, Vn, Vm (unsigned halving sub)
 extern void gadget_cmgt_reg_vec(void);     // CMGT Vd, Vn, Vm (signed compare greater than)
@@ -6753,6 +6757,17 @@ skip_three_different:
         if (gadget) {
             gen(state, (unsigned long) gadget);
             gen(state, Rd | (Rn << 8) | (Rm << 16));
+            return 1;
+        }
+
+        // SQADD/UQADD (00001) and SQSUB/UQSUB (00101), every size: were
+        // SIGILL, and busybox gzip's deflate slides its hash chains with
+        // UQSUB Hd (every compression died)
+        if (opcode == 0x01 || opcode == 0x05) {
+            gadget = opcode == 0x01 ? (U ? gadget_uqadd_scalar : gadget_sqadd_scalar)
+                                    : (U ? gadget_uqsub_scalar : gadget_sqsub_scalar);
+            gen(state, (unsigned long) gadget);
+            gen(state, Rd | (Rn << 8) | (Rm << 16) | (sz << 24));
             return 1;
         }
 
