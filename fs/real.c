@@ -17,6 +17,7 @@
 #include <poll.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/param.h>
 
 #include "debug.h"
 #include "fs/pipe.h"
@@ -32,11 +33,149 @@
 #include "fs/tty.h"
 #include "util/fchdir.h"
 
+// The longest path the host takes, its NUL with it: Darwin's 1024 bytes
+// (MAXPATHLEN), where the guest's are 4096 (MAX_PATH) as Linux's are
+#if defined(__APPLE__)
+#define HOST_PATH_MAX MAXPATHLEN
+#else
+#define HOST_PATH_MAX PATH_MAX
+#endif
+
+int realfs_at_begin(int root_fd, const char *path, struct realfs_at *at) {
+    at->root = root_fd;
+    at->fd = root_fd;
+    at->path = fix_path(path);
+    while (strlen(at->path) >= HOST_PATH_MAX) {
+        // the longest part of it that ends at a slash and the host takes
+        const char *cut = NULL;
+        for (const char *p = at->path; p < at->path + HOST_PATH_MAX - 1; p++) {
+            if (*p == '/')
+                cut = p;
+        }
+        if (cut == NULL) {
+            realfs_at_end(at);
+            return _ENAMETOOLONG;  // a name longer than the host's paths, which NAME_MAX refuses anyway
+        }
+        char dir[HOST_PATH_MAX];
+        memcpy(dir, at->path, (size_t) (cut - at->path));
+        dir[cut - at->path] = '\0';
+#ifdef O_SEARCH
+        // searched only, as a path's directories are: no read permission asked
+        int fd = openat(at->fd, dir, O_SEARCH | O_CLOEXEC);
+#else
+        int fd = openat(at->fd, dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+#endif
+        if (fd < 0) {
+            int err = errno_map();
+            realfs_at_end(at);
+            return err;
+        }
+        realfs_at_end(at);
+        at->fd = fd;
+        at->path = cut + 1;
+    }
+    return 0;
+}
+
+void realfs_at_end(struct realfs_at *at) {
+    if (at->fd != at->root) {
+        int saved = errno;
+        close(at->fd);
+        errno = saved;
+    }
+    at->fd = at->root;
+}
+
+#if defined(__APPLE__)
+// The host path of directory fd, which F_GETPATH cannot say (ENOSPC: past
+// MAXPATHLEN): its name in its parent, found there by its inode, and its
+// parent's, and so on up to a directory whose path F_GETPATH says, as getcwd
+// finds one. Right after a rename as F_GETPATH is. A file other than a
+// directory has no parent to ask: ENAMETOOLONG.
+static int getpath_by_parents(int fd, char *buf) {
+    struct stat st;
+    if (fstat(fd, &st) < 0)
+        return errno_map();
+    if (!S_ISDIR(st.st_mode))
+        return _ENAMETOOLONG;
+    // the names found, at the end of tail: "/a/b"
+    char tail[MAX_PATH];
+    size_t start = sizeof(tail) - 1;
+    tail[start] = '\0';
+    int dir = dup(fd);
+    if (dir < 0)
+        return errno_map();
+    int err = 0;
+    for (;;) {
+        int parent = openat(dir, "..", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        if (parent < 0) {
+            err = errno_map();
+            break;
+        }
+        int scan = dup(parent);
+        DIR *entries = scan < 0 ? NULL : fdopendir(scan);
+        if (entries == NULL) {
+            err = errno_map();
+            if (scan >= 0)
+                close(scan);
+            close(parent);
+            break;
+        }
+        bool found = false;
+        struct dirent *entry;
+        while (!found && (entry = readdir(entries)) != NULL) {
+            struct stat entry_st;
+            if (entry->d_ino != st.st_ino || strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0 ||
+                    fstatat(parent, entry->d_name, &entry_st, AT_SYMLINK_NOFOLLOW) < 0 ||
+                    entry_st.st_dev != st.st_dev || entry_st.st_ino != st.st_ino)
+                continue;
+            size_t len = strlen(entry->d_name);
+            if (len + 1 > start) {
+                err = _ENAMETOOLONG;
+                break;
+            }
+            start -= len;
+            memcpy(tail + start, entry->d_name, len);
+            tail[--start] = '/';
+            found = true;
+        }
+        closedir(entries);
+        close(dir);
+        dir = parent;
+        if (err < 0)
+            break;
+        if (!found) {
+            err = _ENOENT;  // gone from its parent meanwhile
+            break;
+        }
+        if (fstat(dir, &st) < 0) {
+            err = errno_map();
+            break;
+        }
+        if (fcntl(dir, F_GETPATH, buf) == 0) {
+            size_t len = strlen(buf);
+            if (len + (sizeof(tail) - 1 - start) >= MAX_PATH)
+                err = _ENAMETOOLONG;
+            else
+                memcpy(buf + len, tail + start, sizeof(tail) - start);
+            break;
+        }
+        if (errno != ENOSPC) {
+            err = errno_map();
+            break;
+        }
+    }
+    close(dir);
+    return err;
+}
+#endif
+
 // The host's path of fd, or the host's error: it was its -1, which is
 // -EPERM, and a directory whose host path F_GETPATH cannot say (past
 // MAXPATHLEN, 1024 bytes with the app's container's) could be read none of:
 // fakefs_readdir asks it, and every listdir in it said EPERM (CPython's
-// test_os, test_getcwd_long_path, and its cleanup's rmtree)
+// test_os, test_getcwd_long_path, and its cleanup's rmtree). A directory's
+// is found by its parents then (getpath_by_parents).
 static int getpath(int fd, char *buf) {
 #if defined(__linux__)
     char proc_fd[20];
@@ -47,9 +186,11 @@ static int getpath(int fd, char *buf) {
     buf[size] = '\0';
     return 0;
 #elif defined(__APPLE__)
-    if (fcntl(fd, F_GETPATH, buf) < 0)
+    if (fcntl(fd, F_GETPATH, buf) == 0)
+        return 0;
+    if (errno != ENOSPC)
         return errno_map();
-    return 0;
+    return getpath_by_parents(fd, buf);
 #endif
 }
 
@@ -131,19 +272,24 @@ static bool realfs_exact_mode(struct mount *mount) {
 
 struct fd *realfs_open(struct mount *mount, const char *path, int flags, int mode) {
     int real_flags = open_flags_real_from_fake(flags);
+    struct realfs_at at;
+    int err = realfs_at_begin(mount->root_fd, path, &at);
+    if (err < 0)
+        return ERR_PTR(err);
     int fd_no;
     if (flags & O_CREAT_ && realfs_exact_mode(mount)) {
         // made with O_EXCL to know it is made here, then given its mode; one
         // there already is opened as asked (made meanwhile by another, it
         // has the host's umask, as before)
-        fd_no = openat(mount->root_fd, fix_path(path), real_flags | O_EXCL, mode);
+        fd_no = openat(at.fd, at.path, real_flags | O_EXCL, mode);
         if (fd_no >= 0)
             fchmod(fd_no, mode & 07777);
         else if (errno == EEXIST && !(flags & O_EXCL_))
-            fd_no = openat(mount->root_fd, fix_path(path), real_flags, mode);
+            fd_no = openat(at.fd, at.path, real_flags, mode);
     } else {
-        fd_no = openat(mount->root_fd, fix_path(path), real_flags, mode);
+        fd_no = openat(at.fd, at.path, real_flags, mode);
     }
+    realfs_at_end(&at);
     if (fd_no < 0)
         return ERR_PTR(errno_map());
     struct fd *fd = fd_create(&realfs_fdops);
@@ -201,7 +347,13 @@ static void copy_stat(struct statbuf *fake_stat, struct stat *real_stat) {
 
 int realfs_stat(struct mount *mount, const char *path, struct statbuf *fake_stat) {
     struct stat real_stat;
-    if (fstatat(mount->root_fd, fix_path(path), &real_stat, AT_SYMLINK_NOFOLLOW) < 0)
+    struct realfs_at at;
+    int err = realfs_at_begin(mount->root_fd, path, &at);
+    if (err < 0)
+        return err;
+    int res = fstatat(at.fd, at.path, &real_stat, AT_SYMLINK_NOFOLLOW);
+    realfs_at_end(&at);
+    if (res < 0)
         return errno_map();
     copy_stat(fake_stat, &real_stat);
     // Override mode/rdev for well-known device paths backed by placeholder files
@@ -794,7 +946,12 @@ int realfs_mmap(struct fd *fd, struct mem *mem, page_t start, pages_t pages, off
 }
 
 ssize_t realfs_readlink(struct mount *mount, const char *path, char *buf, size_t bufsize) {
-    ssize_t size = readlinkat(mount->root_fd, fix_path(path), buf, bufsize);
+    struct realfs_at at;
+    int err = realfs_at_begin(mount->root_fd, path, &at);
+    if (err < 0)
+        return err;
+    ssize_t size = readlinkat(at.fd, at.path, buf, bufsize);
+    realfs_at_end(&at);
     if (size < 0)
         return errno_map();
     return size;
@@ -858,14 +1015,30 @@ int realfs_getpath(struct fd *fd, char *buf) {
 }
 
 int realfs_link(struct mount *mount, const char *src, const char *dst) {
-    int res = linkat(mount->root_fd, fix_path(src), mount->root_fd, fix_path(dst), 0);
+    struct realfs_at src_at, dst_at;
+    int err = realfs_at_begin(mount->root_fd, src, &src_at);
+    if (err < 0)
+        return err;
+    err = realfs_at_begin(mount->root_fd, dst, &dst_at);
+    if (err < 0) {
+        realfs_at_end(&src_at);
+        return err;
+    }
+    int res = linkat(src_at.fd, src_at.path, dst_at.fd, dst_at.path, 0);
+    realfs_at_end(&src_at);
+    realfs_at_end(&dst_at);
     if (res < 0)
         return errno_map();
     return res;
 }
 
 int realfs_unlink(struct mount *mount, const char *path) {
-    int res = unlinkat(mount->root_fd, fix_path(path), 0);
+    struct realfs_at at;
+    int err = realfs_at_begin(mount->root_fd, path, &at);
+    if (err < 0)
+        return err;
+    int res = unlinkat(at.fd, at.path, 0);
+    realfs_at_end(&at);
     if (res < 0)
         return errno_map();
     fakefs_record_change(path, FAKEFS_CHANGE_OP_UNLINK);
@@ -873,7 +1046,12 @@ int realfs_unlink(struct mount *mount, const char *path) {
 }
 
 int realfs_rmdir(struct mount *mount, const char *path) {
-    int err = unlinkat(mount->root_fd, fix_path(path), AT_REMOVEDIR);
+    struct realfs_at at;
+    int err = realfs_at_begin(mount->root_fd, path, &at);
+    if (err < 0)
+        return err;
+    err = unlinkat(at.fd, at.path, AT_REMOVEDIR);
+    realfs_at_end(&at);
     if (err < 0)
         return errno_map();
     fakefs_record_change(path, FAKEFS_CHANGE_OP_UNLINK);
@@ -881,7 +1059,18 @@ int realfs_rmdir(struct mount *mount, const char *path) {
 }
 
 int realfs_rename(struct mount *mount, const char *src, const char *dst) {
-    int err = renameat(mount->root_fd, fix_path(src), mount->root_fd, fix_path(dst));
+    struct realfs_at src_at, dst_at;
+    int err = realfs_at_begin(mount->root_fd, src, &src_at);
+    if (err < 0)
+        return err;
+    err = realfs_at_begin(mount->root_fd, dst, &dst_at);
+    if (err < 0) {
+        realfs_at_end(&src_at);
+        return err;
+    }
+    err = renameat(src_at.fd, src_at.path, dst_at.fd, dst_at.path);
+    realfs_at_end(&src_at);
+    realfs_at_end(&dst_at);
     if (err < 0)
         return errno_map();
     /* Source is gone, destination appeared. Emit two events; the Swift
@@ -892,7 +1081,12 @@ int realfs_rename(struct mount *mount, const char *src, const char *dst) {
 }
 
 int realfs_symlink(struct mount *mount, const char *target, const char *link) {
-    int err = symlinkat(target, mount->root_fd, fix_path(link));
+    struct realfs_at at;
+    int err = realfs_at_begin(mount->root_fd, link, &at);
+    if (err < 0)
+        return err;
+    err = symlinkat(target, at.fd, at.path);
+    realfs_at_end(&at);
     if (err < 0)
         return errno_map();
     return err;
@@ -904,25 +1098,33 @@ int realfs_symlink(struct mount *mount, const char *target, const char *link) {
 // path can be longer than sun_path (104 bytes on Darwin), so it is bound by
 // its last component, from its directory.
 static int realfs_make_socket(struct mount *mount, const char *path, mode_t_ mode) {
-    const char *rel = fix_path(path);
+    struct realfs_at at;
+    int err = realfs_at_begin(mount->root_fd, path, &at);
+    if (err < 0)
+        return err;
+    const char *rel = at.path;
     const char *slash = strrchr(rel, '/');
     const char *name = slash != NULL ? slash + 1 : rel;
     struct sockaddr_un addr = {.sun_family = AF_UNIX};
-    if (strlen(name) >= sizeof(addr.sun_path))
+    if (strlen(name) >= sizeof(addr.sun_path)) {
+        realfs_at_end(&at);
         return _ENAMETOOLONG;
+    }
     strcpy(addr.sun_path, name);
 
-    int dirfd = mount->root_fd;
+    int dirfd = at.fd;
     if (slash != NULL) {
         char dir[MAX_PATH];
         size_t len = (size_t) (slash - rel);
         memcpy(dir, rel, len);
         dir[len] = '\0';
-        dirfd = openat(mount->root_fd, dir, O_RDONLY | O_DIRECTORY);
-        if (dirfd < 0)
-            return errno_map();
+        dirfd = openat(at.fd, dir, O_RDONLY | O_DIRECTORY);
+        if (dirfd < 0) {
+            err = errno_map();
+            realfs_at_end(&at);
+            return err;
+        }
     }
-    int err = 0;
     int sock = socket(AF_UNIX, SOCK_STREAM, 0);
     if (sock < 0) {
         err = errno_map();
@@ -943,39 +1145,48 @@ static int realfs_make_socket(struct mount *mount, const char *path, mode_t_ mod
     if (fchmodat(dirfd, name, mode & 07777, 0) < 0)
         err = errno_map();
 out:
-    if (dirfd != mount->root_fd)
+    if (dirfd != at.fd)
         close(dirfd);
+    realfs_at_end(&at);
     return err;
 }
 
 int realfs_mknod(struct mount *mount, const char *path, mode_t_ mode, dev_t_ UNUSED(dev)) {
-    int err;
     if (S_ISSOCK(mode))
         return realfs_make_socket(mount, path, mode);
+    if (!S_ISFIFO(mode) && !S_ISREG(mode))
+        return _EPERM;
+    struct realfs_at at;
+    int err = realfs_at_begin(mount->root_fd, path, &at);
+    if (err < 0)
+        return err;
     if (S_ISFIFO(mode)) {
-        lock_fchdir(mount->root_fd);
-        err = mkfifo(fix_path(path), mode & ~S_IFMT);
+        lock_fchdir(at.fd);
+        err = mkfifo(at.path, mode & ~S_IFMT);
         unlock_fchdir();
-    } else if (S_ISREG(mode)) {
-        err = openat(mount->root_fd, fix_path(path), O_CREAT|O_EXCL|O_RDONLY, mode & ~S_IFMT);
+    } else {
+        err = openat(at.fd, at.path, O_CREAT|O_EXCL|O_RDONLY, mode & ~S_IFMT);
         if (err >= 0)
             err = close(err);
-    } else {
-        return _EPERM;
     }
-    if (err < 0)
-        return errno_map();
     // the mode asked for, not less the host's umask (realfs_exact_mode)
-    if (realfs_exact_mode(mount) && fchmodat(mount->root_fd, fix_path(path), mode & 07777, 0) < 0)
+    if (err >= 0 && realfs_exact_mode(mount))
+        err = fchmodat(at.fd, at.path, mode & 07777, 0);
+    realfs_at_end(&at);
+    if (err < 0)
         return errno_map();
     return err;
 }
 
 int realfs_truncate(struct mount *mount, const char *path, off_t_ size) {
-    int fd = openat(mount->root_fd, fix_path(path), O_RDWR);
+    struct realfs_at at;
+    int err = realfs_at_begin(mount->root_fd, path, &at);
+    if (err < 0)
+        return err;
+    int fd = openat(at.fd, at.path, O_RDWR);
+    realfs_at_end(&at);
     if (fd < 0)
         return errno_map();
-    int err = 0;
     if (ftruncate(fd, size) < 0)
         err = errno_map();
     close(fd);
@@ -985,32 +1196,34 @@ int realfs_truncate(struct mount *mount, const char *path, off_t_ size) {
 }
 
 int realfs_setattr(struct mount *mount, const char *path, struct attr attr) {
-    path = fix_path(path);
-    int root = mount->root_fd;
-    int err;
+    if (attr.type == attr_size)
+        return realfs_truncate(mount, path, attr.size);
+    struct realfs_at at;
+    int err = realfs_at_begin(mount->root_fd, path, &at);
+    if (err < 0)
+        return err;
     switch (attr.type) {
         // The path is the file's: generic_setattrat followed its symlinks, or
         // not, as asked. The host following it again, lchown of a symlink
         // chowned what it points to (a dangling one's ENOENT: CPython's
         // test_lchown). A gid was set as the owner.
         case attr_uid:
-            err = fchownat(root, path, attr.uid, -1, AT_SYMLINK_NOFOLLOW);
+            err = fchownat(at.fd, at.path, attr.uid, -1, AT_SYMLINK_NOFOLLOW);
             if (err < 0 && errno == EPERM)
-                return 0; // silently ignore, we're not root on host
+                err = 0; // silently ignore, we're not root on host
             break;
         case attr_gid:
-            err = fchownat(root, path, -1, attr.gid, AT_SYMLINK_NOFOLLOW);
+            err = fchownat(at.fd, at.path, -1, attr.gid, AT_SYMLINK_NOFOLLOW);
             if (err < 0 && errno == EPERM)
-                return 0;
+                err = 0;
             break;
         case attr_mode:
-            err = fchmodat(root, path, attr.mode, 0);
+            err = fchmodat(at.fd, at.path, attr.mode, 0);
             break;
-        case attr_size:
-            return realfs_truncate(mount, path, attr.size);
         default:
             TODO("other attrs");
     }
+    realfs_at_end(&at);
     if (err < 0)
         return errno_map();
     return err;
@@ -1050,19 +1263,29 @@ int realfs_fsetattr(struct fd *fd, struct attr attr) {
 // shutil.copytree(symlinks=True), whose copystat sets a copied link's).
 int realfs_utime(struct mount *mount, const char *path, struct timespec atime, struct timespec mtime) {
     struct timespec times[2] = {atime, mtime};
-    int err = utimensat(mount->root_fd, fix_path(path), times, AT_SYMLINK_NOFOLLOW);
+    struct realfs_at at;
+    int err = realfs_at_begin(mount->root_fd, path, &at);
+    if (err < 0)
+        return err;
+    err = utimensat(at.fd, at.path, times, AT_SYMLINK_NOFOLLOW);
+    realfs_at_end(&at);
     if (err < 0)
         return errno_map();
     return 0;
 }
 
 int realfs_mkdir(struct mount *mount, const char *path, mode_t_ mode) {
-    int err = mkdirat(mount->root_fd, fix_path(path), mode);
+    struct realfs_at at;
+    int err = realfs_at_begin(mount->root_fd, path, &at);
     if (err < 0)
-        return errno_map();
+        return err;
+    err = mkdirat(at.fd, at.path, mode);
     // the mode asked for, not less the host's umask (realfs_exact_mode); a
     // directory's mode bits and its sticky bit, as Linux's mkdir takes
-    if (realfs_exact_mode(mount) && fchmodat(mount->root_fd, fix_path(path), mode & 01777, 0) < 0)
+    if (err >= 0 && realfs_exact_mode(mount))
+        err = fchmodat(at.fd, at.path, mode & 01777, 0);
+    realfs_at_end(&at);
+    if (err < 0)
         return errno_map();
     return 0;
 }

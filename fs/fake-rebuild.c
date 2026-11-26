@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include "fs/sqlutil.h"
 #include "fs/fake-db.h"
+#include "fs/real.h"
 #include "kernel/errno.h"
 #include "util/list.h"
 #include "debug.h"
@@ -56,9 +57,14 @@ int fakefs_rebuild(struct fakefs_db *fs, int root_fd) {
 
         // grab real inode
         struct stat stat;
-        int err = fstatat(root_fd, fix_path(path), &stat, 0);
-        if (err < 0)
+        struct realfs_at at;
+        if (realfs_at_begin(root_fd, path, &at) < 0)
             continue;
+        int err = fstatat(at.fd, at.path, &stat, 0);
+        if (err < 0) {
+            realfs_at_end(&at);
+            continue;
+        }
         ino_t real_inode = stat.st_ino;
 
         // restore hardlinks
@@ -67,12 +73,17 @@ int fakefs_rebuild(struct fakefs_db *fs, int root_fd) {
         bool found = false;
         list_for_each_entry(bucket, entry, chain) {
             if (entry->inode == inode) {
-                unlinkat(root_fd, fix_path(path), 0);
-                linkat(root_fd, fix_path(entry->path), root_fd, fix_path(path), 0);
+                struct realfs_at entry_at;
+                unlinkat(at.fd, at.path, 0);
+                if (realfs_at_begin(root_fd, entry->path, &entry_at) == 0) {
+                    linkat(entry_at.fd, entry_at.path, at.fd, at.path, 0);
+                    realfs_at_end(&entry_at);
+                }
                 found = true;
                 break;
             }
         }
+        realfs_at_end(&at);
         if (!found) {
             entry = malloc(sizeof(struct entry));
             entry->inode = inode;

@@ -1311,6 +1311,29 @@ EOF
         status=1
     fi
     echo
+    echo "########## paths longer than the host's (Darwin's 1024 bytes): a directory 2.4 KB deep ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_long_path" tests/regress/regress_long_path.c; then
+        out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_long_path 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_long_path"
+    else
+        echo "failed to build regress_long_path" >&2
+        status=1
+    fi
+    echo
+    echo "########## paths longer than the host's (fakefs root: the app's) ##########"
+    longpathdir=$(mktemp -d "$(cd "$(dirname "$ROOTFS")" && pwd)/regress-long_path.XXXXXX")
+    if fakefs_init "$longpathdir" tests/regress/regress_long_path.c; then
+        out=$(timeout 60 "$ISH" -f "$longpathdir/fs" /init 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+    else
+        echo "failed to set up regress_long_path (needs $FAKEFSIFY and python3)" >&2
+        status=1
+    fi
+    rm -rf "$longpathdir"
+    echo
     echo "########## open with O_DIRECTORY of no directory: ENOTDIR at once (a FIFO's open waited) (fakefs root) ##########"
     # /dev/null is one of the cases
     opendirdir=$(mktemp -d "$(cd "$(dirname "$ROOTFS")" && pwd)/regress-open_directory.XXXXXX")

@@ -377,8 +377,14 @@ static inode_t bind_mount_ensure_inode(struct fakefs_db *fs, struct mount *mount
     if (bind_mount_translate_path(path, host_abs, sizeof(host_abs))) {
         if (stat(host_abs, &host_stat) < 0)
             return 0;
-    } else if (fstatat(mount->root_fd, fix_path(path), &host_stat, AT_SYMLINK_NOFOLLOW) < 0) {
-        if (fstatat(mount->root_fd, fix_path(path), &host_stat, 0) < 0)
+    } else {
+        struct realfs_at at;
+        if (realfs_at_begin(mount->root_fd, path, &at) < 0)
+            return 0;
+        bool there = fstatat(at.fd, at.path, &host_stat, AT_SYMLINK_NOFOLLOW) == 0 ||
+            fstatat(at.fd, at.path, &host_stat, 0) == 0;
+        realfs_at_end(&at);
+        if (!there)
             return 0;
     }
 
@@ -727,10 +733,15 @@ static int fakefs_symlink(struct mount *mount, const char *target, const char *l
     bool _vh = false;
     if (bind_mount_translate_path_ex(link, host_chk, sizeof(host_chk), &_vh) && _vh)
         return _EPERM;
+    struct realfs_at at;
+    int err = realfs_at_begin(mount->root_fd, link, &at);
+    if (err < 0)
+        return err;
     db_begin_write(fs);
     // create a file containing the target
-    int fd = openat(mount->root_fd, fix_path(link), O_WRONLY | O_CREAT | O_EXCL, 0666);
+    int fd = openat(at.fd, at.path, O_WRONLY | O_CREAT | O_EXCL, 0666);
     if (fd < 0) {
+        realfs_at_end(&at);
         db_rollback(fs);
         return errno_map();
     }
@@ -738,11 +749,13 @@ static int fakefs_symlink(struct mount *mount, const char *target, const char *l
     close(fd);
     if (res < 0) {
         int saved_errno = errno;
-        unlinkat(mount->root_fd, fix_path(link), 0);
+        unlinkat(at.fd, at.path, 0);
+        realfs_at_end(&at);
         db_rollback(fs);
         errno = saved_errno;
         return errno_map();
     }
+    realfs_at_end(&at);
 
     // customize the stat info so it looks like a link
     struct ish_stat ishstat;
@@ -1069,10 +1082,15 @@ static int fakefs_mkdir(struct mount *mount, const char *path, mode_t_ mode) {
 
 static ssize_t file_readlink(struct mount *mount, const char *path, char *buf, size_t bufsize) {
     // broken symlinks can't be included in an iOS app or else Xcode craps out
-    int fd = openat(mount->root_fd, fix_path(path), O_RDONLY);
+    struct realfs_at at;
+    int err = realfs_at_begin(mount->root_fd, path, &at);
+    if (err < 0)
+        return err;
+    int fd = openat(at.fd, at.path, O_RDONLY);
+    realfs_at_end(&at);
     if (fd < 0)
         return errno_map();
-    int err = read(fd, buf, bufsize);
+    err = read(fd, buf, bufsize);
     close(fd);
     if (err < 0)
         return errno_map();

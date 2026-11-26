@@ -6,6 +6,19 @@
 extern const struct fd_ops realfs_fdops;
 extern const struct fs_ops realfs;
 
+// A path under a mount's root as the host's *at calls take it: from the
+// root's fd (root), or, longer than the host's paths (Darwin's 1024 bytes; the
+// guest's are 4096), from a directory down it (fd), each directory on the way
+// opened in turn, and the rest of it (path). realfs_at_begin returns 0, or an
+// error and nothing to end; realfs_at_end closes what it opened, errno kept.
+struct realfs_at {
+    int root;
+    int fd;
+    const char *path;
+};
+int realfs_at_begin(int root_fd, const char *path, struct realfs_at *at);
+void realfs_at_end(struct realfs_at *at);
+
 struct fd *realfs_open(struct mount *mount, const char *path, int flags, int mode);
 
 ssize_t realfs_readlink(struct mount *mount, const char *path, char *buf, size_t bufsize);
