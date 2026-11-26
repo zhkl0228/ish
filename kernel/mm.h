@@ -140,6 +140,9 @@ bool ish_footprint_mode(void);
 // the whole limit (an absurd ask deserves a clean upfront ENOMEM rather
 // than a mid-memset death).
 bool ish_mem_commit_ok(uint64_t bytes);
+// Whether the guest's new anonymous memory is refused now: braked, or the
+// feed stale (the app's meters, MonitorSampler). Never in legacy mode.
+bool ish_mem_braked(void);
 #endif
 
 // uses mem.lock instead of having a lock of its own

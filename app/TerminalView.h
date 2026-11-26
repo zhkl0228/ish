@@ -22,9 +22,22 @@ enum OverrideAppearance {
 // the terminal, ⌘+ and ⌘- change it, within the sizes it can be, and the
 // terminal shows the size and the columns and rows it makes
 - (void)changeFontSize:(int)size;
+// Puts the keyboard away (the bar's Hide Keyboard key, the View menu's)
+- (IBAction)loseFocus:(nullable id)sender;
 @property (nonatomic) enum OverrideAppearance overrideAppearance;
 
 @property (nonatomic) UIKeyboardAppearance keyboardAppearance;
+
+// A view in what the terminal leaves right of its last column (its meters:
+// TerminalViewController's MonitorStripView), from there to this view's right
+// edge and all its height: over the terminal, which its touches are to go
+// through to. The page leaves the room the fit keeps for xterm.js's scroll bar
+// and what is less than a column, 18 to 18 + a column's width (term.js's
+// screenEdge). Hidden until the page says where its cells end.
+@property (nonatomic, nullable) UIView *marginView;
+// A tap on the margin view, which the page does not have (a drag from there
+// still scrolls, a long press still selects). Set with marginView.
+@property (copy, nullable) void (^marginTapped)(void);
 
 @property (weak) IBOutlet UIInputView *inputAccessoryView;
 @property (weak) IBOutlet UIButton *controlKey;

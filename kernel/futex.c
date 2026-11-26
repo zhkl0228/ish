@@ -523,6 +523,16 @@ static int futex_wake_op(addr_t uaddr, dword_t wake_max1, addr_t uaddr2,
     return total;
 }
 
+// Whether a futex call a signal interrupted starts again when no handler ran
+// for it, as Linux's: a wait with no time limit (ERESTARTSYS), and
+// FUTEX_WAIT_BITSET's to its deadline (as futex_wait_restart: the same
+// absolute time). FUTEX_WAIT's own time is relative: started again it would
+// wait all of it once more, so its EINTR stays.
+bool futex_restarts_without_handler(dword_t op, addr_t timeout) {
+    int cmd = op & FUTEX_CMD_MASK_;
+    return (cmd == FUTEX_WAIT_ && timeout == 0) || cmd == FUTEX_WAIT_BITSET_;
+}
+
 dword_t sys_futex(addr_t uaddr, dword_t op, dword_t val, addr_t timeout_or_val2, addr_t uaddr2, dword_t val3) {
     if (!(op & FUTEX_PRIVATE_FLAG_)) {
         STRACE("!FUTEX_PRIVATE ");

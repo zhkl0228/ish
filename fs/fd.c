@@ -8,6 +8,7 @@
 #include "fs/poll.h"
 #include "fs/fd.h"
 #include "fs/inode.h"
+#include "fs/pipe.h"
 
 struct fd *fd_create(const struct fd_ops *ops) {
     struct fd *fd = malloc(sizeof(struct fd));
@@ -256,6 +257,8 @@ void fdtable_do_cloexec(struct fdtable *table) {
 #define F_SETLKW64_ 14
 
 #define F_DUPFD_CLOEXEC_ 1030
+#define F_SETPIPE_SZ_ 1031
+#define F_GETPIPE_SZ_ 1032
 #define F_ADD_SEALS_ 1033
 #define F_GET_SEALS_ 1034
 #define F_SEAL_SEAL_ 0x1
@@ -379,6 +382,12 @@ dword_t sys_fcntl(fd_t f, dword_t cmd, addr_t arg) {
                 bit_clear(f, table->cloexec);
             return 0;
 
+        case F_GETPIPE_SZ_:
+            STRACE("fcntl(%d, F_GETPIPE_SZ)", f);
+            return pipe_fcntl_size(fd, false, 0);
+        case F_SETPIPE_SZ_:
+            STRACE("fcntl(%d, F_SETPIPE_SZ, %u)", f, arg);
+            return pipe_fcntl_size(fd, true, arg);
         case F_GETFL_:
             STRACE("fcntl(%d, F_GETFL)", f);
             return fd_getflags(fd);

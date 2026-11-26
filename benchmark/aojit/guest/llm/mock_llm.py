@@ -10,6 +10,16 @@
 # conversation has tool results so far), then the answer: what a coding
 # session runs, git, grep, find, python and Claude Code's own Grep and Glob.
 #
+# One whose last prompt says "[long] <project>:" gets LONG's tool calls in that
+# project, one a turn (as many as that prompt's calls the conversation has, by
+# their ids: a resumed session's request has its messages merged, a prompt's
+# tool results before its text), each after a line of text and with thinking
+# when the request asks for it, then
+# LONG_ANSWER: a long session's turns, as ../claude/claude_long.sh records
+# them, prompt after prompt in one session (Read, Edit, Write, Bash with long
+# output, a subagent). A tool the request does not offer is called all the
+# same (Claude Code answers that it has none), and said on stderr.
+#
 # usage: python3 mock_llm.py PORT   (until killed)
 import json
 import sys
@@ -35,6 +45,100 @@ SESSION = [
     ('Bash', {'command': 'git add -A && git commit -q -m "Raise the limit" && git log --oneline -3',
               'description': 'Commit the change'}),
 ]
+
+
+LONG_ANSWER = '''## Summary of the session
+
+The limit is **20** now, the helpers check their values, and the tests pass.
+
+| File | Change | Lines |
+|------|--------|------:|
+| `app.py` | the limit raised | 1 |
+| `helper1.py` | the value checked | 1 |
+| `NOTES.md` | written | 40 |
+
+### What was run
+
+1. `git status` and the log, to see where the project stood
+2. the TODOs found with `grep`, and every Python file with `find`
+3. the tests, before and after:
+   - `test_take` checks the limit
+   - `test_total` checks the sum
+
+```diff
+-limit = 10
++limit = 20
+```
+
+```python
+def take(items):
+    return [item for item in items[:limit] if item]
+```
+
+```bash
+python3 -m unittest -q test_app
+```
+
+> The subagent read the helpers: each multiplies its value, and none checked it before.
+
+Next: the [documentation](https://example.com/docs) says more of the limit.
+''' * 2
+
+
+def long_steps(project):
+    """The tool calls of a long session's prompt, in project"""
+    return [
+        ('Bash', {'command': 'git status && git log --oneline -5', 'description': 'Show the state of the repository'}),
+        ('Read', {'file_path': project + '/app.py'}),
+        ('Bash', {'command': 'grep -rn "TODO" . | head -20; find . -name "*.py" | sort',
+                  'description': 'Find the TODOs and the Python files'}),
+        ('Edit', {'file_path': project + '/app.py', 'old_string': 'limit = 10', 'new_string': 'limit = 20'}),
+        ('Read', {'file_path': project + '/big.txt', 'offset': 100, 'limit': 200}),
+        ('Bash', {'command': 'python3 -m unittest -q test_app 2>&1 | tail -5', 'description': 'Run the tests'}),
+        ('Write', {'file_path': project + '/NOTES.md',
+                   'content': ''.join('- note %d: the limit and the helpers\n' % i for i in range(40))}),
+        ('Read', {'file_path': project + '/helper1.py'}),
+        ('Edit', {'file_path': project + '/helper1.py', 'old_string': '# TODO: check the value',
+                  'new_string': 'assert value is not None'}),
+        ('Bash', {'command': 'seq 1 2000', 'description': 'Count to 2000'}),
+        ('Agent', {'description': 'Look at the helpers', 'prompt': 'Read the helpers and say what they do',
+                   'subagent_type': 'general-purpose'}),
+        ('Bash', {'command': 'git diff --stat && git diff | head -60', 'description': 'Show the change'}),
+        ('Bash', {'command': 'git add -A && git commit -q -m "The limit and the helpers" && git log --oneline -3',
+                  'description': 'Commit the change'}),
+    ]
+
+
+def blocks(message):
+    content = message.get('content')
+    return [{'type': 'text', 'text': content}] if isinstance(content, str) else content
+
+
+def long_step(request):
+    """For a [long] prompt: (its tag, its project, its tool call this turn or None for the
+    answer, the tool results the conversation has); None for another request. The tag,
+    toolu_long_<k>_ of the conversation's k-th [long] prompt, begins its calls' ids."""
+    messages = request.get('messages') or []
+    # what was typed: not Claude Code's own text in a user message, a reminder
+    # or a slash command's record (<system-reminder>, <command-name>)
+    typed = [b['text'] for m in messages if m.get('role') == 'user' for b in blocks(m)
+             if b.get('type') == 'text' and not b['text'].lstrip().startswith('<')]
+    # a prompt after a [long] one is another prompt: compacted, the context
+    # keeps the [long] one
+    if not typed or '[long] ' not in typed[-1]:
+        return None
+    prompts = [t for t in typed if '[long] ' in t]
+    tag = 'toolu_long_%d_' % len(prompts)
+    text = prompts[-1]
+    project = text[text.index('[long] ') + len('[long] '):].split(':', 1)[0]
+    every = [b for m in messages for b in blocks(m)]
+    done = sum(1 for b in every if b.get('type') == 'tool_use' and b['id'].startswith(tag))
+    results = sum(1 for b in every if b.get('type') == 'tool_result')
+    steps = long_steps(project)
+    step = steps[done] if done < len(steps) else None
+    if step is not None and step[0] not in [t.get('name') for t in request.get('tools') or []]:
+        print('mock_llm: [long] calls %s, which the request does not offer' % step[0], file=sys.stderr, flush=True)
+    return tag, project, step, results
 
 
 def session_step(request):
@@ -122,6 +226,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def anthropic(self, request):
         model = request.get('model', 'mock')
+        long = long_step(request)
+        if long is not None:
+            self.anthropic_long(request, model, *long)
+            return
         step = session_step(request)
         if step:
             self.anthropic_tool(request, model, step)
@@ -176,6 +284,62 @@ class Handler(BaseHTTPRequestHandler):
         event('content_block_stop', {'type': 'content_block_stop', 'index': 0})
         event('message_delta', {'type': 'message_delta', 'delta': {'stop_reason': 'tool_use', 'stop_sequence': None},
                                 'usage': {'output_tokens': 20}})
+        event('message_stop', {'type': 'message_stop'})
+        self.end_sse()
+
+
+    def anthropic_long(self, request, model, tag, project, step, results):
+        """A [long] turn: thinking (when asked for), a line of text, and the tool call; or, after the
+        last, LONG_ANSWER"""
+        content = []
+        if (request.get('thinking') or {}).get('type', 'disabled') != 'disabled':
+            content.append({'type': 'thinking', 'thinking': 'The next step in %s, after %d results: %s.' % (
+                project, results, step[0] if step else 'the summary'), 'signature': 'mock-signature-%d' % results})
+        if step is None:
+            content.append({'type': 'text', 'text': LONG_ANSWER})
+            stop = 'end_turn'
+        else:
+            content.append({'type': 'text', 'text': 'Next, %s:' % step[0]})
+            # the prompt's, and unique in the session
+            content.append({'type': 'tool_use', 'id': '%s%04d' % (tag, results), 'name': step[0], 'input': step[1]})
+            stop = 'tool_use'
+        if not request.get('stream'):
+            self.send_json(200, {'id': 'msg_l', 'type': 'message', 'role': 'assistant', 'model': model,
+                                 'content': content, 'stop_reason': stop, 'stop_sequence': None,
+                                 'usage': {'input_tokens': 10, 'output_tokens': 50}})
+            return
+
+        def event(kind, body):
+            self.chunk('event: %s\ndata: %s\n\n' % (kind, json.dumps(body)))
+
+        self.start_sse()
+        event('message_start', {'type': 'message_start', 'message': {
+            'id': 'msg_l', 'type': 'message', 'role': 'assistant', 'model': model, 'content': [],
+            'stop_reason': None, 'stop_sequence': None, 'usage': {'input_tokens': 10, 'output_tokens': 1}}})
+        for index, block in enumerate(content):
+            if block['type'] == 'thinking':
+                event('content_block_start', {'type': 'content_block_start', 'index': index,
+                                              'content_block': {'type': 'thinking', 'thinking': '', 'signature': ''}})
+                event('content_block_delta', {'type': 'content_block_delta', 'index': index,
+                                              'delta': {'type': 'thinking_delta', 'thinking': block['thinking']}})
+                event('content_block_delta', {'type': 'content_block_delta', 'index': index,
+                                              'delta': {'type': 'signature_delta', 'signature': block['signature']}})
+            elif block['type'] == 'text':
+                event('content_block_start', {'type': 'content_block_start', 'index': index,
+                                              'content_block': {'type': 'text', 'text': ''}})
+                for word in block['text'].split(' '):
+                    event('content_block_delta', {'type': 'content_block_delta', 'index': index,
+                                                  'delta': {'type': 'text_delta', 'text': word + ' '}})
+            else:
+                event('content_block_start', {'type': 'content_block_start', 'index': index,
+                                              'content_block': {'type': 'tool_use', 'id': block['id'],
+                                                                'name': block['name'], 'input': {}}})
+                event('content_block_delta', {'type': 'content_block_delta', 'index': index,
+                                              'delta': {'type': 'input_json_delta',
+                                                        'partial_json': json.dumps(block['input'])}})
+            event('content_block_stop', {'type': 'content_block_stop', 'index': index})
+        event('message_delta', {'type': 'message_delta', 'delta': {'stop_reason': stop, 'stop_sequence': None},
+                                'usage': {'output_tokens': 50}})
         event('message_stop', {'type': 'message_stop'})
         self.end_sse()
 

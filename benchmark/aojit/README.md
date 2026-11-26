@@ -46,9 +46,16 @@ call tools, as a coding session does (`guest/claude/claude_session.sh`: git, gre
 unittest through Bash, and Claude Code's own Glob and Grep). What a session starts besides
 claude.exe chose the extra images: by translations (ISH_JIT_MAP), python3, git and bash; recorded
 and timed, bash's and python3's workloads were 2.3 and 4.2 times faster with their images and git's
-no faster (its time is its processes' start and the file system), so git has none. The session is
-not in Claude Code's workload: recorded with it, claude.exe's image was 41 MB larger and the session
-no faster (10.8 s either way).
+no faster (its time is its processes' start and the file system), so git has none. Claude Code's
+workload (`guest/claude/claude_image.sh`) is print mode (`claude_train.sh`), the session, and a long
+session (`claude_long.sh`): resumed on the interactive screen, which `guest/claude/screen.py` drives in
+a pseudo-terminal (tools with the screen asking to allow an edit, a subagent, thinking, a long
+markdown answer, `/compact`), and a fresh screen's prompt. The app runs with no executable memory,
+where a block the image lacks runs through the gadgets: on the phone (2026-11-25, Claude Code
+2.1.332, the images of print mode alone) 95.3% of claude.exe's blocks came from the image in print
+mode, 88.8% in the session, 85.6% in a long session resumed on the screen and 81.7% on a fresh one.
+(When the app had a JIT, the session recorded too made claude.exe's image 41 MB larger and the
+session no faster, 10.8 s either way; the image's size is not what counts.)
 
 Claude Code runs with JavaScriptCore's JIT off (`BUN_JSC_useJIT=0`, which the app's
 `/usr/libexec/claude-wrapper` sets unless it is set already, and its workloads too), as node runs in

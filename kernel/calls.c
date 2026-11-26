@@ -180,12 +180,22 @@ void handle_interrupt(int interrupt) {
                 // (receive_signals): one that stopped the process, which was
                 // then continued (Ctrl-Z, fg), or one another thread took.
                 // They returned EINTR, which the program never asked for.
-                // futex and epoll_pwait are left to the program then, which
-                // loops on their EINTR anyway, rather than wait their full
-                // timeout again.
+                // A futex wait with a time of its own (FUTEX_WAIT's, relative)
+                // and epoll_pwait are left to the program then, which loops
+                // on their EINTR anyway, rather than wait their full timeout
+                // again; one with none, or to a deadline, starts again
+                // (futex_restarts_without_handler): a SIGCHLD another thread
+                // took, sent as the process blocked it in fork, made musl's
+                // sem_wait return EINTR, which musl passes on once a handler
+                // without SA_RESTART is installed (regress_process_signals:
+                // a worker went on before it was told to, about one run in a
+                // hundred under load).
                 if ((int32_t)(uint32_t)result == -EINTR) {
                     switch (syscall_num) {
                         case 98:  // futex
+                            current->syscall_restartable = true;
+                            current->syscall_restart_nohandler = futex_restarts_without_handler(_a1, _a3);
+                            break;
                         case 22:  // epoll_pwait
                             current->syscall_restartable = true;
                             break;

@@ -736,7 +736,10 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
         basename = file;
     else
         basename++;
-    strncpy(current->comm, basename, sizeof(current->comm));
+    // at most 15 bytes and a NUL, as Linux's __set_task_comm: a name of 16 or
+    // more had none, and what printed comm with %s read on past it (/proc's
+    // comm said 16 bytes of it, Linux's 15)
+    snprintf(current->comm, sizeof(current->comm), "%s", basename);
     unlock(&current->general_lock);
 
     update_thread_name();

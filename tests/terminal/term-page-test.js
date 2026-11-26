@@ -5,8 +5,9 @@
 // the size a font makes), the scroll view's sync both ways, Shift-Page Up,
 // its drags as a full-screen program's wheel, long-press selection and its
 // rect, a long press on a link, Cmd-click links, wrapped lines and wide
-// characters, resizing, the bell and notifications, find, an input method's
-// composition and the cursor's place, and no errors. WebKit is not Chromium,
+// characters, resizing, where the cells end (for the app's meters right of
+// them), the bell and notifications, find, an input method's composition and
+// the cursor's place, and no errors. WebKit is not Chromium,
 // so this checks term.js, not the app.
 //
 // Run, after `npm install playwright && npx playwright install chromium`:
@@ -33,7 +34,7 @@ const utf8 = (s) => Buffer.from(s, 'utf8').toString('latin1');
         window.__messages = [];
         const names = ['load', 'log', 'sendInput', 'sendBinary', 'resize', 'propUpdate', 'setTitle', 'copyText',
                        'syncFocus', 'focus', 'newScrollRange', 'newScrollTop', 'newWheelScrolling', 'openLink',
-                       'findResults', 'cursorRect', 'notify'];
+                       'findResults', 'cursorRect', 'notify', 'screenEdge'];
         window.webkit = { messageHandlers: {} };
         for (const name of names)
             window.webkit.messageHandlers[name] = { postMessage: (body) => window.__messages.push([name, body]) };
@@ -251,6 +252,42 @@ const utf8 = (s) => Buffer.from(s, 'utf8').toString('latin1');
     await page.waitForTimeout(100);
     msgs = await take();
     check('a resize is told', msgs.some(([n]) => n == 'resize'), JSON.stringify(msgs));
+
+    // Where the cells end (screenEdge), told as the columns and the font change
+    // it and again as the app attaches (resyncScroll): right of it, the room
+    // the fit keeps for the scroll bar (14) and the page's margin (4), and
+    // what is less than a column
+    const edgeShown = () => page.evaluate(() => {
+        const rect = term.element.querySelector('.xterm-screen').getBoundingClientRect();
+        return { right: rect.right, cell: rect.width / term.cols, page: window.innerWidth };
+    });
+    const edgesIn = (list) => list.filter(([n]) => n == 'screenEdge').map(([, edge]) => edge);
+    let shownEdge = await edgeShown();
+    let edges = edgesIn(msgs);
+    const room = shownEdge.page - shownEdge.right;
+    check('the cells\' edge is told as the columns change', edges.length == 1 && edges[0] == shownEdge.right,
+          JSON.stringify({ edges, shownEdge }));
+    check('right of the cells: the scroll bar\'s room, the margin, less than a column',
+          room >= 18 && room < 18 + shownEdge.cell, JSON.stringify({ room, shownEdge }));
+    const fontOptions = { foregroundColor: '#fff', backgroundColor: '#000', fontFamily: 'monospace',
+                          colorPaletteOverrides: null, blinkCursor: false, cursorShape: 'BEAM', minimumContrastRatio: 1 };
+    await page.evaluate((options) => exports.updateStyle({ ...options, fontSize: 21 }), fontOptions);
+    await page.waitForTimeout(100);
+    msgs = await take();
+    shownEdge = await edgeShown();
+    edges = edgesIn(msgs);
+    check('the cells\' edge is told as the font changes', edges.length == 1 && edges[0] == shownEdge.right,
+          JSON.stringify({ edges, shownEdge }));
+    await page.evaluate((options) => exports.updateStyle({ ...options, fontSize: 14 }), fontOptions);
+    await page.waitForTimeout(100);
+    await take();
+    await page.evaluate(() => exports.resyncScroll());
+    await page.waitForTimeout(100);
+    msgs = await take();
+    shownEdge = await edgeShown();
+    edges = edgesIn(msgs);
+    check('the cells\' edge is told again as the app attaches', edges.length == 1 && edges[0] == shownEdge.right,
+          JSON.stringify({ edges, shownEdge }));
 
     // clearScreen (the app's ⌘K): the line being typed stays, at the top, the
     // cursor where it was on it; nothing else on the screen

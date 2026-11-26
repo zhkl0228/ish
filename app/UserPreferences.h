@@ -54,6 +54,8 @@ extern const int kDefaultFontSize;
 @property BOOL hideExtraKeysWithExternalKeyboard;
 @property BOOL overrideControlSpace;
 @property BOOL hideStatusBar;
+// The meters right of the terminal's last column (MonitorStripView)
+@property BOOL showMeters;
 @property (nonatomic) Theme *theme;
 @property (nonatomic) Palette *palette;
 @property BOOL shouldDisableDimming;
@@ -89,5 +91,8 @@ extern const int kDefaultFontSize;
 extern NSString *const kPreferenceLaunchCommandKey;
 extern NSString *const kPreferenceBootCommandKey;
 extern NSString *const kHostnameOverrideKey;
+// Where the meters' column was last laid out, and by what (TerminalViewController's
+// updateMonitorColumn): /proc/ish/defaults/meters_column, to place them by on a phone
+extern NSString *const kMetersColumnLayoutKey;
 
 NS_ASSUME_NONNULL_END

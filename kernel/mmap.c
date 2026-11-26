@@ -224,6 +224,12 @@ bool ish_mem_commit_ok(uint64_t bytes) {
     return atomic_load(&ish_mem_state_v) == ISH_MEM_OK;
 }
 
+// What a commitment of nothing more is told: refused only by the brake or a
+// stale feed, as every other one is then
+bool ish_mem_braked(void) {
+    return !ish_mem_commit_ok(0);
+}
+
 // Check-and-add under the runtime limit. CAS loop rather than fetch_add so a
 // refusal adds nothing — the old blind fetch_add sites both leaked count on
 // the failure path and (worse) let paths that "only account" sail past the

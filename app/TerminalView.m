@@ -49,6 +49,11 @@ struct rowcol {
 @property BOOL showsSizeAtNextStyle;
 @property (nullable) UIVisualEffectView *sizeView;
 @property (nullable) UILabel *sizeLabel;
+// Where the page's cells end (term.js's screenEdge), 0 before it says: the
+// margin view's left
+@property CGFloat screenEdge;
+@property (nullable) NSLayoutConstraint *marginLeading;
+@property UITapGestureRecognizer *marginTap;
 
 // What an input method is putting together, drawn at the cursor (term.js's
 // setComposition)
@@ -127,6 +132,13 @@ struct rowcol {
     clear.delegate = self;
     [self addGestureRecognizer:clear];
 
+    // A tap on the margin view is its (marginTapped), not the page's click
+    // there; a drag from it still scrolls, a long press still selects
+    UITapGestureRecognizer *marginTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(tappedMargin:)];
+    marginTap.delegate = self;
+    [self addGestureRecognizer:marginTap];
+    self.marginTap = marginTap;
+
     UserPreferences *prefs = UserPreferences.shared;
     [prefs observe:@[@"capsLockMapping", @"optionMapping", @"backtickMapEscape", @"overrideControlSpace"]
            options:0 owner:self usingBlock:^(typeof(self) self) {
@@ -184,7 +196,7 @@ struct rowcol {
 }
 
 static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollRange", @"newScrollTop", @"newWheelScrolling", @"openLink",
-                                     @"findResults", @"cursorRect"};
+                                     @"findResults", @"cursorRect", @"screenEdge"};
 
 - (void)setTerminal:(Terminal *)terminal {
     if (_terminal) {
@@ -487,7 +499,34 @@ static const int kMaxFontSize = 72;
     } else if ([message.name isEqualToString:@"cursorRect"]) {
         NSArray<NSNumber *> *rect = message.body;
         self.cursorRect = CGRectMake(rect[0].doubleValue, rect[1].doubleValue, rect[2].doubleValue, rect[3].doubleValue);
+    } else if ([message.name isEqualToString:@"screenEdge"]) {
+        // The page's points are this view's: the web view is at its left
+        // edge, as wide as it is (installTerminalView)
+        self.screenEdge = [message.body doubleValue];
+        self.marginLeading.constant = self.screenEdge;
+        self.marginView.hidden = NO;
     }
+}
+
+- (void)setMarginView:(UIView *)marginView {
+    if (marginView == _marginView)
+        return;
+    [_marginView removeFromSuperview];
+    _marginView = marginView;
+    self.marginLeading = nil;
+    if (marginView == nil)
+        return;
+    marginView.translatesAutoresizingMaskIntoConstraints = NO;
+    marginView.hidden = self.screenEdge == 0;
+    // over the terminal, under the button down and the font's size
+    [self insertSubview:marginView aboveSubview:self.scrollbarView];
+    self.marginLeading = [marginView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:self.screenEdge];
+    [NSLayoutConstraint activateConstraints:@[
+        self.marginLeading,
+        [marginView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
+        [marginView.topAnchor constraintEqualToAnchor:self.topAnchor],
+        [marginView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
+    ]];
 }
 
 #pragma mark Selection
@@ -588,6 +627,24 @@ static const int kMaxFontSize = 72;
 
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
     return YES;
+}
+
+// The margin view's tap has the touches in it, while it shows
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch {
+    if (gestureRecognizer != self.marginTap)
+        return YES;
+    UIView *margin = self.marginView;
+    return margin != nil && !margin.hidden && CGRectContainsPoint(margin.frame, [touch locationInView:self]);
+}
+
+// The page's click there (the keyboard brought up, a program's mouse) waits
+// for the margin view's tap to fail: a drag, a long press
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
+    return gestureRecognizer == self.marginTap && [otherGestureRecognizer.view isDescendantOfView:self.terminal.webView];
+}
+
+- (void)tappedMargin:(UITapGestureRecognizer *)tap {
+    self.marginTapped();
 }
 
 // The button down to the bottom: there while what shows is more than a screen

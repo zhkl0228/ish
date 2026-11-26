@@ -232,6 +232,9 @@ noreturn void do_exit(int status) {
         list_remove(&sigqueue->queue);
         sigqueue_free(sigqueue);
     }
+    // and their bits: a zombie said of a SIGKILL it had none queued for that
+    // it was pending (/proc/<pid>/status, SigPnd)
+    current->pending = 0;
     struct task *leader = current->group->leader;
 
     // reparent children

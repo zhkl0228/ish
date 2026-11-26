@@ -205,6 +205,21 @@ exports.getCharacterSize = () => {
     return [cell.width, cell.height];
 };
 
+// Where the cells end, in the page's points (screenEdge): the app's meters
+// (TerminalView's MonitorStripView) are in what the page leaves right of it,
+// the room the fit keeps for xterm.js's scroll bar, which the app's scroll
+// view shows instead (term.css), and what is less than a column. The cells
+// change their size with the columns and the font.
+let lastEdge;
+function syncEdge() {
+    const edge = cellSize().rect.right;
+    if (edge === lastEdge)
+        return;
+    lastEdge = edge;
+    native.screenEdge(edge);
+}
+new ResizeObserver(syncEdge).observe(term.element.querySelector('.xterm-screen'));
+
 // scrolling: the app's scroll view stands for xterm.js's (ScrollbarView),
 // whose range is the lines above the last screen (baseY) and whose offset is
 // the top line's, in points. Its offset moves the terminal a line at a time;
@@ -289,13 +304,15 @@ exports.wheel = (dy, x, y) => {
 // restores when it starts again
 exports.serialize = () => serializer.serialize({scrollback: 1000, excludeAltBuffer: true, excludeModes: true});
 // Called by the app when a TerminalView (re)attaches, since what it was told
-// of the scroll and the cursor while detached was dropped.
+// of the scroll, the cursor and the cells' edge while detached was dropped.
 exports.resyncScroll = () => {
     lastScrollRange = lastScrollTop = lastWheelScrolling = undefined;
     appScrollLine = null;
     syncScroll();
     lastCursorRect = '';
     syncCursor();
+    lastEdge = undefined;
+    syncEdge();
 };
 
 // A color of the app's (#rgb or #rrggbb): its red, green and blue
