@@ -12,6 +12,10 @@ struct cpu_usage {
 struct cpu_usage get_cpu_usage(void);
 // The same for each CPU, as many as fit in usage (max): returns how many.
 unsigned get_per_cpu_usage(struct cpu_usage *usage, unsigned max);
+// Context switches, the guest's /proc/stat's ctxt: the host's, as its CPU
+// time is (a Linux host's /proc/stat), or where the host does not tell (iOS)
+// the app's own, whose threads the guest's are.
+uint64_t get_context_switches(void);
 
 struct mem_usage {
     uint64_t total;

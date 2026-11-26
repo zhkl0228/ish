@@ -30,6 +30,14 @@ struct cpu_usage get_cpu_usage() {
     return usage;
 }
 
+uint64_t get_context_switches(void) {
+    char buf[1234];
+    read_proc_line("/proc/stat", "ctxt", buf);
+    uint64_t ctxt;
+    sscanf(buf, "ctxt %"SCNu64"\n", &ctxt);
+    return ctxt;
+}
+
 unsigned get_per_cpu_usage(struct cpu_usage *usage, unsigned max) {
     FILE *f = fopen("/proc/stat", "r");
     if (f == NULL) ERRNO_DIE("/proc/stat");

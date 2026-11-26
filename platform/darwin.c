@@ -7,6 +7,7 @@
 #endif
 #include <CoreFoundation/CoreFoundation.h>
 #include <sys/time.h>
+#include <sys/resource.h>
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
@@ -35,6 +36,12 @@ struct cpu_usage get_cpu_usage(void) {
     usage.idle_ticks = load.cpu_ticks[CPU_STATE_IDLE];
     usage.nice_ticks = load.cpu_ticks[CPU_STATE_NICE];
     return usage;
+}
+
+uint64_t get_context_switches(void) {
+    struct rusage usage;
+    getrusage(RUSAGE_SELF, &usage);
+    return (uint64_t) usage.ru_nvcsw + (uint64_t) usage.ru_nivcsw;
 }
 
 unsigned get_per_cpu_usage(struct cpu_usage *usage, unsigned max) {

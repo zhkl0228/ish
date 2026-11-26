@@ -1,5 +1,4 @@
 #include <sys/stat.h>
-#include <sys/resource.h>
 #include <stdatomic.h>
 #include <inttypes.h>
 #include <stdio.h>
@@ -48,10 +47,10 @@ static int proc_show_stat(struct proc_entry *UNUSED(entry), struct proc_data *bu
                     i, cpus[i].user_ticks, cpus[i].nice_ticks, cpus[i].system_ticks, cpus[i].idle_ticks);
     // no interrupts in iSH
     proc_printf(buf, "intr 0\n");
-    // Context switches: the guest's threads are iSH's, so its own count.
-    struct rusage rusage;
-    getrusage(RUSAGE_SELF, &rusage);
-    proc_printf(buf, "ctxt %ld\n", rusage.ru_nvcsw + rusage.ru_nivcsw);
+    // Context switches: the host's, as the cpu lines are, where it tells.
+    // iSH's own getrusage was it on every host: in an iSH that runs in iSH
+    // (whose getrusage keeps times only) it was 0.
+    proc_printf(buf, "ctxt %"PRIu64"\n", get_context_switches());
 
     // calculate btime (boot time in seconds since epoch) by subtracting uptime from current time
     struct uptime_info uptime = get_uptime();
