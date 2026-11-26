@@ -29,6 +29,7 @@ bool (*set_user_default)(const char *name, char *buffer, size_t size);
 bool (*remove_user_default)(const char *name);
 char *(*get_documents_directory)(void);
 int (*open_url)(const char *url, size_t size);
+char *(*get_builtin_jit_report)(void);
 
 static int proc_ish_show_colors(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
     proc_printf(buf,
@@ -192,23 +193,40 @@ static int proc_ish_show_host(struct proc_entry *UNUSED(entry), struct proc_data
     proc_printf(buf, "footprint: %.1f MB\n", m.footprint / 1048576.0);
     // The app's limit, past which the OS ends it (iOS's jetsam): what it
     // takes and what it may still take. Not the device's memory, which it
-    // shares; and the entitlements that raise it, if the signature that
-    // installed the app has them (an entitlements file asking is not enough)
+    // shares
     if (m.available != 0)
         proc_printf(buf, "limit: %.1f MB (footprint and available: past it the OS ends the app)\n",
                     (m.footprint + m.available) / 1048576.0);
     proc_printf(buf, "device memory: %.1f MB\n", m.physical / 1048576.0);
+    // Each entitlement app/iSH.entitlements asks for, as the signature that
+    // installed the app has it (an entitlements file asking is not enough: a
+    // profile without one signs without it): the two that raise the memory
+    // limit and the address space; get-task-allow, which only a development
+    // profile signs with, and the packet tunnel, which the built-in JIT's
+    // debugger attaches by and is reached through (app/BuiltinJIT.m); the app
+    // group the File Provider shares; the fonts. And Developer Mode, which
+    // the debugger needs too. The JIT's settings said of these only on their
+    // own screen, as it was to start.
     static const char *const entitlements[] = {
         "com.apple.developer.kernel.increased-memory-limit",
         "com.apple.developer.kernel.extended-virtual-addressing",
+        "get-task-allow",
+        "com.apple.developer.networking.networkextension",
+        "com.apple.security.application-groups",
+        "com.apple.developer.user-fonts",
     };
     for (size_t i = 0; i < sizeof(entitlements) / sizeof(entitlements[0]); i++) {
-        char why[160];
+        char why[200];
         enum entitlement_state state = host_entitlement(entitlements[i], why, sizeof(why));
         proc_printf(buf, "entitlement %s: %s%s%s\n", entitlements[i],
                     state == ENTITLEMENT_YES ? "yes" : state == ENTITLEMENT_NO ? "no" : "unknown",
                     why[0] != '\0' ? ", " : "", why);
     }
+    char why[200];
+    enum entitlement_state developer = host_developer_mode(why, sizeof(why));
+    proc_printf(buf, "developer mode: %s%s%s\n",
+                developer == ENTITLEMENT_YES ? "on" : developer == ENTITLEMENT_NO ? "off" : "unknown",
+                why[0] != '\0' ? ", " : "", why);
     proc_printf(buf, "mappings: %llu\n", (unsigned long long) m.mappings);
     proc_printf(buf, "malloc in use: %.1f MB\n", m.malloc_in_use / 1048576.0);
     proc_printf(buf, "address space: %.1f MB in the mappings, %.1f MB the largest range none takes\n",
@@ -278,6 +296,11 @@ static int proc_ish_show_jit(struct proc_entry *UNUSED(entry), struct proc_data 
     jit_describe(text, size);
     proc_printf(buf, "%s", text);
     free(text);
+    if (get_builtin_jit_report != NULL) {
+        char *report = get_builtin_jit_report();
+        proc_printf(buf, "built-in JIT:\n%s", report);
+        free(report);
+    }
     return 0;
 }
 // pwrite, not update: an unknown command fails the write (EINVAL), and

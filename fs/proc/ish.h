@@ -18,6 +18,12 @@ extern char *(*get_documents_directory)(void);
 // answered: 0 if it was opened, else the error the write gives. NULL in the
 // command line tool, which has no one to ask.
 extern int (*open_url)(const char *url, size_t size);
+// The built-in JIT's state as the app has it (app/BuiltinJIT.m), which
+// /proc/ish/jit shows after the JIT's own: the device's pairing file, whether
+// it is enabled as iSH starts, what it is doing or what came of its last
+// attempt, and that attempt's steps. Lines, malloc'd. NULL in the command
+// line tool, which has none.
+extern char *(*get_builtin_jit_report)(void);
 
 // The app's name and version ("iSH 2.1.0 (806)"), which it sets at its start
 // (AppDelegate.m); "" in the command line tool

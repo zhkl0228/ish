@@ -41,9 +41,14 @@ struct host_memory get_host_memory(void);
 // Whether the app's code signature, as the kernel keeps it, grants it an
 // entitlement: an entitlements file asks for one, and a signature made
 // without it (a re-signing that drops what its profile has not) does not
-// have it. Unknown, with why, where it cannot be read.
+// have it. Unknown, with why, where it cannot be read. One whose value is an
+// array of strings is yes, its strings in why.
 enum entitlement_state { ENTITLEMENT_NO, ENTITLEMENT_YES, ENTITLEMENT_UNKNOWN };
 enum entitlement_state host_entitlement(const char *name, char *why, size_t why_size);
+// Whether iOS's Developer Mode is on (amfi's developer_mode_status), which a
+// debugger attaching to the app needs (the built-in JIT): yes, no, or
+// unknown with why where it cannot be read
+enum entitlement_state host_developer_mode(char *why, size_t why_size);
 
 // A range of the host's address space: a mapping, or one no mapping takes
 struct host_range {

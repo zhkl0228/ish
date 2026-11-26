@@ -7,7 +7,9 @@
 #endif
 #include <CoreFoundation/CoreFoundation.h>
 #include <sys/time.h>
+#include <errno.h>
 #include <stdio.h>
+#include <string.h>
 #include "platform/platform.h"
 #include "debug.h"
 
@@ -252,6 +254,15 @@ static void cf_string_text(CFStringRef string, char *text, size_t size) {
     text[used] = '\0';
 }
 
+// Whether an array's values are all strings
+static bool strings_only(CFArrayRef array) {
+    for (CFIndex i = 0; i < CFArrayGetCount(array); i++) {
+        if (CFGetTypeID(CFArrayGetValueAtIndex(array, i)) != CFStringGetTypeID())
+            return false;
+    }
+    return true;
+}
+
 enum entitlement_state host_entitlement(const char *name, char *why, size_t why_size) {
     why[0] = '\0';
     SecTaskRef task = SecTaskCreateFromSelf(kCFAllocatorDefault);
@@ -273,17 +284,41 @@ enum entitlement_state host_entitlement(const char *name, char *why, size_t why_
     }
     if (value == NULL)
         return ENTITLEMENT_NO; // the signature has no such key
-    // A boolean, as these entitlements are; another value is one not seen,
-    // shown as it is
+    // A boolean, or an array of strings (the network extensions, the app
+    // groups, the fonts): yes, its strings in why. Another value is one not
+    // seen, shown as it is.
     enum entitlement_state state = ENTITLEMENT_UNKNOWN;
     if (CFGetTypeID(value) == CFBooleanGetTypeID()) {
         state = CFBooleanGetValue(value) ? ENTITLEMENT_YES : ENTITLEMENT_NO;
+    } else if (CFGetTypeID(value) == CFArrayGetTypeID() && strings_only(value)) {
+        state = ENTITLEMENT_YES;
+        for (CFIndex i = 0; i < CFArrayGetCount(value); i++) {
+            char item[160];
+            cf_string_text(CFArrayGetValueAtIndex(value, i), item, sizeof(item));
+            if (i > 0)
+                strlcat(why, ", ", why_size);
+            strlcat(why, item, why_size);
+        }
     } else {
-        int prefix = snprintf(why, why_size, "not a boolean: ");
+        int prefix = snprintf(why, why_size, "not a boolean or strings: ");
         CFStringRef description = CFCopyDescription(value);
         cf_string_text(description, why + prefix, why_size - prefix);
         CFRelease(description);
     }
     CFRelease(value);
     return state;
+}
+
+enum entitlement_state host_developer_mode(char *why, size_t why_size) {
+    why[0] = '\0';
+    int status;
+    size_t size = sizeof(status);
+    if (sysctlbyname("security.mac.amfi.developer_mode_status", &status, &size, NULL, 0) != 0) {
+        snprintf(why, why_size, "security.mac.amfi.developer_mode_status: %s", strerror(errno));
+        return ENTITLEMENT_UNKNOWN;
+    }
+    if (status == 0 || status == 1)
+        return status ? ENTITLEMENT_YES : ENTITLEMENT_NO;
+    snprintf(why, why_size, "security.mac.amfi.developer_mode_status is %d, not 0 or 1", status);
+    return ENTITLEMENT_UNKNOWN;
 }

@@ -189,3 +189,8 @@ enum entitlement_state host_entitlement(const char *UNUSED(name), char *why, siz
     snprintf(why, why_size, "a Linux host has no code signature");
     return ENTITLEMENT_UNKNOWN;
 }
+
+enum entitlement_state host_developer_mode(char *why, size_t why_size) {
+    snprintf(why, why_size, "a Linux host has no Developer Mode");
+    return ENTITLEMENT_UNKNOWN;
+}

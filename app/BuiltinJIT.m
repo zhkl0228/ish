@@ -18,6 +18,7 @@
 #import <sys/sysctl.h>
 #import <unistd.h>
 #import "BuiltinJIT.h"
+#include "fs/proc/ish.h"
 #include "kernel/mm.h"
 #include "platform/platform.h"
 
@@ -169,9 +170,31 @@ static bool LoopbackUp(void) {
 @property BOOL translating;
 @end
 
+// /proc/ish/jit's lines of it (fs/proc/ish.h), read on a guest's thread: its
+// properties are atomic, and status and log immutable once set
+static char *BuiltinJITReport(void) {
+    BuiltinJIT *jit = BuiltinJIT.shared;
+    NSMutableString *text = [NSMutableString new];
+    [text appendFormat:@"  pairing file: %@ (Documents/StikJIT/pairingFile.plist)\n", jit.hasPairingFile ? @"yes" : @"no"];
+    [text appendFormat:@"  enabled as iSH starts: %@\n", jit.enabledAtStart ? @"yes" : @"no"];
+    [text appendFormat:@"  translating: %@\n", jit.translating ? @"yes" : @"no"];
+    [text appendFormat:@"  status: %@\n", jit.status];
+    NSArray<NSString *> *log = jit.log;
+    if (log.count != 0) {
+        [text appendString:@"  the last attempt's steps:\n"];
+        for (NSString *line in log)
+            [text appendFormat:@"    %@\n", line];
+    }
+    return strdup(text.UTF8String);
+}
+
 @implementation BuiltinJIT {
     dispatch_queue_t _queue;
     NSMutableArray<NSString *> *_steps;
+}
+
++ (void)load {
+    get_builtin_jit_report = BuiltinJITReport;
 }
 
 + (instancetype)shared {
