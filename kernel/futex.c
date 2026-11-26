@@ -149,6 +149,9 @@ static addr_t futex_watch_addr(void) {
     return a;
 }
 
+// /proc/ish/threads (kernel/task.h)
+_Atomic uint64_t st_futex_waits, st_futex_woken, st_futex_missed;
+
 static int futex_wait(addr_t uaddr, dword_t val, struct timespec *timeout) {
     futex_dbg_set(current->pid, uaddr, val);
     struct futex *futex = futex_get(uaddr);
@@ -197,6 +200,7 @@ static int futex_wait(addr_t uaddr, dword_t val, struct timespec *timeout) {
         }
 
         current->blocking = true;
+        atomic_fetch_add_explicit(&st_futex_waits, 1, memory_order_relaxed);
         int stall_count = 0;
         struct pollfd pfd = { .fd = current->futex_pipe[0], .events = POLLIN };
         for (;;) {
@@ -242,6 +246,7 @@ static int futex_wait(addr_t uaddr, dword_t val, struct timespec *timeout) {
                 // Woken by pipe write — drain it
                 char buf[16];
                 while (read(current->futex_pipe[0], buf, sizeof(buf)) > 0) {}
+                atomic_fetch_add_explicit(&st_futex_woken, 1, memory_order_relaxed);
                 err = 0;
                 break;
             }
@@ -262,7 +267,12 @@ static int futex_wait(addr_t uaddr, dword_t val, struct timespec *timeout) {
             dword_t *ptr = mem_ptr(current->mem, uaddr, MEM_READ);
             read_wrunlock(&current->mem->lock);
             if (ptr == NULL) { err = _EFAULT; break; }
-            if (*ptr != val) { err = 0; break; }
+            if (*ptr != val) {
+                // changed with no wake seen: one lost, or not yet written
+                atomic_fetch_add_explicit(&st_futex_missed, 1, memory_order_relaxed);
+                err = 0;
+                break;
+            }
             // Debug: dump all threads' state once when stalled past a short
             // gated threshold (ISH_FUTEX_DBG=<seconds>). Helps diagnose which
             // thread holds the lock the stalled thread is waiting on.

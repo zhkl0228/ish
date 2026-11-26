@@ -396,4 +396,14 @@ void ish_set_fork_guard(ish_fork_guard_t guard);
 // Will ensure that the -pid part always fits, then will fit as much of comm as possible.
 void update_thread_name(void);
 
+// What starting a thread or a process (clone) and a futex wait cost, for
+// /proc/ish/threads: an iSH running in iSH started 128 threads in 10 to 50 s
+// at times, where it takes 0.1 s, the time in the outer's clone and in the
+// inner's pids_lock. Kept as they happen (stat_max: the longest so far).
+extern _Atomic uint64_t st_pids_waits, st_pids_wait_ns, st_pids_wait_max_ns;
+extern _Atomic uint64_t st_futex_waits, st_futex_woken, st_futex_missed;
+void stat_max(_Atomic uint64_t *max, uint64_t value);
+uint64_t stat_now_ns(void);
+void thread_stats_describe(char *buf, size_t size);
+
 #endif

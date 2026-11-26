@@ -299,6 +299,26 @@ fail_free_mem:
     return err;
 }
 
+static _Atomic uint64_t st_clones, st_clone_threads, st_clone_ns, st_clone_max_ns, st_start_ns, st_start_max_ns;
+
+void thread_stats_describe(char *buf, size_t size) {
+    uint64_t clones = atomic_load(&st_clones);
+    uint64_t each = clones != 0 ? clones : 1;
+    uint64_t waits = atomic_load(&st_pids_waits) != 0 ? atomic_load(&st_pids_waits) : 1;
+    snprintf(buf, size,
+             "clones: %llu (%llu of them threads), %.1f us each on average, the longest %.1f ms\n"
+             "  starting the host thread (pthread_create): %.1f us each, the longest %.1f ms\n"
+             "pids_lock as a task is made: waited %.1f us each, the longest %.1f ms\n"
+             "futex waits: %llu; woken by their wake: %llu; the word found changed at the 100ms re-check, "
+             "the wake not seen: %llu\n",
+             (unsigned long long) clones, (unsigned long long) atomic_load(&st_clone_threads),
+             atomic_load(&st_clone_ns) / 1e3 / each, atomic_load(&st_clone_max_ns) / 1e6,
+             atomic_load(&st_start_ns) / 1e3 / each, atomic_load(&st_start_max_ns) / 1e6,
+             atomic_load(&st_pids_wait_ns) / 1e3 / waits, atomic_load(&st_pids_wait_max_ns) / 1e6,
+             (unsigned long long) atomic_load(&st_futex_waits), (unsigned long long) atomic_load(&st_futex_woken),
+             (unsigned long long) atomic_load(&st_futex_missed));
+}
+
 dword_t sys_clone(dword_t flags, addr_t stack, addr_t ptid, addr_t tls, addr_t ctid) {
     STRACE("clone(0x%x, 0x%x, 0x%x, 0x%x, 0x%x)", flags, stack, ptid, tls, ctid);
     if (flags & ~CSIGNAL_ & ~IMPLEMENTED_FLAGS) {
@@ -326,6 +346,7 @@ dword_t sys_clone(dword_t flags, addr_t stack, addr_t ptid, addr_t tls, addr_t c
         fork_rate_wait(current);   // [T-ish-fork-rate]
     }
 
+    uint64_t began = stat_now_ns();
     struct task *task = task_create_(current);
     if (task == NULL)
         return _ENOMEM;
@@ -363,7 +384,16 @@ dword_t sys_clone(dword_t flags, addr_t stack, addr_t ptid, addr_t tls, addr_t c
     // guest as clone() failing -- the alternative is a task that exists but
     // never runs, and a vfork parent that waits on it forever.
     // [T-ish-jit-oom-abort]
+    uint64_t starting = stat_now_ns();
     int start_err = task_start(task);
+    uint64_t started = stat_now_ns();
+    atomic_fetch_add_explicit(&st_clones, 1, memory_order_relaxed);
+    if (flags & CLONE_THREAD_)
+        atomic_fetch_add_explicit(&st_clone_threads, 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&st_clone_ns, started - began, memory_order_relaxed);
+    stat_max(&st_clone_max_ns, started - began);
+    atomic_fetch_add_explicit(&st_start_ns, started - starting, memory_order_relaxed);
+    stat_max(&st_start_max_ns, started - starting);
     if (start_err >= 0)
         atomic_fetch_add(&ish_guest_forks, 1);   // [T-ish-cpu-top]
     if (start_err < 0) {

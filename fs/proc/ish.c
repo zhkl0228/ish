@@ -358,6 +358,14 @@ static ssize_t proc_ish_write_poll_spin(struct proc_entry *UNUSED(entry), struct
     return poll_spin_control(data->data, data->size) == 0 ? (ssize_t) data->size : _EINVAL;
 }
 
+// What clone and futex waits cost (kernel/task.h's thread_stats_describe)
+static int proc_ish_show_threads(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    char text[768];
+    thread_stats_describe(text, sizeof(text));
+    proc_printf(buf, "%s", text);
+    return 0;
+}
+
 // A URL to open (xdg-open writes it), one write for the whole of it. The
 // write returns once the app has asked and been answered.
 static ssize_t proc_ish_write_open_url(struct proc_entry *UNUSED(entry), struct proc_data *data, off_t UNUSED(off)) {
@@ -378,6 +386,7 @@ struct proc_children proc_ish_children = PROC_CHILDREN({
 #endif
     {"open_url", S_IFREG | 0222, .pwrite = proc_ish_write_open_url},
     {"poll_spin", .show = proc_ish_show_poll_spin, .pwrite = proc_ish_write_poll_spin},
+    {"threads", .show = proc_ish_show_threads},
     {"translations", S_IFREG | 0644, .show = proc_ish_show_translations, .pwrite = proc_ish_write_translations},
     {"version", .show = proc_ish_show_version},
 });

@@ -50,8 +50,26 @@ pid_t_ pid_last_allocated(void) {
     return cur_pid;
 }
 
+_Atomic uint64_t st_pids_waits, st_pids_wait_ns, st_pids_wait_max_ns;
+
+uint64_t stat_now_ns(void) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (uint64_t) now.tv_sec * 1000000000u + (uint64_t) now.tv_nsec;
+}
+
+void stat_max(_Atomic uint64_t *max, uint64_t value) {
+    uint64_t seen = atomic_load_explicit(max, memory_order_relaxed);
+    while (value > seen && !atomic_compare_exchange_weak(max, &seen, value)) {}
+}
+
 struct task *task_create_(struct task *parent) {
+    uint64_t asked = stat_now_ns();
     lock(&pids_lock);
+    uint64_t waited = stat_now_ns() - asked;
+    atomic_fetch_add_explicit(&st_pids_waits, 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&st_pids_wait_ns, waited, memory_order_relaxed);
+    stat_max(&st_pids_wait_max_ns, waited);
     do {
         cur_pid++;
         if (cur_pid > MAX_PID) cur_pid = 1;
