@@ -1018,6 +1018,11 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
         return;
     if (self.pendingKeyboardNotice != nil && !self.keyboardNoticeScheduled)
         [self scheduleKeyboardNotice];
+    // The column's meters under the status bar again: in the background (the
+    // scene's snapshots) the status bar is said hidden, and they went under
+    // the tab bar, where it covered them once back. traitCollectionDidChange:
+    // set them again for any trait; the registrations are for some only.
+    [self updateMonitorColumn];
 }
 
 - (void)keyboardMoved:(NSNotification *)notification {
