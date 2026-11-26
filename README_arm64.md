@@ -208,7 +208,8 @@ Enables AI agents to share files between the host app and the Linux guest withou
   or by group (`ish-install go python`; `ish-install -l` lists the groups). After an app
   update whose AOT images were recorded on newer versions, every login shell names what they
   serve only in part, and `ish-install -u` installs their versions (Claude Code and Kimi Code
-  where they are, an older apk package upgraded)
+  where they are, an older apk package upgraded; one a mirror of `--cn` has not yet, from the
+  official npm registry or Alpine repositories)
 - **RootfsPatch.bundle**: Versioned overlay system for incremental rootfs updates
 - **Polyfills**: WebAssembly polyfill for undici/llhttp, fetch polyfill for HTTP downloads
 - No environment variables injected: a program sees the environment it was started with

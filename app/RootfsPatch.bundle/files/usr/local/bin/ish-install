@@ -11,7 +11,9 @@
 #   ish-install -u           what the app's AOT images serve, installed at
 #                            another version: theirs installed (Claude Code and
 #                            Kimi Code at the images' versions, where they are;
-#                            an older apk package upgraded)
+#                            an older apk package upgraded). A mirror that has
+#                            not the images' version yet: that one from the
+#                            official registry or repositories.
 #   ish-install --outdated   only says what -u would install (every login
 #                            shell asks)
 #
@@ -147,6 +149,31 @@ npm_tool() {
 }
 NPM_GROUPS="claude kimi"
 
+# The package with the tool's own binary, of the version the tool's is: an
+# optional dependency, which npm leaves out without a word where the registry
+# has not that version (Claude Code then has no claude.exe). Nothing for a tool
+# whose dependencies take what the registry has (Kimi Code's ^ ranges).
+npm_binary() {
+    case $1 in
+        claude) echo @anthropic-ai/claude-code-linux-arm64-musl ;;
+    esac
+}
+
+# The official npm registry and Alpine repositories, for what a mirror (--cn)
+# has not yet: npmmirror and Alibaba Cloud's copy them, an hour or two behind
+# at times, and the images are recorded on the official ones' versions
+NPM_OFFICIAL=https://registry.npmjs.org/
+APK_OFFICIAL=https://dl-cdn.alpinelinux.org/alpine/
+
+# Whether npm's registry has each package given at version
+on_registry() {
+    version=$1
+    shift
+    for p in "$@"; do
+        [ "$(npm view "$p@$version" version 2> /dev/null)" = "$version" ] || return 1
+    done
+}
+
 # Whether npm_tool's tool is there: in its directory, or on the PATH. Sets
 # cmd, package and prefix from it.
 has_tool() {
@@ -233,17 +260,46 @@ EOF
 }
 
 # Install group's npm tool at the version VERSIONS gives, where it goes: npm -g,
-# into the tool's own directory if it has one (npm -g --prefix /opt/claude-code)
+# into the tool's own directory if it has one (npm -g --prefix /opt/claude-code).
+# From the official registry where npm's (a mirror) has not that version yet,
+# of the tool or of its binary's package (npm_binary).
 npm_install() {
+    group=$1
     read -r cmd package prefix <<EOF
-$(npm_tool "$1")
+$(npm_tool "$group")
 EOF
     version=$(pinned "$package")
-    if [ -n "$prefix" ]; then
-        npm install -g --prefix "$prefix" --no-audit --no-fund "$package${version:+@$version}"
-    else
-        npm install -g --no-audit --no-fund "$package${version:+@$version}"
+    set --
+    registry=$(npm config get registry)
+    # shellcheck disable=SC2046
+    if [ -n "$version" ] && [ "$registry" != "$NPM_OFFICIAL" ] &&
+            ! on_registry "$version" "$package" $(npm_binary "$group"); then
+        echo "$group: $registry has not $package $version yet: from $NPM_OFFICIAL"
+        set -- --registry="$NPM_OFFICIAL"
     fi
+    if [ -n "$prefix" ]; then
+        npm install -g --prefix "$prefix" --no-audit --no-fund "$@" "$package${version:+@$version}"
+    else
+        npm install -g --no-audit --no-fund "$@" "$package${version:+@$version}"
+    fi
+}
+
+# The apk packages still older than the images' after apk upgrade from a mirror
+# (/etc/apk/repositories not the official ones) that has not their versions
+# yet: upgraded from the official repositories of the same release. Sets
+# older_apk as find_outdated does.
+apk_upgrade_official() {
+    [ -n "$older_apk" ] || return 0
+    official=$(sed "s|^https\{0,1\}://[^/]*/alpine/|$APK_OFFICIAL|" /etc/apk/repositories)
+    [ "$official" != "$(cat /etc/apk/repositories)" ] || return 0
+    mirror=$(sed -n '1s|^\(https\{0,1\}://[^/]*/alpine/\).*|\1|p' /etc/apk/repositories)
+    echo "$mirror has not the images' versions yet:$older_apk: from $APK_OFFICIAL"
+    repositories=$(mktemp)
+    echo "$official" > "$repositories"
+    # shellcheck disable=SC2086
+    apk upgrade -U --repositories-file "$repositories" $older_apk || { rm -f "$repositories"; return 1; }
+    rm -f "$repositories"
+    find_outdated
 }
 
 case $1 in
@@ -272,6 +328,7 @@ case $1 in
         [ -z "$outdated_groups" ] || npm cache clean --force 2> /dev/null
         upgraded_groups=$outdated_groups upgraded="$older_apk$outdated_groups"
         find_outdated
+        apk_upgrade_official
         if [ -n "$outdated_lines" ]; then
             printf "Still of other versions than the images' (apk's repositories have not theirs yet):\n%s" "$outdated_lines"
             exit 1
