@@ -10,7 +10,8 @@
 //  at its bottom, in green, orange past 75%, red past 90%, the percent in its
 //  middle, its name in the opening), the CPU's last minute as a line over
 //  them; the share of lately compiled code that runs natively (JIT: an AOT
-//  image's or the JIT's), a gauge too, red once the code region is full; the
+//  image's or the JIT's), a gauge too, shown only while the code region is
+//  full and for 30 s after (red then: the details have it always); the
 //  heat, by name, while it is more than nominal; each but the CPU while the
 //  column has the room for it (rowsForRoom:). A tap (VoiceOver's activation)
 //  shows their details (MonitorDetailViewController). Under them, at the

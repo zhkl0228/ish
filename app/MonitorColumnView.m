@@ -177,6 +177,12 @@ static UIColor *GaugeColor(double fraction) {
 // The last reading's heat more than nominal: the heat's row shown, the
 // keyboard down, where it fits (rowsForRoom:)
 @property (nonatomic) BOOL hot;
+// The JIT's ring is shown only while its code region is full and for 30 s
+// after (jitShownUntil, a CACurrentMediaTime): its share of native code is the
+// details' to tell, and a full region flushed every few seconds under clang
+// would have it come and go
+@property (nonatomic) BOOL showsJIT;
+@property CFTimeInterval jitShownUntil;
 
 @end
 
@@ -258,6 +264,13 @@ static UIColor *GaugeColor(double fraction) {
     [self setNeedsLayout];
 }
 
+- (void)setShowsJIT:(BOOL)showsJIT {
+    if (showsJIT == _showsJIT)
+        return;
+    _showsJIT = showsJIT;
+    [self setNeedsLayout];
+}
+
 // A row's size: a gauge's, the line's 14 points under the gauges' width, the
 // heat's its own, no wider than the meters
 - (CGSize)sizeOfRow:(UIView *)row {
@@ -299,8 +312,9 @@ static UIColor *GaugeColor(double fraction) {
 }
 
 // The rows the column shows in this much room: the CPU; the memory; under
-// them the heat's while it is more than nominal and the JIT's, with the
-// keyboard down; over them the CPU's last minute: each, in that order, while
+// them the heat's while it is more than nominal and the JIT's while it is
+// shown (showsJIT), with the keyboard down; over them the CPU's last minute:
+// each, in that order, while
 // there is room for it and those before it. One without is not shown at all:
 // squashed (a stack as tall as the column), the line was flat, the heat's row
 // a dot, and the memory's ring, the keyboard up, half its size under its name.
@@ -308,7 +322,7 @@ static UIColor *GaugeColor(double fraction) {
     NSMutableArray<UIView *> *wanted = [NSMutableArray arrayWithObject:self.memoryGauge];
     if (self.hot && !self.keyboardUp)
         [wanted addObject:self.heatRow];
-    if (!self.keyboardUp)
+    if (self.showsJIT && !self.keyboardUp)
         [wanted addObject:self.nativeGauge];
     [wanted addObject:self.cpuLine];
     NSMutableSet<UIView *> *shown = [NSMutableSet setWithObject:self.cpuGauge];
@@ -431,6 +445,10 @@ static UIColor *GaugeColor(double fraction) {
         self.nativeGauge.fraction = reading.nativeShare;
     }
     self.hot = reading.thermalState != NSProcessInfoThermalStateNominal;
+    CFTimeInterval now = CACurrentMediaTime();
+    if (reading.codeRegionFull)
+        self.jitShownUntil = now + 30;
+    self.showsJIT = now < self.jitShownUntil;
     // its row as wide as its name
     NSString *heat = MonitorThermalName(reading.thermalState);
     if (![heat isEqualToString:self.heatLabel.text]) {
