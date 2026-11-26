@@ -254,6 +254,9 @@ static UIColor *GaugeColor(double fraction) {
     if (keyboardUp == _keyboardUp)
         return;
     _keyboardUp = keyboardUp;
+    // the rows chosen now, as the keyboard starts to move: those it hides go
+    // at once (the room it leaves is the next layout's)
+    [self chooseRows];
     [self setNeedsLayout];
 }
 
@@ -268,8 +271,18 @@ static UIColor *GaugeColor(double fraction) {
 // in it: its height is the room, whatever the rows (TerminalViewController),
 // so that choosing them lays out nothing again
 - (void)layoutSubviews {
-    [self fitRows];
+    [self chooseRows];
     [super layoutSubviews];
+}
+
+// A row hidden or shown is not animated. Laid out in the keyboard's animation
+// (TerminalViewController's keyboardMoved:), the stack animated a row it hid,
+// which its fixed height kept whole, shown till the animation ended: the
+// JIT's went late as the keyboard came up. The rows left move with it.
+- (void)chooseRows {
+    [UIView performWithoutAnimation:^{
+        [self fitRows];
+    }];
 }
 
 // The rows the column shows: the CPU; the memory; under them the heat's
