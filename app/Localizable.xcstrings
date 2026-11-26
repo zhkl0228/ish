@@ -45,6 +45,17 @@
         }
       }
     },
+    "Backspace" : {
+      "comment" : "The column's esc key held: what it sends",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "退格"
+          }
+        }
+      }
+    },
     "Braked: the guest's new memory is refused (ENOMEM)" : {
       "comment" : "Meter details: the kernel's memory governor refuses new memory",
       "localizations" : {
@@ -63,6 +74,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "CPU %1$d%%，内存 %2$d%%，温度%3$@"
+          }
+        }
+      }
+    },
+    "Clear the line" : {
+      "comment" : "The column's / key held: what it sends (Ctrl-U)",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除整行"
           }
         }
       }
@@ -210,6 +232,17 @@
         }
       }
     },
+    "Release to cancel" : {
+      "comment" : "A held column key's callout, the finger moved off it: nothing is sent",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "松开取消"
+          }
+        }
+      }
+    },
     "Return" : {
       "comment" : "The column's return key, read aloud",
       "localizations" : {
@@ -228,6 +261,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "过热"
+          }
+        }
+      }
+    },
+    "Shift-Tab" : {
+      "comment" : "The column's tab key held: what it sends",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "反向 Tab"
           }
         }
       }

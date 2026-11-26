@@ -34,6 +34,15 @@
 
 @class FindBar;
 
+// A column key held: what it sends then, and what its callout says it sends
+// (columnKeyHeld:)
+@interface ColumnKeyHold : UILongPressGestureRecognizer
+@property (copy) NSString *callout;
+@property (copy) void (^send)(void);
+@end
+@implementation ColumnKeyHold
+@end
+
 @interface TerminalViewController () <UIGestureRecognizerDelegate, TabBarViewDelegate, ClipboardShelfDelegate>
 
 @property UITapGestureRecognizer *tapRecognizer;
@@ -103,6 +112,13 @@
 @property NSLayoutConstraint *columnKeysAboveKeyboard;
 // A tap of one: the keyboard's click is heard only while a keyboard shows
 @property UIImpactFeedbackGenerator *columnKeyFeedback;
+// A column key held (columnKeyHeld:): the callout left of it, saying what
+// letting go sends, or that it sends nothing, the finger moved off; a firmer
+// tap as it shows, a tick as it changes
+@property UILabel *holdCallout;
+@property BOOL holdArmed;
+@property UIImpactFeedbackGenerator *holdFeedback;
+@property UISelectionFeedbackGenerator *holdChangeFeedback;
 // The on-screen keyboard up (keyboardMoved:)
 @property BOOL keyboardUp;
 // The layout updateMonitorColumn last logged
@@ -1246,19 +1262,29 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
 
 #pragma mark The column's keys
 
-// Esc, tab (held: shift-tab), /, up and down (held: repeating) and return, as
-// the bar's keys send them and in its order, one over another at the bottom of
-// the column, under the meters' middle, above the home indicator. Esc and /
-// are named as on the bar; / is only /, its held symbols the bar's (their
-// popup opens over the bar's row).
+// Esc, tab, /, up and down (held: repeating) and return, as the bar's keys
+// send them and in its order, one over another at the bottom of the column,
+// under the meters' middle, above the home indicator. Esc and / are named as
+// on the bar. Held, esc is backspace, tab shift-tab and / Ctrl-U (clearing
+// the line), each said in a callout before it is let go (columnKeyHeld:);
+// the bar's / keeps its held symbols, whose popup opens over its row.
 - (void)addColumnKeys {
+    __weak typeof(self) weakSelf = self;
     BarButton *escape = [self columnKeyNamed:@"esc" name:NSLocalizedString(@"Escape", @"The column's escape key, read aloud")];
     [escape addTarget:self action:@selector(pressEscape:) forControlEvents:UIControlEventTouchUpInside];
+    [self holdKey:escape
+          callout:[@"⌫ " stringByAppendingString:NSLocalizedString(@"Backspace", @"The column's esc key held: what it sends")]
+             send:^{ [weakSelf.termView deleteBackward]; }];
     BarButton *tab = [self columnKey:@"arrow.right.to.line" name:NSLocalizedString(@"Tab", @"The column's tab key, read aloud")];
     [tab addTarget:self action:@selector(pressTab:) forControlEvents:UIControlEventTouchUpInside];
-    [tab addGestureRecognizer:[[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(tabKeyHeld:)]];
+    [self holdKey:tab
+          callout:[@"⇧⇥ " stringByAppendingString:NSLocalizedString(@"Shift-Tab", @"The column's tab key held: what it sends")]
+             send:^{ [weakSelf.termView insertSequence:@"\x1b[Z"]; }];
     BarButton *slash = [self columnKeyNamed:kSymbolKeySymbol name:NSLocalizedString(@"Slash", @"The column's slash key, read aloud")];
     [slash addTarget:self action:@selector(pressSymbolKey:) forControlEvents:UIControlEventTouchUpInside];
+    [self holdKey:slash
+          callout:[@"⌃U " stringByAppendingString:NSLocalizedString(@"Clear the line", @"The column's / key held: what it sends (Ctrl-U)")]
+             send:^{ [weakSelf.termView insertSequence:@"\x15"]; }];
     BarButton *up = [self columnKey:@"chevron.up" name:NSLocalizedString(@"Up", @"The column's up arrow key, read aloud")];
     up.tag = 1; // arrowKeyFinals
     BarButton *down = [self columnKey:@"chevron.down" name:NSLocalizedString(@"Down", @"The column's down arrow key, read aloud")];
@@ -1288,6 +1314,81 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
     self.columnKeysAboveKeyboard = [keys.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor];
     [keys.centerXAnchor constraintEqualToAnchor:self.monitorColumn.metersCenterXAnchor].active = YES;
     self.columnKeyFeedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+    self.holdFeedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+    self.holdChangeFeedback = [UISelectionFeedbackGenerator new];
+}
+
+// A column key's second key, sent by holding it (columnKeyHeld:) and, with
+// VoiceOver, by its action of that name
+- (void)holdKey:(BarButton *)key callout:(NSString *)callout send:(void (^)(void))send {
+    ColumnKeyHold *hold = [[ColumnKeyHold alloc] initWithTarget:self action:@selector(columnKeyHeld:)];
+    hold.minimumPressDuration = 0.4;
+    hold.callout = callout;
+    hold.send = send;
+    [key addGestureRecognizer:hold];
+    key.accessibilityCustomActions = @[[[UIAccessibilityCustomAction alloc] initWithName:callout actionHandler:^BOOL(UIAccessibilityCustomAction *_) {
+        send();
+        return YES;
+    }]];
+}
+
+// Held, a key's callout shows left of it what letting go sends; the key's
+// own key is not sent (the hold took its touch). Moved off the key and the
+// callout, the finger lets go of nothing ("Release to cancel"), and back on
+// them of the second key again: a hold that was a mistake is undone.
+- (void)columnKeyHeld:(ColumnKeyHold *)hold {
+    UIView *key = hold.view;
+    CGRect keyFrame = [self.view convertRect:key.bounds fromView:key];
+    switch (hold.state) {
+        case UIGestureRecognizerStateBegan: {
+            UILabel *callout = [UILabel new];
+            callout.font = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
+            callout.textAlignment = NSTextAlignmentCenter;
+            callout.backgroundColor = UIColor.secondarySystemBackgroundColor;
+            callout.layer.cornerRadius = 10;
+            callout.layer.masksToBounds = YES;
+            [self.view addSubview:callout];
+            self.holdCallout = callout;
+            self.holdArmed = YES;
+            [self showHoldCallout:hold.callout armed:YES besideKey:keyFrame];
+            [self.holdFeedback impactOccurred];
+            break;
+        }
+        case UIGestureRecognizerStateChanged: {
+            CGPoint at = [hold locationInView:self.view];
+            BOOL armed = CGRectContainsPoint(CGRectInset(keyFrame, -24, -24), at) ||
+                CGRectContainsPoint(CGRectInset(self.holdCallout.frame, -16, -16), at);
+            if (armed == self.holdArmed)
+                break;
+            self.holdArmed = armed;
+            [self showHoldCallout:armed ? hold.callout : NSLocalizedString(@"Release to cancel", @"A held column key's callout, the finger moved off it: nothing is sent")
+                            armed:armed besideKey:keyFrame];
+            [self.holdChangeFeedback selectionChanged];
+            break;
+        }
+        case UIGestureRecognizerStateEnded:
+            if (self.holdArmed) {
+                [UIDevice.currentDevice playInputClick];
+                hold.send();
+            }
+            [self.holdCallout removeFromSuperview];
+            self.holdCallout = nil;
+            break;
+        default:
+            [self.holdCallout removeFromSuperview];
+            self.holdCallout = nil;
+            break;
+    }
+}
+
+// The callout 8 points left of the key, level with it, as wide as its text
+- (void)showHoldCallout:(NSString *)text armed:(BOOL)armed besideKey:(CGRect)keyFrame {
+    UILabel *callout = self.holdCallout;
+    callout.text = text;
+    callout.textColor = armed ? UIColor.labelColor : UIColor.secondaryLabelColor;
+    CGSize size = [callout sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)];
+    CGFloat width = size.width + 24, height = 36;
+    callout.frame = CGRectMake(CGRectGetMinX(keyFrame) - 8 - width, CGRectGetMidY(keyFrame) - height / 2, width, height);
 }
 
 - (BarButton *)columnKey:(NSString *)symbol name:(NSString *)name {
