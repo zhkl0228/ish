@@ -23,7 +23,7 @@ rec() {
     name=$1
     set -- $(python3 -c "import json; i = json.load(open('$list'))['images']['$name']; print(i['module'], i['workload'])")
     RECORDING="$out/rec/$name.jsonl" sh "$record" "$ish" "$rootfs" "/tmp/aojit/$2" "$out/aot_$name.S" "$1" 2>&1 |
-        grep -E "✅|❌|⚠️" | sed "s/^/[$name] /" | cut -c1-170
+        grep -E "✅|❌|⚠️|^   " | sed "s/^/[$name] /" | cut -c1-230
     [ "$IOS" = 1 ] || return 0
     # not when record.sh made no image (its status is lost in the pipe)
     [ "$out/aot_$name.S" -nt "$out/rec/$name.jsonl" ] || return 0
