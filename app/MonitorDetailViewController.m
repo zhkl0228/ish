@@ -145,19 +145,10 @@ static NSString *ThermalMeaning(NSProcessInfoThermalState state) {
     self.brake = [self addDetail];
     [stack setCustomSpacing:16 afterView:self.brake];
 
+    // No button to turn the meters off: a tap that missed one turned them off
+    // with no sign of how (Settings and the View menu do it)
     self.heatValue = [self addHeading:@"Heat"];
     self.heatMeaning = [self addDetail];
-    [stack setCustomSpacing:10 afterView:self.heatMeaning];
-
-    __weak typeof(self) weakSelf = self;
-    UIButtonConfiguration *config = [UIButtonConfiguration plainButtonConfiguration];
-    config.title = @"Hide Meters";
-    config.contentInsets = NSDirectionalEdgeInsetsMake(6, 0, 6, 0);
-    UIButton *hide = [UIButton buttonWithConfiguration:config primaryAction:[UIAction actionWithHandler:^(UIAction *_) {
-        [weakSelf hideMeters];
-    }]];
-    hide.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeading;
-    [stack addArrangedSubview:hide];
 
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(samplerDidRead:)
                                                name:MonitorSamplerDidReadNotification object:self.sampler];
@@ -253,14 +244,6 @@ static NSString *ThermalMeaning(NSProcessInfoThermalState state) {
     CGSize size = CGSizeMake(kWidth, ceil(fitted.height) + 2 * kInset);
     if (!CGSizeEqualToSize(size, self.preferredContentSize))
         self.preferredContentSize = size;
-}
-
-// Off, as Settings and the View menu turn them off (showMeters), once the
-// popover is gone
-- (void)hideMeters {
-    [self dismissViewControllerAnimated:YES completion:^{
-        UserPreferences.shared.showMeters = NO;
-    }];
 }
 
 @end

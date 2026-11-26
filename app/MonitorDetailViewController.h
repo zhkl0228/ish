@@ -6,8 +6,8 @@
 //  too, the terminal in sight): the CPUs, all and each, user and system, and
 //  the device's load; the app's memory of its limit, what is left before iOS
 //  ends the app, and whether the kernel refuses the guest's new memory; the
-//  heat and what it does. As the sampler reads. Hide Meters turns them off
-//  (UserPreferences' showMeters).
+//  heat and what it does. As the sampler reads. Nothing in it turns the
+//  meters off: Settings and the View menu do (UserPreferences' showMeters).
 //
 
 #import <UIKit/UIKit.h>
