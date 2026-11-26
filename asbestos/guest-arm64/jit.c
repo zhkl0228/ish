@@ -4228,11 +4228,19 @@ bool jit_flush_wanted(void) {
 }
 
 bool jit_flush_claim(void) {
-    bool wanted = true;
-    if (!atomic_compare_exchange_strong(&flush_wanted, &wanted, false))
+    // One flush at a time. A translation begun before the claim finds the
+    // region full till it ends, and asks for a flush again: claimed by
+    // another thread then, a second flush took the region from its start as
+    // the first let translations go on, and gave code that was running, or
+    // was to be linked to, to other code.
+    bool busy = false;
+    if (!atomic_compare_exchange_strong(&flushing, &busy, true))
         return false;
-    atomic_store(&flushing, true);
-    return true;
+    bool wanted = true;
+    if (atomic_compare_exchange_strong(&flush_wanted, &wanted, false))
+        return true;
+    atomic_store(&flushing, false);
+    return false;
 }
 
 void jit_flush_end(void) {
@@ -4251,9 +4259,16 @@ void jit_flush_end(void) {
     // holds is taken over (slot_set), and its jit_block_free leaves it be
     if (mod_next_idx != NULL)
         memset(mod_next_idx, 0, mod_next_cap * sizeof(*mod_next_idx));
+    // the loop blocks' ranges are other code's now: one of them would give a
+    // fault there the wrong registers to sync (sync_pinned())
+    pthread_mutex_lock(&loopmap_lock);
+    nloopmaps = 0;
+    pthread_mutex_unlock(&loopmap_lock);
     atomic_store(&region_used, region_floor);
     atomic_store(&region_full, false);
     atomic_fetch_add(&st_flushes, 1);
+    // what was asked meanwhile was of the region full before
+    atomic_store(&flush_wanted, false);
     atomic_store(&flushing, false);
     pthread_mutex_unlock(&reg_lock);
 }

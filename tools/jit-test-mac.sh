@@ -15,6 +15,8 @@
 #     at the access's TLB-miss exit (ISH_JIT_FAULT_TEST=resume), and one
 #     anywhere else kills the process with SIGSEGV and logs a sample
 #     (ISH_JIT_FAULT_TEST=unknown);
+#   - regress_jit_flush: a 1 MB code region (ISH_JIT_REGION_MB=1), flushed
+#     over and over as processes start and end, every result right;
 #   - regression tests the JIT can break: instructions compared against
 #     hardware, faults, signals, memory.
 # Needs meson, ninja and timeout. Exits 1 if any test failed.
@@ -40,6 +42,7 @@ if [ "${1:-}" = --prepare ]; then
     build null_fault -O1 tests/regress/regress_null_fault.c
     build fenv -O0 tests/regress/regress_fenv.c -lm
     build jit_fault -O0 tests/regress/regress_jit_fault.c
+    build jit_flush -O0 tests/regress/regress_jit_flush.c
     build mmap_spin -O1 tests/regress/regress_mmap_spin.c
     build stack_extent -O0 tests/regress/regress_stack_extent.c
     build force_signal -O0 tests/regress/regress_force_signal.c
@@ -100,6 +103,12 @@ for mode in resume unknown; do
         fail "regress_jit_fault unknown: not killed with a sample in the log"
     fi
 done
+
+# a 1 MB code region, flushed over and over as processes start and end
+echo "== regress_jit_flush"
+out=$(ISH_JIT_REGION_MB=1 timeout 300 "$ISH" -r "$ROOT" /tmp/regress_jit_flush 2>&1)
+echo "$out" | grep -v '^PASS' | tail -20
+echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || fail "regress_jit_flush"
 
 for t in $TESTS; do
     echo "== regress_$t"

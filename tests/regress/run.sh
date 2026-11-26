@@ -724,6 +724,17 @@ EOF
         status=1
     fi
     echo
+    echo "########## JIT: the code region flushed as processes come and go (ish -Djit=true; skips otherwise) ##########"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_jit_flush" tests/regress/regress_jit_flush.c; then
+        out=$(ISH_JIT_REGION_MB=1 timeout 300 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_jit_flush 2>&1)
+        echo "$out"
+        echo "$out" | grep -q '^SKIP' || echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_jit_flush"
+    else
+        echo "failed to build regress_jit_flush" >&2
+        status=1
+    fi
+    echo
     echo "########## System V shared memory: shmget, shmat, shmdt, shmctl ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_sysv_shm" tests/regress/regress_sysv_shm.c; then
         out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_sysv_shm 2>&1)

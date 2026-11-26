@@ -371,6 +371,7 @@ void jit_highbit_alert(struct cpu_state *cpu) { (void)cpu; }
 
 static void fiber_block_disconnect(struct asbestos *asbestos, struct fiber_block *block);
 static void fiber_block_free(struct asbestos *asbestos, struct fiber_block *block);
+static void fiber_block_forget(struct fiber_block *block);
 static void fiber_free_jetsam(struct asbestos *asbestos);
 static uint64_t asbestos_now_ms(void);
 
@@ -499,9 +500,8 @@ void asbestos_free(struct asbestos *asbestos) {
         struct fiber_block *block, *tmp;
         if (list_null(&asbestos->hash[i]))
             continue;
-        list_for_each_entry_safe(&asbestos->hash[i], block, tmp, chain) {
-            fiber_block_free(asbestos, block);
-        }
+        list_for_each_entry_safe(&asbestos->hash[i], block, tmp, chain)
+            fiber_block_forget(block);
     }
     fiber_free_jetsam(asbestos);
 #ifdef ISH_JIT
@@ -971,6 +971,21 @@ static void fiber_block_disconnect(struct asbestos *asbestos, struct fiber_block
             list_remove(&prev_block->jumps_from_links[i]);
         }
     }
+}
+
+// A block of an asbestos that goes away whole: no thread runs it or a block
+// chained to it again, so its lists and its predecessors' links are left as
+// they are. Undoing a link patches the predecessor's native code, and the
+// asbestos left the flush's list first: a flush that ended meanwhile had
+// given those addresses to other code, whose instructions became the link
+// sites' nops (an add of a TLB lookup: native code read a guest address).
+static void fiber_block_forget(struct fiber_block *block) {
+    atomic_fetch_sub_explicit(&st_fiber_blocks, 1, memory_order_relaxed);
+    atomic_fetch_sub_explicit(&st_fiber_bytes, fiber_block_bytes(block), memory_order_relaxed);
+#ifdef ISH_JIT
+    jit_block_free(block);
+#endif
+    free(block);
 }
 
 static void fiber_block_free(struct asbestos *asbestos, struct fiber_block *block) {
