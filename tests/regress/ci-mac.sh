@@ -12,9 +12,9 @@
 #   the build and the rootfs go in <work dir>, new; <guest programs> is the
 #   linux job's <work dir>/guest-programs
 #
-# Needs Xcode's clang, meson, ninja, pkg-config, libarchive and coreutils
-# (Homebrew's: timeout, which run.sh runs everything under), python3, curl and
-# the network (the rootfs).
+# Needs Xcode's clang, lld (the vDSO is linked as a Linux ELF), meson, ninja,
+# pkg-config, libarchive and coreutils (Homebrew's: timeout, which run.sh runs
+# everything under), python3, curl and the network (the rootfs).
 set -eu
 work=$1
 programs=$(cd "$2" && pwd)
