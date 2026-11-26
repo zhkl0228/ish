@@ -52,7 +52,6 @@ static NSString *ThermalMeaning(NSProcessInfoThermalState state) {
 @property UILabel *regionAmount;
 @property MeterBar *regionBar;
 @property UIView *regionBarRow;
-@property UILabel *regionFull;
 
 @end
 
@@ -163,8 +162,8 @@ static NSString *ThermalMeaning(NSProcessInfoThermalState state) {
 
     // The JIT, while it translates (showReading:): its share of native code,
     // as the column's gauge has it, and its code region, which fills as it
-    // translates and is never emptied; red once full, what is compiled since
-    // then running as gadgets, unless an image has it
+    // translates; its bar red while full, till it is flushed (no line says
+    // so: the red says it)
     self.jitValue = [self addHeading:@"JIT"];
     self.jitHeading = self.jitValue.superview;
     self.regionAmount = [self addDetail];
@@ -184,10 +183,8 @@ static NSString *ThermalMeaning(NSProcessInfoThermalState state) {
     [stack addArrangedSubview:regionBarRow];
     self.regionBar = regionBar;
     self.regionBarRow = regionBarRow;
-    self.regionFull = [self addDetail];
-    self.regionFull.text = NSLocalizedString(@"Full: being flushed; blocks are translated again once hot",
-                                             @"Meter details: the JIT's code region is full, and is being flushed");
-    self.regionFull.textColor = UIColor.systemRedColor;
+    // the heat's heading 16 under it
+    [stack setCustomSpacing:16 afterView:regionBarRow];
 
     // No button to turn the meters off: a tap that missed one turned them off
     // with no sign of how (Settings and the View menu do it)
@@ -282,12 +279,6 @@ static NSString *ThermalMeaning(NSProcessInfoThermalState state) {
         if (view.hidden == jit)
             view.hidden = !jit;
     }
-    BOOL full = jit && reading.codeRegionFull;
-    if (self.regionFull.hidden == full)
-        self.regionFull.hidden = !full;
-    // the heat's heading 16 under the JIT's last line shown
-    [self.stack setCustomSpacing:full ? UIStackViewSpacingUseDefault : 16 afterView:self.regionBarRow];
-    [self.stack setCustomSpacing:16 afterView:self.regionFull];
     BOOL heat = !self.keyboardUp;
     for (UIView *view in @[self.heatHeading, self.heatMeaning]) {
         if (view.hidden == heat)
