@@ -396,18 +396,31 @@ static int c_subms(void) {
     return n <= 1200 ? 0 : 1;   // >1200 would mean it returns early / spins
 }
 
-static void on_alarm(int s) { (void)s; }
+static volatile sig_atomic_t alarmed;
+static void on_alarm(int s) { (void)s; alarmed = 1; }
+// The timer's 100ms may run out before poll() is entered, on a busy host (a CI
+// runner): the handler has run, and poll() waits for a signal that has come
+// (macOS CI's run: killed at 3s). That is the test's race, not poll's: a try
+// whose signal came first is made again.
 static int c_eintr(void) {
     int p[2]; pipe(p);
     struct sigaction sa = { 0 }; sa.sa_handler = on_alarm; sigaction(SIGALRM, &sa, NULL);
-    struct itimerval it = { { 0, 0 }, { 0, 100000 } };
-    setitimer(ITIMER_REAL, &it, NULL);
-    struct pollfd q = { p[0], POLLIN, 0 };
-    int64_t t0 = now_us();
-    int r = poll(&q, 1, -1); int e = errno;
-    long ms = (long)((now_us() - t0) / 1000);
-    printf("    NOTE poll EINTR: r=%d errno=%d after %ldms\n", r, e, ms);
-    return (r == -1 && e == EINTR && ms < 400) ? 0 : 1;
+    for (int attempt = 1; attempt <= 5; attempt++) {
+        alarmed = 0;
+        struct itimerval it = { { 0, 0 }, { 0, 100000 } };
+        setitimer(ITIMER_REAL, &it, NULL);
+        struct pollfd q = { p[0], POLLIN, 0 };
+        int64_t t0 = now_us();
+        if (alarmed) {
+            printf("    NOTE poll EINTR: the signal came before poll() (try %d)\n", attempt);
+            continue;
+        }
+        int r = poll(&q, 1, -1); int e = errno;
+        long ms = (long)((now_us() - t0) / 1000);
+        printf("    NOTE poll EINTR: r=%d errno=%d after %ldms\n", r, e, ms);
+        return (r == -1 && e == EINTR && ms < 400) ? 0 : 1;
+    }
+    return 1;
 }
 
 // --- wake-up latency ------------------------------------------------------------
