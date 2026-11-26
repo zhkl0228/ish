@@ -11,10 +11,17 @@
 // held. From then on every fork() blocked in task_create_.
 //
 // Each round forks PARALLEL children; every child starts THREADS threads that
-// block in epoll_wait(-1) on a pipe nobody writes, then calls _exit() (exit_group).
-// The parent then checks that the NEXT fork still completes. A wedged kernel
-// shows up as a fork that never returns, so the parent arms alarm() and fails
-// loudly instead of hanging the runner.
+// block in epoll_wait(-1) on a pipe nobody writes, says it is ready, and once
+// all are, they call _exit() (exit_group) at once. The parent then checks that
+// the NEXT fork still completes. A wedged kernel shows up as a fork that never
+// returns, so the parent arms alarm() and fails loudly instead of hanging the
+// runner.
+//
+// The children start one after another, each when the one before has its
+// threads parked: what is tested is their exits together, not 128 threads
+// started at once. Started at once, in an iSH running in iSH (whose every
+// clone is the outer one's), they took 10 to 50 s, and the round's 30 s alarm
+// called that a wedged kernel; on the phone they take 0.1 s.
 //
 // Usage: regress_leaked_thread_exit [rounds] [parallel] [threads]
 // Prints "PASS rounds=N" or "FAIL ...". Exit status 0 on pass.
@@ -42,7 +49,12 @@ static void *park(void *arg) {
     return NULL;
 }
 
+// ready: each child writes a byte to it once its threads are parked; go: the
+// parent closes its end once all are, and every child reads its end's EOF
+static int ready[2], go[2];
+
 static void child(int threads) {
+    close(go[1]);
     int p[2];
     if (pipe(p) < 0)
         _exit(2);
@@ -60,6 +72,10 @@ static void child(int threads) {
     // Let every thread get into the host wait before exit_group.
     struct timespec ts = {0, 50 * 1000000L};
     nanosleep(&ts, NULL);
+    char byte = 1;
+    if (write(ready[1], &byte, 1) != 1)
+        _exit(5);
+    while (read(go[0], &byte, 1) > 0) {}
     _exit(0);
 }
 
@@ -81,6 +97,10 @@ int main(int argc, char **argv) {
         alarm(30);
         pid_t pids[64];
         int n = parallel > 64 ? 64 : parallel;
+        if (pipe(ready) < 0 || pipe(go) < 0) {
+            printf("FAIL pipe: %s\n", strerror(errno));
+            return 1;
+        }
         for (int i = 0; i < n; i++) {
             pids[i] = fork();
             if (pids[i] < 0) {
@@ -89,7 +109,17 @@ int main(int argc, char **argv) {
             }
             if (pids[i] == 0)
                 child(threads);
+            char byte;
+            if (read(ready[0], &byte, 1) != 1) {
+                printf("FAIL child %d not ready (exited before its threads were parked)\n", i);
+                return 1;
+            }
         }
+        // all parked: every child's read of go ends, and they exit together
+        close(go[1]);
+        close(go[0]);
+        close(ready[0]);
+        close(ready[1]);
         for (int i = 0; i < n; i++) {
             int st;
             if (waitpid(pids[i], &st, 0) < 0) {
