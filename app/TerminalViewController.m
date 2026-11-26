@@ -1721,22 +1721,23 @@ static NSString *ShellQuoted(NSString *string) {
 // its status bar, folded or not, its room under the status bar empty: the
 // safe area's right inset, wide, with little or none on the left (a phone on
 // its side leaves the same room on both sides, round its camera). The meters
-// there go right under the status bar (its Wi-Fi and its battery), as its
-// frame (the window's) says where it ends, where that is the column's: from
-// at most 8 points left of the column to the screen's right edge, and not most
-// of its height. With the status bar hidden, at the column's top, under the
-// tab bar. With a frame that says nothing of where it ends, where the phone's
-// screenshots have it end (kMetersStatusEndFolded, kMetersStatusEndUnfolded).
-// Each layout is logged, and kept for /proc/ish/defaults/meters_column,
-// with what it was laid out by, to place them by on the phone. Called as the
-// safe area, the traits and the status bar change, never from a layout pass: a
-// change it made laid out again, which called it again.
-// Where the status bar's dots under its battery end, as the phone's
-// screenshots have them: 151 points down folded (the screen 466 wide), where
-// its camera keeps the status bar lower, and 108 unfolded (951 wide)
-static const CGFloat kMetersStatusEndFolded = 151;
-static const CGFloat kMetersStatusEndUnfolded = 108;
-static const CGFloat kMetersUnfoldedWidth = 700;
+// there go right under what the system has in the column (its camera, the
+// status bar's time, Wi-Fi and battery, and the indicators it shows then), as
+// UIKit says where that ends (iOS 27.1): the occlusion regions at the column's
+// top (reservedRegionsOfKind:), and where a bar on the right edge as wide as
+// the column begins (layoutRegionForBarOnEdge:extent:), the lowest of them,
+// and the status bar's frame where that is the column's. The status bar's
+// frame alone is not: it is the window's top, 2 points high, on that phone. A
+// status bar end measured from its screenshots (151 points folded) was passed
+// by an indicator the status bar showed under the battery, and the meters
+// covered it. With the status bar hidden, or nothing said of where it ends,
+// at the column's top, under the tab bar. Each layout is logged, and kept for
+// /proc/ish/defaults/meters_column, with all it was laid out by, to place them
+// by on the phone. Called as the safe area, the traits and the status bar
+// change, and from updateViewConstraints, where UIKit notes the reserved
+// regions read and updates the constraints again as they change (an indicator
+// come or gone); never from a layout pass: a change it made laid out again,
+// which called it again.
 - (void)updateMonitorColumn {
     UIView *view = self.view;
     UIEdgeInsets insets = view.safeAreaInsets;
@@ -1746,25 +1747,41 @@ static const CGFloat kMetersUnfoldedWidth = 700;
     UIStatusBarManager *statusBar = view.window.windowScene.statusBarManager;
     BOOL statusHidden = statusBar == nil || statusBar.statusBarHidden;
     CGRect status = statusHidden ? CGRectNull : [view convertRect:statusBar.statusBarFrame fromView:nil];
-    BOOL statusInColumn = !statusHidden && CGRectGetMinX(status) >= size.width - insets.right - 8 &&
+    CGFloat columnLeft = size.width - insets.right;
+    BOOL statusInColumn = !statusHidden && CGRectGetMinX(status) >= columnLeft - 8 &&
         CGRectGetMaxX(status) >= size.width - 1 && CGRectGetMaxY(status) > 0 && CGRectGetMaxY(status) < size.height / 2;
-    CGFloat top;
-    NSString *by;
-    if (statusHidden) {
+    CGFloat top = 0;
+    NSMutableArray<NSString *> *by = [NSMutableArray array];
+    if (!statusHidden) {
+        if (statusInColumn) {
+            top = CGRectGetMaxY(status);
+            [by addObject:[NSString stringWithFormat:@"the status bar's frame, to %.0f", top]];
+        }
+        if (@available(iOS 27.1, *)) {
+            for (UIViewReservedRegion *region in [view reservedRegionsOfKind:[UIViewReservedRegionKind occlusionRegionKind]]) {
+                CGRect frame = region.frame;
+                BOOL columnTop = CGRectGetMaxX(frame) > columnLeft && CGRectGetMinY(frame) < size.height / 2;
+                if (columnTop)
+                    top = MAX(top, CGRectGetMaxY(frame));
+                [by addObject:[NSString stringWithFormat:@"occlusion %@%@", NSStringFromCGRect(frame),
+                               columnTop ? @"" : @" (not at the column's top)"]];
+            }
+            UIViewLayoutRegion *bar = [UIViewLayoutRegion layoutRegionForBarOnEdge:UIRectEdgeRight extent:insets.right];
+            UIEdgeInsets barInsets = [view edgeInsetsForLayoutRegion:bar];
+            top = MAX(top, barInsets.top);
+            [by addObject:[NSString stringWithFormat:@"a bar on the right edge, its insets %@",
+                           NSStringFromUIEdgeInsets(barInsets)]];
+        }
+    }
+    if (top == 0) {
         top = MAX(insets.top, CGRectGetMaxY(self.tabBar.frame));
-        by = @"the status bar hidden: under the tab bar";
-    } else if (statusInColumn) {
-        top = CGRectGetMaxY(status);
-        by = @"under the status bar";
-    } else {
-        BOOL unfolded = size.width >= kMetersUnfoldedWidth;
-        top = unfolded ? kMetersStatusEndUnfolded : kMetersStatusEndFolded;
-        by = unfolded ? @"the status bar's frame not the column's: as measured unfolded"
-                      : @"the status bar's frame not the column's: as measured folded";
+        [by addObject:statusHidden ? @"the status bar hidden: under the tab bar"
+                                   : @"nothing said of where the status bar ends: under the tab bar"];
     }
 
     NSString *layout = [NSString stringWithFormat:@"%@ (%@); safe area insets %@, view %@, status bar %@",
-                        column ? [NSString stringWithFormat:@"from %.0f", top + 8] : @"none", by,
+                        column ? [NSString stringWithFormat:@"from %.0f", top + 8] : @"none",
+                        [by componentsJoinedByString:@"; "],
                         NSStringFromUIEdgeInsets(insets), NSStringFromCGSize(size),
                         statusHidden ? @"hidden" : NSStringFromCGRect(status)];
     if (![layout isEqualToString:self.monitorColumnLayout]) {
@@ -1778,6 +1795,13 @@ static const CGFloat kMetersUnfoldedWidth = 700;
     [self updateColumnKeys];
     if (column && self.monitorColumnTop.constant != top + 8)
         self.monitorColumnTop.constant = top + 8;
+}
+
+// The reserved regions updateMonitorColumn reads here are UIKit's to watch:
+// it asks for the constraints again when they change
+- (void)updateViewConstraints {
+    [self updateMonitorColumn];
+    [super updateViewConstraints];
 }
 
 // In a popover pointing at the meters it was asked from, as they read
