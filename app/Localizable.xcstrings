@@ -166,17 +166,6 @@
         }
       }
     },
-    "Past %@, the guest's new memory is refused" : {
-      "comment" : "Meter details: where the memory governor starts refusing",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "超过 %@ 后，guest 新申请的内存会被拒绝"
-          }
-        }
-      }
-    },
     "Serious" : {
       "comment" : "Heat: ProcessInfo's thermal state, hot",
       "localizations" : {

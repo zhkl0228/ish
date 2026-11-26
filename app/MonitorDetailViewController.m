@@ -41,6 +41,7 @@ static NSString *ThermalMeaning(NSProcessInfoThermalState state) {
 @property UILabel *memoryValue;
 @property UILabel *memoryAmount;
 @property MeterBar *memoryBar;
+@property UIView *memoryBarRow;
 @property UILabel *memoryLeft;
 @property UILabel *brake;
 @property UILabel *heatValue;
@@ -143,9 +144,14 @@ static NSString *ThermalMeaning(NSProcessInfoThermalState state) {
     ]];
     [stack addArrangedSubview:barRow];
     self.memoryBar = bar;
+    self.memoryBarRow = barRow;
     self.memoryLeft = [self addDetail];
+    // Only while the brake holds (showReading:): where it starts is the bar's
+    // mark, and a line saying so under it at every reading said nothing more
     self.brake = [self addDetail];
-    [stack setCustomSpacing:16 afterView:self.brake];
+    self.brake.text = NSLocalizedString(@"Braked: the guest's new memory is refused (ENOMEM)",
+                                        @"Meter details: the kernel's memory governor refuses new memory");
+    self.brake.textColor = UIColor.systemRedColor;
 
     // No button to turn the meters off: a tap that missed one turned them off
     // with no sign of how (Settings and the View menu do it)
@@ -230,16 +236,12 @@ static NSString *ThermalMeaning(NSProcessInfoThermalState state) {
     self.memoryLeft.text = [NSString stringWithFormat:NSLocalizedString(@"%@ more and iOS ends the app",
                                                                         @"Meter details: memory left under the app's limit"),
                             Bytes(reading.memoryTotal - reading.memoryUsed)];
-    if (reading.memoryBraked) {
-        self.brake.text = NSLocalizedString(@"Braked: the guest's new memory is refused (ENOMEM)",
-                                            @"Meter details: the kernel's memory governor refuses new memory");
-        self.brake.textColor = UIColor.systemRedColor;
-    } else {
-        self.brake.text = [NSString stringWithFormat:NSLocalizedString(@"Past %@, the guest's new memory is refused",
-                                                                       @"Meter details: where the memory governor starts refusing"),
-                           Percent(kMonitorMemoryBrake)];
-        self.brake.textColor = UIColor.secondaryLabelColor;
-    }
+    self.brake.hidden = !reading.memoryBraked;
+    // the heat's heading 16 under the memory's last line shown (a hidden
+    // line's spacing is not the stack's)
+    UIView *last = !self.brake.hidden ? self.brake : !self.memoryLeft.hidden ? self.memoryLeft : self.memoryBarRow;
+    for (UIView *view in @[self.memoryBarRow, self.memoryLeft, self.brake])
+        [self.stack setCustomSpacing:view == last ? 16 : UIStackViewSpacingUseDefault afterView:view];
 
     self.heatValue.text = MonitorThermalName(reading.thermalState);
     self.heatValue.textColor = MonitorThermalColor(reading.thermalState, UIColor.labelColor);
