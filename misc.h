@@ -24,6 +24,22 @@
 #define is_gcc(version) (__GNUC__ >= version)
 #define is_clang(version) (__clang_major__ >= version)
 
+// A syscall table holds each syscall's function cast to the type it is called
+// through (syscall_t, kernel/calls.h). GCC 8's -Wextra warns of every such
+// cast, and clang's since LLVM 19 (-Wcast-function-type-mismatch): Apple
+// clang 17 has it, whose version is not LLVM's, so it is asked by name. A file
+// with a table says SYSCALL_CASTS_OK before it.
+#if is_gcc(8)
+#define SYSCALL_CASTS_OK _Pragma("GCC diagnostic ignored \"-Wcast-function-type\"")
+#elif defined(__has_warning)
+#if __has_warning("-Wcast-function-type-mismatch")
+#define SYSCALL_CASTS_OK _Pragma("clang diagnostic ignored \"-Wcast-function-type-mismatch\"")
+#endif
+#endif
+#ifndef SYSCALL_CASTS_OK
+#define SYSCALL_CASTS_OK
+#endif
+
 // Cached check for ISH_EXEC_TRACE env var. getenv() walks the entire
 // environ table and is called from hot paths (every sys_write, every
 // INT_GPF diagnostic, etc.), so cache the result at first use. The env

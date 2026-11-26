@@ -52,6 +52,14 @@ endif
 
 add_project_arguments('-Wno-switch', language: 'c')
 
+# kernel/native_offload.c starts a host program in a directory: macOS SDKs
+# before 26 have posix_spawn_file_actions_addchdir only as ..._np
+if not cc.has_function('posix_spawn_file_actions_addchdir', prefix: '#include <spawn.h>') and \
+        cc.has_function('posix_spawn_file_actions_addchdir_np', prefix: '#include <spawn.h>')
+    add_project_arguments('-Dposix_spawn_file_actions_addchdir=posix_spawn_file_actions_addchdir_np',
+                          language: 'c')
+endif
+
 # ISH_GADGET_PROFILE: enable gadget call ring-buffer + atexit dump.
 # Activate via:  meson setup ... -Dc_args=-DISH_GADGET_PROFILE
 #                or env CFLAGS=-DISH_GADGET_PROFILE meson setup ...

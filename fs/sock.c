@@ -3081,9 +3081,7 @@ const struct fd_ops socket_fdops = {
     .ioctl = sock_ioctl,
 };
 
-#if is_gcc(8) || is_clang(21)
-#pragma GCC diagnostic ignored "-Wcast-function-type"
-#endif
+SYSCALL_CASTS_OK
 #if defined(__clang__)
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 #endif

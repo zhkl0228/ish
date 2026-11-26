@@ -19,6 +19,7 @@
  * - Different argument ordering in some syscalls
  */
 
+SYSCALL_CASTS_OK
 syscall_t syscall_table[] = {
     // I/O syscalls
     [0]   = (syscall_t) syscall_stub, // io_setup
