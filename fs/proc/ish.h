@@ -18,6 +18,10 @@ extern char *(*get_documents_directory)(void);
 // answered: 0 if it was opened, else the error the write gives. NULL in the
 // command line tool, which has no one to ask.
 extern int (*open_url)(const char *url, size_t size);
+// iOS's thermal state (ProcessInfo's), 0 nominal to 3 critical, which
+// /proc/ish/thermal names: a long job can pause while the device is hot. NULL
+// in the command line tool, which has none.
+extern int (*get_thermal_state)(void);
 // The built-in JIT's state as the app has it (app/BuiltinJIT.m), which
 // /proc/ish/jit shows after the JIT's own: the device's pairing file, whether
 // it is enabled as iSH starts, what it is doing or what came of its last

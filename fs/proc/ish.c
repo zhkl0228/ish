@@ -29,6 +29,7 @@ bool (*set_user_default)(const char *name, char *buffer, size_t size);
 bool (*remove_user_default)(const char *name);
 char *(*get_documents_directory)(void);
 int (*open_url)(const char *url, size_t size);
+int (*get_thermal_state)(void);
 char *(*get_builtin_jit_report)(void);
 
 static int proc_ish_show_colors(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
@@ -366,6 +367,18 @@ static int proc_ish_show_threads(struct proc_entry *UNUSED(entry), struct proc_d
     return 0;
 }
 
+// The device's heat, as iOS's thermal states name it, the meters' heat: one
+// word; an empty line in the command line tool
+static int proc_ish_show_thermal(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    static const char *const names[] = {"nominal", "fair", "serious", "critical"};
+    if (get_thermal_state == NULL) {
+        proc_printf(buf, "\n");
+        return 0;
+    }
+    proc_printf(buf, "%s\n", names[get_thermal_state()]);
+    return 0;
+}
+
 // A URL to open (xdg-open writes it), one write for the whole of it. The
 // write returns once the app has asked and been answered.
 static ssize_t proc_ish_write_open_url(struct proc_entry *UNUSED(entry), struct proc_data *data, off_t UNUSED(off)) {
@@ -386,6 +399,7 @@ struct proc_children proc_ish_children = PROC_CHILDREN({
 #endif
     {"open_url", S_IFREG | 0222, .pwrite = proc_ish_write_open_url},
     {"poll_spin", .show = proc_ish_show_poll_spin, .pwrite = proc_ish_write_poll_spin},
+    {"thermal", .show = proc_ish_show_thermal},
     {"threads", .show = proc_ish_show_threads},
     {"translations", S_IFREG | 0644, .show = proc_ish_show_translations, .pwrite = proc_ish_write_translations},
     {"version", .show = proc_ish_show_version},

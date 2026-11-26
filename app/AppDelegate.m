@@ -59,6 +59,11 @@ extern void native_builtins_init(void);
 
 @end
 
+// /proc/ish/thermal: ProcessInfo's thermal state, which may be read on any thread
+static int thermal_state(void) {
+    return (int) NSProcessInfo.processInfo.thermalState;
+}
+
 static void ios_handle_exit(struct task *task, int code) {
     // we are interested in init and in children of init
     // this is called with pids_lock as an implementation side effect, please do not cite as an example of good API design
@@ -417,6 +422,7 @@ void NetworkReachabilityCallback(SCNetworkReachabilityRef target, SCNetworkReach
     proc_ish_version = strdup(ishVersion.UTF8String);
     // A program's URL (xdg-open) opens once the person allows it
     open_url = ask_to_open_url;
+    get_thermal_state = thermal_state;
     // this defaults key is set when taking app store screenshots
     extern const char *uname_hostname_override;
     // iOS hides the device's own hostname (hostname obfuscation), so the name
