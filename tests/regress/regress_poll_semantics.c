@@ -436,12 +436,20 @@ static long wake_latency(int rfd, int wfd, int nbytes) {
     char b[8]; read(rfd, b, sizeof b);
     return r == 1 ? us : -1;
 }
+// The latency cases' bound: 50ms, or 250ms where REGRESS_SLOW_HOST is set
+// (run.sh passes it on from its own environment): a host whose own wakes are
+// late, as GitHub's macOS VMs are (a 50ms sleep's writer woke the reader
+// 60-80ms late there, where the phone's is 5ms late and a Mac's 10ms). A wake
+// lost for good is still seconds late, past either.
+static long latency_bound_us(void) {
+    return getenv("REGRESS_SLOW_HOST") != NULL ? 250000 : 50000;
+}
 static int c_latency_pipe(void) {
     int p[2]; pipe(p);
     long worst = 0;
     for (int i = 0; i < 10; i++) { long us = wake_latency(p[0], p[1], 1); if (us < 0 || us > worst) worst = us < 0 ? 999999 : us; }
     printf("    NOTE pipe wake latency worst of 10: %ldus\n", worst);
-    return worst < 50000 ? 0 : 1;
+    return worst < latency_bound_us() ? 0 : 1;
 }
 
 // Pty in canonical mode: many partial-line keystrokes (each wakes the poll
@@ -488,7 +496,7 @@ static int c_latency_pty_raw(void) {
     long worst = 0;
     for (int i = 0; i < 10; i++) { long us = wake_latency(s, m, 1); if (us < 0 || us > worst) worst = us < 0 ? 999999 : us; }
     printf("    NOTE pty raw keystroke latency worst of 10: %ldus\n", worst);
-    return worst < 50000 ? 0 : 1;
+    return worst < latency_bound_us() ? 0 : 1;
 }
 static int c_latency_eventfd_timerfd(void) {
     int e = eventfd(0, 0);
@@ -511,7 +519,7 @@ static int c_latency_eventfd_timerfd(void) {
         if (poll(&q, 1, 1000) == 1) { uint64_t n; read(tf, &n, 8); ticks += (int)n; }
     }
     printf("    NOTE eventfd worst latency %ldus; timerfd 20ms ticks in 500ms: %d (want ~25)\n", worst, ticks);
-    return (worst < 50000 && ticks >= 20 && ticks <= 30) ? 0 : 1;
+    return (worst < latency_bound_us() && ticks >= 20 && ticks <= 30) ? 0 : 1;
 }
 
 // --- cost -------------------------------------------------------------------------

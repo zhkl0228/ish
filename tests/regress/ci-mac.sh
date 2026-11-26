@@ -47,5 +47,7 @@ echo "$ALPINE_SHA256  $work/alpine.tar.gz" | shasum -a 256 -c -
 mkdir "$work/rootfs"
 tar -xzf "$work/alpine.tar.gz" -C "$work/rootfs"
 
-PATH="$(brew --prefix coreutils)/libexec/gnubin:$PATH" CC_GUEST="$work/cc-guest" \
+# GitHub's macOS VMs wake late on their own (a 50ms sleep's writer woke its
+# reader 60-80ms late, the phone 5ms): the latency cases' wider bound
+PATH="$(brew --prefix coreutils)/libexec/gnubin:$PATH" CC_GUEST="$work/cc-guest" REGRESS_SLOW_HOST=1 \
     tests/regress/run.sh -i "$work/build/ish" -r "$work/rootfs"

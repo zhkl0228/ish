@@ -859,7 +859,10 @@ EOF
     echo "########## poll, select and epoll semantics (hangups, edges, timeouts, files, latency) ##########"
     if "$CC_GUEST" -static -O0 -Wall -pthread -o "$GUEST_ROOT/tmp/regress_poll_semantics" \
             tests/regress/regress_poll_semantics.c; then
-        out=$(timeout 300 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_poll_semantics 2>&1)
+        # REGRESS_SLOW_HOST (ci-mac.sh's): the latency cases' wider bound; the
+        # guest is given env's, iSH's init having only TERM, HOME and PATH
+        out=$(timeout 300 "$ISH" "$MOUNT_FLAG" "$ROOTFS" ${REGRESS_SLOW_HOST:+/usr/bin/env REGRESS_SLOW_HOST=1} \
+            /tmp/regress_poll_semantics 2>&1)
         echo "$out"
         echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
         rm -f "$GUEST_ROOT/tmp/regress_poll_semantics"
