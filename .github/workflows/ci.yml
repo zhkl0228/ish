@@ -84,7 +84,10 @@ jobs:
     # aot-images.yml raises the build with each set of images it commits), or
     # again, replacing it, when a commit of the push says [ipa] in its message
     # (or a run by hand says force); the newest five kept. To install it, sign
-    # it with one's own developer account. Built with Xcode 27.2 (the xcode-27
+    # it with one's own developer account. Each release also carries
+    # source.json (app/altsource.py), the AltStore source that lists it: added
+    # to Feather once as releases/latest/download/source.json, it shows each
+    # new build when refreshed. Built with Xcode 27.2 (the xcode-27
     # image, macOS 27, whose default is 27.1), as on a Mac: built with
     # macos-26's Xcode 26.6 (the iOS 26.5 SDK), the app stayed the size of a
     # folded phone when the phone unfolded, where a Mac's build with Xcode 27
@@ -143,9 +146,12 @@ jobs:
           sha=${GITHUB_SHA::8}
           printf '%s (%s)\n\nUnsigned: sign it with your own developer account to install it.\n' \
               "$(git log -1 --format=%s "$GITHUB_SHA")" "$sha" > "$RUNNER_TEMP/notes.md"
+          python3 app/altsource.py "$RUNNER_TEMP/ipa/iSH-ARM64-unsigned.ipa" "$GH_REPO" "$tag" \
+              "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$RUNNER_TEMP/ipa/source.json"
           gh release create "$tag" --target "$GITHUB_SHA" --latest \
               --title "iSH-ARM64 $VERSION ($BUILD)" --notes-file "$RUNNER_TEMP/notes.md" \
-              "$RUNNER_TEMP/ipa/iSH-ARM64-unsigned.ipa" "$RUNNER_TEMP/ipa/iSH-ARM64-dSYMs.zip"
+              "$RUNNER_TEMP/ipa/iSH-ARM64-unsigned.ipa" "$RUNNER_TEMP/ipa/iSH-ARM64-dSYMs.zip" \
+              "$RUNNER_TEMP/ipa/source.json"
           # the newest five ipa releases kept, the rest removed with their tags
           gh release list --limit 100 --json tagName,createdAt \
               --jq '[.[] | select(.tagName | startswith("ipa-"))] | sort_by(.createdAt) | reverse | .[5:] | .[].tagName' |
