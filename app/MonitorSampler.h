@@ -53,9 +53,9 @@ extern const NSUInteger kMonitorHistoryLength;
 
 // The last reading; nil before the first
 @property (readonly, nullable) MonitorReading *reading;
-// The CPUs' busy share of the last minute's counted readings, oldest first
-// (at most kMonitorHistoryLength): the column's line (MonitorColumnView).
-// Emptied when the sampler stops.
+// The CPUs' busy share of the last counted readings, oldest first (at most
+// kMonitorHistoryLength): the column's line (MonitorColumnView). Kept while
+// the sampler is stopped, the time it was stopped not in it.
 @property (readonly) NSArray<NSNumber *> *cpuHistory;
 
 // Reads now, then once a second, while any of its users has it started: each

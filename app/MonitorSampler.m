@@ -95,7 +95,10 @@ static struct ticks_between TicksBetween(struct cpu_usage last, struct cpu_usage
     _timer = nil;
     _hasTicks = NO;
     _lastCoreCount = 0;
-    [_cpuHistory removeAllObjects];
+    // The history is kept: started again (the app back in the foreground, the
+    // column shown again, the device folded or unfolded), the line goes on
+    // where it was, the time it was stopped left out. Emptied here, the line
+    // started over each time the app came back.
 }
 
 - (void)read {
