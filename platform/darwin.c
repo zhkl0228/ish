@@ -25,16 +25,20 @@ static host_t cached_host_self(void) {
     return host;
 }
 
+// The CPUs' ticks summed, as Linux's cpu line is its cpuN lines'. Not
+// HOST_CPU_LOAD_INFO's: the host's counts are 32 bits for all its CPUs, and a
+// 20-CPU Mac's idle count wrapped every 25 days (an iPhone's, of 6, every 82),
+// where the cpu line fell far below its CPUs' (2^33 on a Mac up long enough).
+// One CPU's count wraps after 497 days. All 0 when the host does not tell.
 struct cpu_usage get_cpu_usage(void) {
-    host_cpu_load_info_data_t load;
-    mach_msg_type_number_t fuck = HOST_CPU_LOAD_INFO_COUNT;
-    struct cpu_usage usage = {};
-    if (host_statistics(cached_host_self(), HOST_CPU_LOAD_INFO, (host_info_t) &load, &fuck) != KERN_SUCCESS)
-        return usage;
-    usage.user_ticks = load.cpu_ticks[CPU_STATE_USER];
-    usage.system_ticks = load.cpu_ticks[CPU_STATE_SYSTEM];
-    usage.idle_ticks = load.cpu_ticks[CPU_STATE_IDLE];
-    usage.nice_ticks = load.cpu_ticks[CPU_STATE_NICE];
+    struct cpu_usage cpus[256], usage = {};
+    unsigned n = get_per_cpu_usage(cpus, sizeof(cpus) / sizeof(cpus[0]));
+    for (unsigned i = 0; i < n; i++) {
+        usage.user_ticks += cpus[i].user_ticks;
+        usage.system_ticks += cpus[i].system_ticks;
+        usage.idle_ticks += cpus[i].idle_ticks;
+        usage.nice_ticks += cpus[i].nice_ticks;
+    }
     return usage;
 }
 

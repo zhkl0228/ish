@@ -45,8 +45,9 @@ const NSUInteger kMonitorHistoryLength = 60;
 @implementation MonitorReading
 @end
 
-// A CPU's ticks (or all of theirs) between two readings. The counters are 32
-// bits (natural_t), and a difference taken in 32 bits is right across a wrap.
+// A CPU's ticks (or all of theirs) between two readings. A CPU's counters are
+// 32 bits (natural_t), all of theirs their sum: a difference taken in 32 bits
+// is right across a wrap.
 struct ticks_between {
     uint32_t user, system, idle;
 };
@@ -126,7 +127,7 @@ static struct ticks_between TicksBetween(struct cpu_usage last, struct cpu_usage
 - (void)read {
     MonitorReading *reading = [MonitorReading new];
 
-    // No ticks at all in a second are get_cpu_usage's zeros, host_statistics
+    // No ticks at all in a second are get_cpu_usage's zeros, host_processor_info
     // having failed (which /proc/stat shows too): not counted
     struct cpu_usage ticks = get_cpu_usage();
     struct ticks_between all = TicksBetween(_lastTicks, ticks);
@@ -136,7 +137,7 @@ static struct ticks_between TicksBetween(struct cpu_usage last, struct cpu_usage
         if (!logged) {
             logged = YES;
             NSLog(@"MonitorSampler: no CPU ticks in a second (get_cpu_usage: user %llu system %llu idle %llu nice %llu, "
-                  @"host_statistics failed?): the CPU is not counted",
+                  @"host_processor_info failed?): the CPU is not counted",
                   ticks.user_ticks, ticks.system_ticks, ticks.idle_ticks, ticks.nice_ticks);
         }
     }
