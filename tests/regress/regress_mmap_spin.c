@@ -62,7 +62,7 @@ static void read_line(const char *path, char *buf, size_t size) {
 
 // Each thread of pid: its state (stat's third field) and its syscall line
 static void show_threads(pid_t pid) {
-    char path[64], stat[512], syscall[256];
+    char path[300], stat[512], syscall[256];
     snprintf(path, sizeof(path), "/proc/%d/task", pid);
     DIR *dir = opendir(path);
     if (dir == NULL)
