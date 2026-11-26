@@ -56,6 +56,8 @@ extern void native_builtins_init(void);
 
 @property BOOL exiting;
 @property nw_path_monitor_t pathMonitor;
+// What configureDns last wrote into /etc/resolv.conf
+@property NSString *resolvConf;
 
 @end
 
@@ -309,12 +311,20 @@ static void mount_documents(void) {
                     NULL, 0, NI_NUMERICHOST);
         [resolvConf appendFormat:@"nameserver %s\n", address];
     }
-    
+    // what res_ninit allocated, the search domains read above among it
+    res_ndestroy(&res);
+
+    // The same servers again: the path monitor says so of any change to the
+    // path, on cellular every few seconds, and the file truncated for each
+    // rewrite reads empty meanwhile
+    if ([resolvConf isEqualToString:self.resolvConf])
+        return;
     current = pid_get_task(1);
     struct fd *fd = generic_open("/etc/resolv.conf", O_WRONLY_ | O_CREAT_ | O_TRUNC_, 0666);
     if (!IS_ERR(fd)) {
         fd->ops->write(fd, resolvConf.UTF8String, [resolvConf lengthOfBytesUsingEncoding:NSUTF8StringEncoding]);
         fd_close(fd);
+        self.resolvConf = [resolvConf copy];
     }
 }
 
