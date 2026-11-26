@@ -6,6 +6,7 @@
 #import "MonitorDetailViewController.h"
 #import "MonitorStripView.h"
 #import "UserPreferences.h"
+#include "fs/proc/ish.h"
 
 static const CGFloat kWidth = 264;
 static const CGFloat kInset = 16;
@@ -16,6 +17,11 @@ static NSString *Percent(double fraction) {
 
 static NSString *Bytes(uint64_t bytes) {
     return [NSByteCountFormatter stringFromByteCount:(long long) bytes countStyle:NSByteCountFormatterCountStyleMemory];
+}
+
+// A process as the details tell it from another that took its pid
+static NSString *ProcessKey(MonitorProcess *process) {
+    return [NSString stringWithFormat:@"%d:%llu", process.pid, (unsigned long long) process.startTicks];
 }
 
 // What the heat does, as ProcessInfo's thermal states are told of
@@ -38,6 +44,14 @@ static NSString *ThermalMeaning(NSProcessInfoThermalState state) {
 @property UILabel *cpuSplit;
 @property UIStackView *cores;
 @property UILabel *load;
+// The three processes taking the most of the CPUs, each a row of its name,
+// its share and memory, and a key ending it, under the load, with the
+// keyboard down (the sampler counts them only then: wantsProcesses);
+// shownProcesses what they show, askedToEnd those sent SIGTERM, whose key
+// forces it (SIGKILL)
+@property NSArray<UIStackView *> *processRows;
+@property NSArray<MonitorProcess *> *shownProcesses;
+@property NSMutableSet<NSString *> *askedToEnd;
 @property UILabel *memoryValue;
 @property UILabel *memoryAmount;
 @property MeterBar *memoryBar;
@@ -121,6 +135,33 @@ static NSString *ThermalMeaning(NSProcessInfoThermalState state) {
     self.cores = cores;
     self.load = [self addDetail];
     [stack setCustomSpacing:16 afterView:self.load];
+    NSMutableArray<UIStackView *> *processRows = [NSMutableArray new];
+    for (NSInteger i = 0; i < 3; i++) {
+        UILabel *name = [UILabel new];
+        name.font = [UIFont systemFontOfSize:13 weight:UIFontWeightRegular];
+        name.lineBreakMode = NSLineBreakByTruncatingTail;
+        [name setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
+        UILabel *use = [UILabel new];
+        use.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightRegular];
+        use.textColor = UIColor.secondaryLabelColor;
+        use.textAlignment = NSTextAlignmentRight;
+        [use setContentHuggingPriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
+        UIButton *end = [UIButton buttonWithType:UIButtonTypeSystem];
+        end.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
+        [end setTitleColor:UIColor.systemRedColor forState:UIControlStateNormal];
+        [end setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+        [end setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+        end.tag = i;
+        [end addTarget:self action:@selector(endProcess:) forControlEvents:UIControlEventPrimaryActionTriggered];
+        UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:@[name, use, end]];
+        row.spacing = 8;
+        row.alignment = UIStackViewAlignmentCenter;
+        row.hidden = YES;
+        [stack addArrangedSubview:row];
+        [processRows addObject:row];
+    }
+    self.processRows = processRows;
+    self.askedToEnd = [NSMutableSet new];
 
     // The memory: of the app's limit, a mark on its bar where the brake is
     self.memoryValue = [self addHeading:NSLocalizedString(@"Memory", @"Meter details: the memory's heading")];
@@ -258,6 +299,7 @@ static NSString *ThermalMeaning(NSProcessInfoThermalState state) {
     self.load.text = [NSString stringWithFormat:NSLocalizedString(@"Device load %1$.2f · %2$.2f · %3$.2f",
                                                                   @"Meter details: the load averages over 1, 5 and 15 minutes"),
                       reading.load1, reading.load5, reading.load15];
+    [self showProcesses];
 
     self.memoryValue.text = Percent(reading.memoryFraction);
     NSString *amount = reading.appLimit
@@ -304,8 +346,78 @@ static NSString *ThermalMeaning(NSProcessInfoThermalState state) {
     if (_keyboardUp == keyboardUp)
         return;
     _keyboardUp = keyboardUp;
+    if (self.view.window != nil)
+        self.sampler.wantsProcesses = !keyboardUp;
     if (self.isViewLoaded)
         [self showReading:self.sampler.reading];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    self.sampler.wantsProcesses = !self.keyboardUp;
+}
+
+- (void)viewDidDisappear:(BOOL)animated {
+    [super viewDidDisappear:animated];
+    self.sampler.wantsProcesses = NO;
+}
+
+// The processes' rows, those the sampler found (none with the keyboard up,
+// or till it counted twice), the CPUs' last line 16 over the memory's heading
+- (void)showProcesses {
+    NSArray<MonitorProcess *> *top = self.keyboardUp ? nil : self.sampler.topProcesses;
+    self.shownProcesses = top != nil ? top : @[];
+    UIView *last = self.load;
+    for (NSUInteger i = 0; i < self.processRows.count; i++) {
+        UIStackView *row = self.processRows[i];
+        BOOL shown = i < self.shownProcesses.count;
+        if (row.hidden == shown)
+            row.hidden = !shown;
+        [self.stack setCustomSpacing:UIStackViewSpacingUseDefault afterView:row];
+        if (!shown)
+            continue;
+        last = row;
+        MonitorProcess *process = self.shownProcesses[i];
+        ((UILabel *) row.arrangedSubviews[0]).text = process.name;
+        ((UILabel *) row.arrangedSubviews[1]).text = [NSString stringWithFormat:@"%@ · %@", Percent(process.cpuShare),
+                                                      Bytes(process.resident)];
+        BOOL asked = [self.askedToEnd containsObject:ProcessKey(process)];
+        [(UIButton *) row.arrangedSubviews[2] setTitle:asked ? NSLocalizedString(@"Force End", @"Meter details: a process's key, sent SIGTERM already: SIGKILL")
+                                                             : NSLocalizedString(@"End", @"Meter details: a process's key: SIGTERM")
+                                              forState:UIControlStateNormal];
+    }
+    [self.stack setCustomSpacing:last == self.load ? 16 : 6 afterView:self.load];
+    if (last != self.load)
+        [self.stack setCustomSpacing:16 afterView:last];
+}
+
+// Asked first, as kill: SIGTERM, which a program may take to save its work
+// and leave. One that is still there is forced the next time (SIGKILL).
+- (void)endProcess:(UIButton *)key {
+    MonitorProcess *process = self.shownProcesses[(NSUInteger) key.tag];
+    NSString *name = ProcessKey(process);
+    BOOL force = [self.askedToEnd containsObject:name];
+    NSString *title = [NSString stringWithFormat:force
+        ? NSLocalizedString(@"Force %@ to end?", @"Meter details: asked before a process is sent SIGKILL")
+        : NSLocalizedString(@"End %@?", @"Meter details: asked before a process is sent SIGTERM"), process.name];
+    NSString *message = force
+        ? NSLocalizedString(@"It did not end when asked. Forced, it ends at once: what it had not saved is lost.",
+                            @"Meter details: what SIGKILL does, asked before it is sent")
+        : NSLocalizedString(@"It is asked to end, as kill does: it may save its work first.",
+                            @"Meter details: what SIGTERM does, asked before it is sent");
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:message
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Cancel", @"Meter details: not ending a process")
+                                              style:UIAlertActionStyleCancel handler:nil]];
+    __weak typeof(self) weakSelf = self;
+    [alert addAction:[UIAlertAction actionWithTitle:force ? NSLocalizedString(@"Force End", @"Meter details: a process's key, sent SIGTERM already: SIGKILL")
+                                                          : NSLocalizedString(@"End", @"Meter details: a process's key: SIGTERM")
+                                              style:UIAlertActionStyleDestructive handler:^(UIAlertAction *_) {
+        if (ish_process_end(process.pid, process.startTicks, force) == 0 && !force)
+            [weakSelf.askedToEnd addObject:name];
+        [weakSelf showReading:weakSelf.sampler.reading];
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 // As high as what it shows: the brake's line, or the heat's, may take two

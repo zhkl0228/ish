@@ -78,6 +78,17 @@
         }
       }
     },
+    "Cancel" : {
+      "comment" : "Meter details: not ending a process",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消"
+          }
+        }
+      }
+    },
     "Clear the line" : {
       "comment" : "The column's / key held: what it sends (Ctrl-U)",
       "localizations" : {
@@ -133,6 +144,28 @@
         }
       }
     },
+    "End" : {
+      "comment" : "Meter details: a process's key: SIGTERM",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "结束"
+          }
+        }
+      }
+    },
+    "End %@?" : {
+      "comment" : "Meter details: asked before a process is sent SIGTERM",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "结束 %@？"
+          }
+        }
+      }
+    },
     "Escape" : {
       "comment" : "The column's escape key, read aloud",
       "localizations" : {
@@ -151,6 +184,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "偏热"
+          }
+        }
+      }
+    },
+    "Force %@ to end?" : {
+      "comment" : "Meter details: asked before a process is sent SIGKILL",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "强制结束 %@？"
+          }
+        }
+      }
+    },
+    "Force End" : {
+      "comment" : "Meter details: a process's key, sent SIGTERM already: SIGKILL",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "强制结束"
           }
         }
       }
@@ -195,6 +250,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "中断"
+          }
+        }
+      }
+    },
+    "It did not end when asked. Forced, it ends at once: what it had not saved is lost." : {
+      "comment" : "Meter details: what SIGKILL does, asked before it is sent",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "它没有响应退出请求。强制结束会立即终止它，未保存的内容会丢失。"
+          }
+        }
+      }
+    },
+    "It is asked to end, as kill does: it may save its work first." : {
+      "comment" : "Meter details: what SIGTERM does, asked before it is sent",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会像 kill 命令那样请它退出，它可以先保存再退出。"
           }
         }
       }

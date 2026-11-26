@@ -6,6 +6,8 @@
 #import "MonitorSampler.h"
 #include "platform/platform.h"
 #include "kernel/mm.h"
+#include "fs/proc/ish.h"
+#import <QuartzCore/QuartzCore.h>
 
 // asbestos/guest-arm64/jit.h's (a header for builds with ISH_JIT, which libish
 // is for the app: GuestARM64.xcconfig's ISH_ENABLE_JIT)
@@ -45,6 +47,20 @@ const NSUInteger kMonitorHistoryLength = 60;
 @implementation MonitorReading
 @end
 
+@interface MonitorProcess ()
+@property int pid;
+@property uint64_t startTicks;
+@property NSString *name;
+@property double cpuShare;
+@property uint64_t resident;
+@end
+
+@implementation MonitorProcess
+@end
+
+// The most processes counted at once
+#define MAX_PROCESSES 1024
+
 // A CPU's ticks (or all of theirs) between two readings. A CPU's counters are
 // 32 bits (natural_t), all of theirs their sum: a difference taken in 32 bits
 // is right across a wrap.
@@ -79,12 +95,74 @@ static struct ticks_between TicksBetween(struct cpu_usage last, struct cpu_usage
     unsigned _windowNext;
     BOOL _nativeKnown;
     double _nativeShare;
+    // The processes' CPU time at the last count (pid:start → microseconds)
+    // and when it was taken, on _processQueue only; nil till counted
+    dispatch_queue_t _processQueue;
+    NSDictionary<NSString *, NSNumber *> *_lastProcessTimes;
+    CFTimeInterval _lastProcessCount;
 }
 
 - (instancetype)init {
-    if (self = [super init])
+    if (self = [super init]) {
         _cpuHistory = [NSMutableArray new];
+        _processQueue = dispatch_queue_create("app.ish.monitor.processes", DISPATCH_QUEUE_SERIAL);
+    }
     return self;
+}
+
+- (void)setWantsProcesses:(BOOL)wantsProcesses {
+    if (wantsProcesses == _wantsProcesses)
+        return;
+    _wantsProcesses = wantsProcesses;
+    if (wantsProcesses)
+        return;
+    // counted again from the next time it is wanted
+    _topProcesses = nil;
+    dispatch_async(_processQueue, ^{
+        self->_lastProcessTimes = nil;
+    });
+}
+
+// Every process's CPU time now: the three that took the most since the last
+// count, their memory found (a walk of each one's page table, so of three
+// only), told on the main thread for the next reading
+- (void)countProcesses {
+    struct ish_process *processes = malloc(MAX_PROCESSES * sizeof(*processes));
+    size_t count = MIN(ish_processes(processes, MAX_PROCESSES), (size_t) MAX_PROCESSES);
+    CFTimeInterval now = CACurrentMediaTime();
+    NSMutableDictionary<NSString *, NSNumber *> *times = [NSMutableDictionary dictionaryWithCapacity:count];
+    NSMutableArray<MonitorProcess *> *counted = [NSMutableArray array];
+    double available = (now - _lastProcessCount) * 1e6 * NSProcessInfo.processInfo.processorCount;
+    for (size_t i = 0; i < count; i++) {
+        struct ish_process *p = &processes[i];
+        NSString *key = [NSString stringWithFormat:@"%d:%llu", p->pid, (unsigned long long) p->start_ticks];
+        times[key] = @(p->cpu_us);
+        NSNumber *before = _lastProcessTimes[key];
+        if (before == nil)
+            continue;
+        MonitorProcess *process = [MonitorProcess new];
+        process.pid = p->pid;
+        process.startTicks = p->start_ticks;
+        process.name = [NSString stringWithUTF8String:p->comm];
+        process.cpuShare = MIN(1, (double) (p->cpu_us - before.unsignedLongLongValue) / available);
+        [counted addObject:process];
+    }
+    free(processes);
+    BOOL first = _lastProcessTimes == nil;
+    _lastProcessTimes = times;
+    _lastProcessCount = now;
+    if (first)
+        return;
+    [counted sortUsingComparator:^NSComparisonResult(MonitorProcess *a, MonitorProcess *b) {
+        return a.cpuShare > b.cpuShare ? NSOrderedAscending : a.cpuShare < b.cpuShare ? NSOrderedDescending : NSOrderedSame;
+    }];
+    NSArray<MonitorProcess *> *top = [counted subarrayWithRange:NSMakeRange(0, MIN(counted.count, (NSUInteger) 3))];
+    for (MonitorProcess *process in top)
+        process.resident = ish_process_resident(process.pid, process.startTicks);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (self->_wantsProcesses)
+            self->_topProcesses = top;
+    });
 }
 
 - (void)dealloc {
@@ -126,6 +204,10 @@ static struct ticks_between TicksBetween(struct cpu_usage last, struct cpu_usage
 
 - (void)read {
     MonitorReading *reading = [MonitorReading new];
+    if (_wantsProcesses)
+        dispatch_async(_processQueue, ^{
+            [self countProcesses];
+        });
 
     // No ticks at all in a second are get_cpu_usage's zeros, host_processor_info
     // having failed (which /proc/stat shows too): not counted

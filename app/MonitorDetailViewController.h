@@ -4,7 +4,9 @@
 //
 //  The meters' details, in a popover pointing at them (a popover on a phone
 //  too, the terminal in sight): the CPUs, all and each, user and system, and
-//  the device's load; the app's memory of its limit, and whether the kernel
+//  the device's load, and with the keyboard down the three processes taking
+//  the most of them, each with a key ending it; the app's memory of its
+//  limit, and whether the kernel
 //  refuses the guest's new memory; the JIT's code region, while it
 //  translates; the heat and what it does. As the
 //  sampler reads. Nothing in it turns the meters off: Settings and the View

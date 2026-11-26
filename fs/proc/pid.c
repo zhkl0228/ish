@@ -8,6 +8,7 @@
 #include "fs/fd.h"
 #include "fs/tty.h"
 #include "kernel/fs.h"
+#include "fs/proc/ish.h"
 #include "kernel/vdso.h"
 #include "util/sync.h"
 
@@ -59,6 +60,63 @@ static void task_mem_pages(struct task *task, unsigned long *total, unsigned lon
         mem_next_page(mem, &page);
     }
     read_wrunlock(&mem->lock);
+}
+
+size_t ish_processes(struct ish_process *out, size_t max) {
+    size_t count = 0;
+    lock(&pids_lock);
+    for (pid_t_ pid = 2; pid <= MAX_PID; pid++) {
+        struct task *task = pid_get_task(pid);
+        if (task == NULL || task->exiting || task->tgid != pid)
+            continue;
+        if (count < max) {
+            struct rusage_ rusage = rusage_of_group(task->group);
+            struct ish_process *process = &out[count];
+            process->pid = pid;
+            process->start_ticks = task->start_ticks;
+            process->cpu_us = (uint64_t) (rusage.utime.sec + rusage.stime.sec) * 1000000 +
+                (uint64_t) (rusage.utime.usec + rusage.stime.usec);
+            memcpy(process->comm, task->comm, sizeof(task->comm));
+            process->comm[sizeof(task->comm)] = '\0';
+        }
+        count++;
+    }
+    unlock(&pids_lock);
+    return count;
+}
+
+// The live process pid, if it is the one started at start_ticks, with
+// pids_lock held; NULL, and the lock let go, if it is not
+static struct task *process_started_at(int pid, uint64_t start_ticks) {
+    lock(&pids_lock);
+    struct task *task = pid_get_task(pid);
+    if (task == NULL || task->exiting || task->tgid != pid || task->start_ticks != start_ticks) {
+        unlock(&pids_lock);
+        return NULL;
+    }
+    return task;
+}
+
+uint64_t ish_process_resident(int pid, uint64_t start_ticks) {
+    struct task *task = process_started_at(pid, start_ticks);
+    if (task == NULL)
+        return 0;
+    // as /proc/<pid>/status does it, pids_lock then the task's general_lock
+    lock(&task->general_lock);
+    unsigned long pages, resident, shared;
+    task_mem_pages(task, &pages, &resident, &shared);
+    unlock(&task->general_lock);
+    unlock(&pids_lock);
+    return (uint64_t) resident * PAGE_SIZE;
+}
+
+int ish_process_end(int pid, uint64_t start_ticks, bool force) {
+    struct task *task = process_started_at(pid, start_ticks);
+    if (task == NULL)
+        return _ESRCH;
+    send_process_signal(task->group, force ? SIGKILL_ : SIGTERM_, SIGINFO_NIL);
+    unlock(&pids_lock);
+    return 0;
 }
 
 // Its state, as Linux's letters: inside a system call, where a task waits,

@@ -61,6 +61,19 @@ NS_ASSUME_NONNULL_BEGIN
 
 @end
 
+// A process taking the CPUs, as the details list it (MonitorDetailViewController)
+@interface MonitorProcess : NSObject
+@property (readonly) int pid;
+// When it started, in ticks since boot: a pid used again is another process
+@property (readonly) uint64_t startTicks;
+@property (readonly) NSString *name;
+// Its share of all the CPUs since the reading before, as the CPU's meter has
+// the device's: the processes' add up to no more than it
+@property (readonly) double cpuShare;
+// Its memory in use (resident), bytes
+@property (readonly) uint64_t resident;
+@end
+
 extern NSNotificationName const MonitorSamplerDidReadNotification;
 // Readings in cpuHistory: a minute's
 extern const NSUInteger kMonitorHistoryLength;
@@ -75,6 +88,13 @@ extern const NSUInteger kMonitorHistoryLength;
 // kMonitorHistoryLength): the column's line (MonitorColumnView). Kept while
 // the sampler is stopped, the time it was stopped not in it.
 @property (readonly) NSArray<NSNumber *> *cpuHistory;
+
+// While set (the details shown, the keyboard down), each reading also finds
+// the three processes taking the most of the CPUs since the one before,
+// off the main thread (fs/proc/ish.h's ish_processes): topProcesses, which
+// the reading after has, nil till two readings were taken
+@property (nonatomic) BOOL wantsProcesses;
+@property (readonly, nullable) NSArray<MonitorProcess *> *topProcesses;
 
 // Reads now, then once a second, while any of its users has it started: each
 // start is paired with a stop, the last stop stops it. Started again, the CPUs
