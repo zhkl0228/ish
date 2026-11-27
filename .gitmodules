@@ -1,3 +1,10 @@
 [submodule "deps/libarchive"]
 	path = deps/libarchive
 	url = https://github.com/libarchive/libarchive
+[submodule "deps/StikJIT"]
+	path = deps/StikJIT
+	url = https://github.com/zhkl0228/StikJIT
+[submodule "deps/idevice"]
+	path = deps/idevice
+	url = https://github.com/zhkl0228/idevice
+	branch = stikjit

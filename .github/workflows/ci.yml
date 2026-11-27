@@ -104,11 +104,8 @@ jobs:
       - name: Install dependencies
         run: |
           brew install llvm lld ninja libarchive meson xcodegen
-      - name: StikJIT
-        # The JIT helper extension's framework (app/StikJIT/build.sh)
-        run: app/StikJIT/build.sh
-      - name: idevice
-        # The on-device pairing's library (app/idevice/build.sh), in Rust
+      - name: Rust
+        # For idevice, which both of the next build (in Rust)
         run: |
           if ! command -v rustup > /dev/null; then
               brew install rustup
@@ -117,7 +114,13 @@ jobs:
           fi
           rustup default stable
           rustup target add aarch64-apple-ios
-          app/idevice/build.sh
+      - name: StikJIT
+        # The JIT helper extension's framework, with its idevice
+        # (app/StikJIT/build.sh)
+        run: app/StikJIT/build.sh
+      - name: idevice
+        # The on-device pairing's library (app/idevice/build.sh)
+        run: app/idevice/build.sh
       - name: Build
         run: |
           # ARCHS, not -arch: xcodebuild refuses -arch with a destination
