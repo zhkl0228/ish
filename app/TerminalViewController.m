@@ -1379,14 +1379,15 @@ static const CGFloat kColumnKeysSpacing = 4;
 static const CGFloat kColumnKeysBottom = 24;
 
 // One over another right under the column's meters, on their middle, in a
-// capsule of glass: esc; two keys for what runs (columnProfileKeys,
-// updateColumnProfile), tab and / for a shell, an AI agent and most programs,
-// : and / for vi, space and q for a pager, with return between tab and / (or
-// under esc, what runs taking no tab): toward the column's middle, where the
-// thumb of the hand holding the phone reaches it more easily than at the
-// capsule's end, where it was; the arrows' pad (arrowPadKey) and Ctrl-C, sent
-// only held (a tap would end what runs), or for an AI agent the up arrow,
-// Ctrl-C held, and the down arrow. Held, esc is backspace, tab shift-tab, / Ctrl-U (clearing the
+// capsule of glass: esc; tab, for a shell, an AI agent and most programs;
+// return, toward the column's middle, where the thumb of the hand holding
+// the phone reaches it more easily than at the capsule's end, where it was;
+// : for vi, space and q for a pager; the arrows' pad (arrowPadKey) and Ctrl-C,
+// sent only held (a tap would end what runs), or for an AI agent the up
+// arrow, Ctrl-C held, and the down arrow, next under return as the arrows
+// pick what it then takes; / last, but for a pager, which takes none
+// (columnProfileKeys, updateColumnProfile: the profile's two of tab, :, space,
+// q and /). Held, esc is backspace, tab shift-tab, / Ctrl-U (clearing the
 // line) and space b (a pager's page up), each said in a callout before it is
 // let go (columnKeyHeld:) and marked in its key's corner (badgeKey:with:). Esc and /
 // are named as on the bar; the bar's / keeps its held symbols, whose popup
@@ -1434,8 +1435,8 @@ static const CGFloat kColumnKeysBottom = 24;
     BarButton *enter = [self columnKey:@"return" name:NSLocalizedString(@"Return", @"The column's return key, read aloud")];
     [enter addTarget:self action:@selector(pressReturn:) forControlEvents:UIControlEventTouchUpInside];
 
-    ColumnKeysView *keys = [[ColumnKeysView alloc] initWithArrangedSubviews:@[escape, tab, enter, colon, space, slash, quit,
-                                                                              pad, interrupt, previous, next]];
+    ColumnKeysView *keys = [[ColumnKeysView alloc] initWithArrangedSubviews:@[escape, tab, enter, colon, space, quit, pad,
+                                                                              interrupt, previous, next, slash]];
     keys.axis = UILayoutConstraintAxisVertical;
     keys.spacing = kColumnKeysSpacing;
     keys.translatesAutoresizingMaskIntoConstraints = NO;
