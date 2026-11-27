@@ -994,7 +994,11 @@ static uint32_t remap(struct em *e, uint32_t x, int kd, int kn, int km, int ka, 
 // the host address in T_A. Branches to the unit's stub on a miss or crossing.
 static void tlb_lookup(struct em *e, unsigned bytes, bool write, unsigned spos) {
     e->hflags = false;   // the checks below use cmp
-    put(e, 0x9240BC00u | (T_A << 5) | T_A);                    // and x9, x9, #0xffffffffffff
+    // No mask to 48 bits first (an and on the way to every access, 4-6% of
+    // sqlite's, python's and node's time): an address with any of bits 48..63
+    // set (a tag) fails the page check below and goes to the stub, whose
+    // gadget takes it, and one that passes has none, so the add gives the
+    // host address the masked one did. The index uses bits 12 and up.
     put(e, 0xD34C6000u | (T_A << 5) | T_I);                    // ubfx x10, x9, #12, #13
     put(e, 0xCA400000u | (T_A << 16) | (25u << 10) | (T_I << 5) | T_I);  // eor x10, x10, x9, lsr #25
     put(e, 0x12003000u | (T_I << 5) | T_I);                    // and w10, w10, #0x1fff
@@ -3084,7 +3088,7 @@ void ish_aot_register(const struct aot_module *m) {
 
 // Bump whenever the code emitted for some guest instruction, stub or exit
 // changes: images made before would still pass every other check.
-#define JIT_CODE_VERSION 13
+#define JIT_CODE_VERSION 14
 
 // Everything the emitted code bakes in besides the gadgets it names: the
 // conventions, the struct layouts it loads from and the TLB / block cache

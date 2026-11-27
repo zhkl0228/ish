@@ -16,7 +16,9 @@
 // the gadgets alone, python's 5.4 times. In java's, javac's and maven's
 // (HotSpot's generated code): ldr (literal), 89% of their cuts, isb and dsb,
 // msr fpcr, AdvSIMD's floating point and by-element multiplies, ssubw,
-// pmull (zip's CRC-32); gh's mrs cntfrq_el0.
+// pmull (zip's CRC-32); gh's mrs cntfrq_el0. And accesses through a tagged
+// pointer (bits 56..63, as Linux's TBI lets them be): the JIT's TLB check
+// leaves those to the gadgets.
 //
 // Checked: each instruction (or pair: ldxr and stxr), put in a copy of a
 // template made at run time, run once in a fresh copy (the gadgets: a block
@@ -300,6 +302,9 @@ extern const uint32_t insn_template[], insn_template_slot[], insn_template_end[]
     X("SIMD", 1, 0, 0, "pmull2 v3.8h, v4.16b, v5.16b")                                            \
     X("SIMD", 1, 0, 0, "pmull v6.1q, v7.1d, v0.1d")                                               \
     X("SIMD", 1, 0, 0, "pmull2 v1.1q, v2.2d, v3.2d")                                              \
+    X("tagged pointers", 2, 2, 9, "orr x9, x2, x3, lsl #56\n ldr x10, [x9]")                       \
+    X("tagged pointers", 2, 2, 9, "orr x9, x2, x3, lsl #56\n str x11, [x9, #8]")                   \
+    X("tagged pointers", 2, 2, 9, "orr x9, x2, x3, lsl #56\n ldp w10, w11, [x9, #4]")              \
     X("multiply-add, no register pinned", 1, 0, 0, "madd x1, x2, x3, x4")
 
 #define ASM_TEXT(group, n, p, p2, text) text "\n"
@@ -543,6 +548,11 @@ int main(void) {
             got = o->ox[9 - 1];
             snprintf(detail, sizeof(detail), "%#llx", (unsigned long long) got);
             check("dczid_el0: 64-byte blocks (4)", got == 4, detail);
+        } else if (strcmp(t->text, "orr x9, x2, x3, lsl #56\n ldr x10, [x9]") == 0) {
+            memcpy(&want, o->mem + 16, 8);
+            got = o->ox[10 - 1];
+            snprintf(detail, sizeof(detail), "%#llx, want %#llx", (unsigned long long) got, (unsigned long long) want);
+            check("ldr through a tagged pointer (tag 1): the word at its address", got == want, detail);
         } else if (strcmp(t->text, "ldr w9, . + 8") == 0) {
             got = o->ox[9 - 1];
             snprintf(detail, sizeof(detail), "%#llx, want 0x91048000", (unsigned long long) got);
