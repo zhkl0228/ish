@@ -28,10 +28,9 @@ void tlb_attach(struct tlb *tlb, struct mmu *mmu) {
     list_add(&mmu->tlbs, &tlb->tlbs_link);
     unlock(&mmu->tlbs_lock);
     tlb->attached = mmu;
-    // Cleared before the caller compares mmu->changes (tlb_refresh()): a
-    // change that compare misses comes after the list_add, so it marks this
-    // TLB stale again.
-    __atomic_store_n(&tlb->stale, 0, __ATOMIC_SEQ_CST);
+    // On the list before the caller compares mmu->changes (tlb_refresh()): a
+    // change that compare misses comes after the list_add, so it takes its
+    // pages out of this TLB.
     __atomic_thread_fence(__ATOMIC_SEQ_CST);
 }
 
@@ -60,13 +59,38 @@ void mmu_poke_tlbs(struct mmu *mmu) {
     unlock(&mmu->tlbs_lock);
 }
 
-// After mmu->changes moved: the threads running in this address space may
-// hold entries for the old mappings.
-void mmu_tlbs_stale(struct mmu *mmu) {
+// An entry of a page in [start, start + pages), read or write, emptied
+static void tlb_entry_drop(struct tlb_entry *entry, page_t start, pages_t pages) {
+    page_t r = __atomic_load_n(&entry->page, __ATOMIC_RELAXED);
+    page_t w = __atomic_load_n(&entry->page_if_writable, __ATOMIC_RELAXED);
+    // TLB_PAGE_EMPTY's page is above every 48-bit address's: never in range
+    if ((r >> PAGE_BITS) - start >= pages && (w >> PAGE_BITS) - start >= pages)
+        return;
+    __atomic_store_n(&entry->page, TLB_PAGE_EMPTY, __ATOMIC_RELAXED);
+    __atomic_store_n(&entry->page_if_writable, TLB_PAGE_EMPTY, __ATOMIC_RELAXED);
+}
+
+// After mmu->changes moved for pages [start, start + pages): the TLBs of the
+// threads running guest code here lose their entries of those pages before
+// the caller goes on, so that no access of theirs after one that saw what the
+// caller stores next goes through the old mapping (a page made code: its
+// writes come back through the miss path, W^X). Their inline lookups check
+// nothing else. A TLB not attached is flushed as it comes back (tlb_refresh).
+// A thread filling an entry meanwhile reads mmu->changes again after
+// (tlb_handle_miss): of the two, one sees the other's.
+void mmu_tlbs_invalidate(struct mmu *mmu, page_t start, pages_t pages) {
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);   // the caller's bump before the entries are read
     lock(&mmu->tlbs_lock);
     struct tlb *tlb;
-    list_for_each_entry(&mmu->tlbs, tlb, tlbs_link)
-        __atomic_store_n(&tlb->stale, TLB_STALE, __ATOMIC_SEQ_CST);
+    list_for_each_entry(&mmu->tlbs, tlb, tlbs_link) {
+        if (pages >= TLB_SIZE) {
+            for (unsigned i = 0; i < TLB_SIZE; i++)
+                tlb_entry_drop(&tlb->entries[i], start, pages);
+            continue;
+        }
+        for (pages_t i = 0; i < pages; i++)
+            tlb_entry_drop(&tlb->entries[TLB_INDEX((addr_t) (start + i) << PAGE_BITS)], start + i, 1);
+    }
     unlock(&mmu->tlbs_lock);
 }
 
@@ -127,9 +151,6 @@ __no_instrument void *tlb_handle_miss(struct tlb *tlb, addr_t addr, int type) {
     // translation (the per-block coherence check will still catch a later
     // change).
     for (int attempt = 0; ; attempt++) {
-        // Clear the stale mark before reading the generation: a change this
-        // read misses marks the TLB stale again (mmu_tlbs_stale()).
-        __atomic_store_n(&tlb->stale, 0, __ATOMIC_SEQ_CST);
         gen = __atomic_load_n(&tlb->mmu->changes, __ATOMIC_SEQ_CST);
         if (gen != tlb->mem_changes)
             tlb_flush(tlb);
@@ -174,8 +195,17 @@ __no_instrument void *tlb_handle_miss(struct tlb *tlb, addr_t addr, int type) {
             tlb_ent->page_if_writable = TLB_PAGE_EMPTY;
         }
     }
+    // Another thread that changed the page's mapping since gen may have taken
+    // the entry out before it was written (mmu_tlbs_invalidate): read after
+    // it, mmu->changes says so, and the entry goes (this access is done with
+    // what was translated, as one already under way when the change came).
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    if (__atomic_load_n(&tlb->mmu->changes, __ATOMIC_RELAXED) != gen) {
+        __atomic_store_n(&tlb_ent->page, TLB_PAGE_EMPTY, __ATOMIC_RELAXED);
+        __atomic_store_n(&tlb_ent->page_if_writable, TLB_PAGE_EMPTY, __ATOMIC_RELAXED);
+    }
 
-    return (void *) (tlb_ent->data_minus_addr + addr);
+    return (void *) ((uintptr_t) ptr - TLB_PAGE(addr) + addr);
 }
 
 /*

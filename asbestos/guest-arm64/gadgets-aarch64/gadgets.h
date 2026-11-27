@@ -136,10 +136,8 @@ _addr   .req x7    // Changed from x3/x4 to x7 to avoid conflict with guest low 
     .ifc \type,write
         str x8, [_tlb, #(-TLB_entries+TLB_dirty_page)]
     .endif
-    // A stale TLB (another thread changed the mappings, tlb->stale is
-    // TLB_STALE) then matches no entry and every access takes the miss path.
-    ldr x10, [_tlb, #(-TLB_entries+TLB_stale)]
-    orr x8, x8, x10
+    // (An entry of a page whose mapping another thread changed is gone:
+    // mmu_tlbs_invalidate. Nothing else is checked.)
 
     // TLB index calculation: (addr >> 12) ^ (addr >> 26) masked to TLB_SIZE-1
     ubfx x9, x7, #12, #13       // (addr >> 12) & 0x1fff (TLB_BITS=13)

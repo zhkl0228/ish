@@ -24,13 +24,6 @@ struct tlb {
     struct mmu *mmu;
     page_t dirty_page;
     unsigned mem_changes;
-    // TLB_STALE once another thread may have changed the mappings since this
-    // TLB was last checked against mmu->changes, else 0. The inline lookups OR
-    // it into the page they compare, so a stale TLB misses on every page, and
-    // the miss path clears it and flushes. Every valid entry was filled at
-    // mem_changes (a fill flushes first when it moved), so this one bit stands
-    // for all their generations.
-    uint64_t stale;
     // this is basically one of the return values of tlb_handle_miss, tlb_{read,write}, and __tlb_{read,write}_cross_page
     // yes, this sucks
     addr_t segfault_addr;
@@ -57,12 +50,13 @@ struct tlb {
 // address, so the JIT's `addr - page` range check never matches it either.
 #define TLB_PAGE_EMPTY 0x8000000000000001ull
 void tlb_refresh(struct tlb *tlb, struct mmu *mmu);
-#define TLB_STALE (1ull << 48)   // above every 48-bit page: no entry matches
-// Around running guest code (the thread holds the mm and its lock): an
-// attached TLB is marked stale by mmu_tlbs_stale() when the mappings change.
+// Around running guest code (the thread holds the mm and its lock to read):
+// an attached TLB loses its entries of pages whose mappings change
+// (mmu_tlbs_invalidate()); one not attached is flushed as it comes back
+// (tlb_refresh()).
 void tlb_attach(struct tlb *tlb, struct mmu *mmu);
 void tlb_detach(struct tlb *tlb);
-void mmu_tlbs_stale(struct mmu *mmu);
+void mmu_tlbs_invalidate(struct mmu *mmu, page_t start, pages_t pages);
 // Pokes every thread running guest code in this address space, so that it
 // leaves it at its next check and lets go of mem->lock (a writer waits).
 void mmu_poke_tlbs(struct mmu *mmu);

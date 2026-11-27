@@ -521,6 +521,18 @@ else
         status=1
     fi
     echo
+    section "a page another thread remaps: made code, copied on write"
+    if "$CC_GUEST" -static -O1 -Wall -o "$GUEST_ROOT/tmp/regress_tlb_cross_thread" \
+            tests/regress/regress_tlb_cross_thread.c; then
+        out=$(timeout 120 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_tlb_cross_thread 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_tlb_cross_thread"
+    else
+        echo "failed to build regress_tlb_cross_thread" >&2
+        status=1
+    fi
+    echo
     section "socket removed from an epoll set during a wait"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_poll_socket_removed" \
             tests/regress/regress_poll_socket_removed.c; then

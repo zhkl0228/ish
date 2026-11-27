@@ -23,7 +23,7 @@
 #include "fs/fd.h"
 
 // increment the change count
-static void mem_changed(struct mem *mem);
+static void mem_changed(struct mem *mem, page_t start, pages_t pages);
 static struct mmu_ops mem_mmu_ops;
 
 #include "kernel/mm.h"
@@ -109,7 +109,7 @@ int pt_map_lazy(struct mem *mem, page_t start, pages_t pages, unsigned flags) {
         res->next = mem->reservations;
         mem->reservations = res;
     }
-    mem_changed(mem);
+    mem_changed(mem, start, pages);
     return 0;
 }
 
@@ -615,7 +615,7 @@ int pt_unmap_always(struct mem *mem, page_t start, pages_t pages) {
         mem_pt_del(mem, page);
         data_unref(data);
     }
-    mem_changed(mem);
+    mem_changed(mem, start, pages);
     return 0;
 }
 
@@ -1075,7 +1075,7 @@ int pt_set_flags(struct mem *mem, page_t start, pages_t pages, int flags) {
                 return errno_map();
         }
     }
-    mem_changed(mem);
+    mem_changed(mem, start, pages);
     return 0;
 }
 
@@ -1127,22 +1127,26 @@ int pt_copy_on_write(struct mem *src, struct mem *dst, page_t start, page_t page
             dst->reservations = copy;
         }
     }
-    mem_changed(src);
-    mem_changed(dst);
+    mem_changed(src, 0, MEM_PAGES);   // its pages copied on write now
+    mem_changed(dst, 0, MEM_PAGES);
     return 0;
 }
 
-static void mem_changed(struct mem *mem) {
+// The mappings of pages [start, start + pages) changed: mmu->changes moves
+// (an entry filled before is stale for the C lookups, which compare it, and
+// a miss flushes the TLB) and the TLBs of the threads running guest code lose
+// their entries of those pages (mmu_tlbs_invalidate)
+static void mem_changed(struct mem *mem, page_t start, pages_t pages) {
     __atomic_add_fetch(&mem->mmu.changes, 1, __ATOMIC_SEQ_CST);
-    mmu_tlbs_stale(&mem->mmu);
+    mmu_tlbs_invalidate(&mem->mmu, start, pages);
 }
 
 // Public wrapper: bump the memory-change generation so other threads' TLB
 // coherence checks force a re-translate. Used by paths that mutate page
 // backing without going through pt_map/pt_unmap (e.g. madvise MADV_DONTNEED
 // zeroing a page in place).
-void mem_changed_pub(struct mem *mem) {
-    mem_changed(mem);
+void mem_changed_pub(struct mem *mem, page_t start, pages_t pages) {
+    mem_changed(mem, start, pages);
 }
 
 // The guest pages a page copied on write takes with it, the first of them in
@@ -1478,7 +1482,7 @@ have_entry:
         if (__atomic_load_n(&entry->flags, __ATOMIC_RELAXED) & P_CODE) {
             __atomic_fetch_and(&entry->flags, ~P_CODE, __ATOMIC_ACQ_REL);
             atomic_fetch_add_explicit(&st_wx_clears, 1, memory_order_relaxed);
-            mem_changed(mem);
+            mem_changed(mem, page, 1);
             // Order the bump before the caller's store: a compiling thread
             // that observes the (torn) store bytes must also observe the
             // bump when it verifies.
@@ -1545,7 +1549,7 @@ have_entry:
                         atomic_fetch_sub(&anon_page_count, pages);
 #endif
                 }
-                mem_changed(mem);
+                mem_changed(mem, start, pages);
             } else {
                 munmap(copy, real_page_size);
             }
@@ -1765,7 +1769,7 @@ int mmu_mark_code_page(struct mmu *mmu, page_t page) {
     unsigned old = __atomic_fetch_or(&entry->flags, P_CODE, __ATOMIC_ACQ_REL);
     if (old & P_CODE)
         return 0;
-    mem_changed(mem);
+    mem_changed(mem, page, 1);
     return 1;
 }
 

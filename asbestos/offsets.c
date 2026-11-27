@@ -87,7 +87,6 @@ void cpu(void) {
     OFFSET(TLB, tlb, mmu);
     OFFSET(TLB, tlb, dirty_page);
     OFFSET(TLB, tlb, segfault_addr);
-    OFFSET(TLB, tlb, stale);
     OFFSET(TLB, tlb, block_cache);      // inline indirect-branch target cache
     OFFSET(TLB, tlb, block_cache_gen);
     OFFSET(TLB_ENTRY, tlb_entry, page);

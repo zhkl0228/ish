@@ -945,7 +945,7 @@ dword_t sys_madvise(addr_t addr, dword_t len, dword_t advice) {
             read_wrunlock(&current->mem->lock);
         }
         if (any)
-            mem_changed_pub(current->mem);
+            mem_changed_pub(current->mem, PAGE(addr), PAGE(end - 1) - PAGE(addr) + 1);
     }
     return 0;
 }

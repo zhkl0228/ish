@@ -32,7 +32,7 @@
 set -u
 cd "$(dirname "$0")/.."
 DIR=build/jit-test
-TESTS="simd_insns ldpsw dc_zva null_fault fenv mmap_spin stack_extent force_signal eintr process_signals sysv_shm"
+TESTS="simd_insns ldpsw dc_zva null_fault fenv mmap_spin tlb_cross_thread stack_extent force_signal eintr process_signals sysv_shm"
 
 if [ "${1:-}" = --prepare ]; then
     [ $# -eq 2 ] && [ -d "$2" ] || { echo "usage: $0 --prepare <rootfs dir>" >&2; exit 2; }
@@ -54,6 +54,7 @@ if [ "${1:-}" = --prepare ]; then
     build jit_fp -O0 tests/regress/regress_jit_fp.c
     build jit_insns -O0 tests/regress/regress_jit_insns.c
     build mmap_spin -O1 tests/regress/regress_mmap_spin.c
+    build tlb_cross_thread -O1 tests/regress/regress_tlb_cross_thread.c
     build stack_extent -O0 tests/regress/regress_stack_extent.c
     build force_signal -O0 tests/regress/regress_force_signal.c
     build eintr -O0 tests/regress/regress_eintr.c
