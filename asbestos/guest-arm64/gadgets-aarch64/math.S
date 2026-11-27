@@ -9708,6 +9708,9 @@ make_rounding_sra ursra, "urshl v3.8b, v0.8b, v1.8b", "urshl v3.16b, v0.16b, v1.
 
     ldr x16, [x15]
     lsr x16, x16, x11
+    // by 64 (its largest): 0, where the register shift's 64 is 0
+    cmp x11, #64
+    csel x16, xzr, x16, hs
     str x16, [x14]
     str xzr, [x14, #8]
     gret
@@ -9731,6 +9734,11 @@ make_rounding_sra ursra, "urshl v3.8b, v0.8b, v1.8b", "urshl v3.16b, v0.16b, v1.
     add x15, x13, x15
 
     ldr x16, [x15]
+    // by 64 (its largest) as by 63, the sign throughout, where the register
+    // shift's 64 is 0
+    mov x12, #63
+    cmp x11, #63
+    csel x11, x12, x11, hi
     asr x16, x16, x11       // arithmetic (signed) shift right
     str x16, [x14]
     str xzr, [x14, #8]
@@ -9860,9 +9868,12 @@ make_rounding_sra ursra, "urshl v3.8b, v0.8b, v1.8b", "urshl v3.16b, v0.16b, v1.
     ldr x16, [x14]          // current Dd value
     ldr x17, [x15]          // Dn value
     lsr x17, x17, x11       // unsigned shift right
+    // by 64 (its largest): 0, where the register shift's 64 is 0
+    cmp x11, #64
+    csel x17, xzr, x17, hs
     add x16, x16, x17       // accumulate
     str x16, [x14]
-    // Don't clear upper bits - accumulate preserves scalar nature
+    str xzr, [x14, #8]      // a scalar's write zeroes the rest of Vd
     gret
 
 /*
@@ -9886,9 +9897,14 @@ make_rounding_sra ursra, "urshl v3.8b, v0.8b, v1.8b", "urshl v3.16b, v0.16b, v1.
 
     ldr x16, [x14]
     ldr x17, [x15]
+    // by 64 (its largest) as by 63, the sign throughout
+    mov x12, #63
+    cmp x11, #63
+    csel x11, x12, x11, hi
     asr x17, x17, x11       // arithmetic (signed) shift right
     add x16, x16, x17
     str x16, [x14]
+    str xzr, [x14, #8]      // a scalar's write zeroes the rest of Vd
     gret
 
 /*

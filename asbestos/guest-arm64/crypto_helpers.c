@@ -947,7 +947,8 @@ void ushr_imm_helper(uint8_t *rd, uint8_t *rn, int shift, int esize, int Q) {
         uint32_t *dst = (uint32_t *)rd;
         int count = Q ? 4 : 2;
         for (int i = 0; i < count; i++) {
-            dst[i] = src[i] >> shift;
+            // by 32 (its largest): 0; C's >> of the width is undefined
+            dst[i] = shift >= 32 ? 0 : src[i] >> shift;
         }
         if (!Q) {
             dst[2] = 0;
@@ -959,7 +960,9 @@ void ushr_imm_helper(uint8_t *rd, uint8_t *rn, int shift, int esize, int Q) {
         uint64_t *dst = (uint64_t *)rd;
         int count = Q ? 2 : 1;
         for (int i = 0; i < count; i++) {
-            dst[i] = src[i] >> shift;
+            // by 64 (its largest): 0; C's >> of the width is undefined (the
+            // host's register shift took it for 0, the operand left)
+            dst[i] = shift >= 64 ? 0 : src[i] >> shift;
         }
         if (!Q) {
             dst[1] = 0;
@@ -999,7 +1002,8 @@ void sshr_imm_helper(uint8_t *rd, uint8_t *rn, int shift, int esize, int Q) {
         int32_t *dst = (int32_t *)rd;
         int count = Q ? 4 : 2;
         for (int i = 0; i < count; i++) {
-            dst[i] = src[i] >> shift;
+            // by 32 (its largest) as by 31: the sign throughout
+            dst[i] = src[i] >> (shift >= 32 ? 31 : shift);
         }
         if (!Q) {
             ((uint32_t *)rd)[2] = 0;
@@ -1011,7 +1015,8 @@ void sshr_imm_helper(uint8_t *rd, uint8_t *rn, int shift, int esize, int Q) {
         int64_t *dst = (int64_t *)rd;
         int count = Q ? 2 : 1;
         for (int i = 0; i < count; i++) {
-            dst[i] = src[i] >> shift;
+            // by 64 (its largest) as by 63: the sign throughout
+            dst[i] = src[i] >> (shift >= 64 ? 63 : shift);
         }
         if (!Q) {
             ((uint64_t *)rd)[1] = 0;
@@ -1044,7 +1049,7 @@ void usra_imm_helper(uint8_t *rd, uint8_t *rn, int shift, int esize, int Q) {
         uint32_t *dst = (uint32_t *)rd;
         int count = Q ? 4 : 2;
         for (int i = 0; i < count; i++) {
-            dst[i] = dst[i] + (src[i] >> shift);
+            dst[i] = dst[i] + (shift >= 32 ? 0 : src[i] >> shift);   // C's >> of the width is undefined
         }
     } else if (esize == 3) {
         // 64-bit elements
@@ -1052,7 +1057,7 @@ void usra_imm_helper(uint8_t *rd, uint8_t *rn, int shift, int esize, int Q) {
         uint64_t *dst = (uint64_t *)rd;
         int count = Q ? 2 : 1;
         for (int i = 0; i < count; i++) {
-            dst[i] = dst[i] + (src[i] >> shift);
+            dst[i] = dst[i] + (shift >= 64 ? 0 : src[i] >> shift);   // (the host took 64 for 0)
         }
     }
     // A 64-bit (Q=0) vector write clears bits 127:64 of the destination.
@@ -1087,7 +1092,7 @@ void ssra_imm_helper(uint8_t *rd, uint8_t *rn, int shift, int esize, int Q) {
         int32_t *dst = (int32_t *)rd;
         int count = Q ? 4 : 2;
         for (int i = 0; i < count; i++) {
-            dst[i] = dst[i] + (src[i] >> shift);
+            dst[i] = dst[i] + (src[i] >> (shift >= 32 ? 31 : shift));   // by 32 as by 31: the sign
         }
     } else if (esize == 3) {
         // 64-bit signed elements
@@ -1095,7 +1100,7 @@ void ssra_imm_helper(uint8_t *rd, uint8_t *rn, int shift, int esize, int Q) {
         int64_t *dst = (int64_t *)rd;
         int count = Q ? 2 : 1;
         for (int i = 0; i < count; i++) {
-            dst[i] = dst[i] + (src[i] >> shift);
+            dst[i] = dst[i] + (src[i] >> (shift >= 64 ? 63 : shift));   // by 64 as by 63: the sign
         }
     }
     // A 64-bit (Q=0) vector write clears bits 127:64 of the destination.
