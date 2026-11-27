@@ -22,21 +22,11 @@ extern char *(*get_documents_directory)(void);
 // answered: 0 if it was opened, else the error the write gives. NULL in the
 // command line tool, which has no one to ask.
 extern int (*open_url)(const char *url, size_t size);
-// How the app draws its windows for /proc/ish/screenshot, chosen by writing
-// its name there: "views" (the default), the terminal's windows as iOS drew
-// them on the screen (drawViewHierarchyInRect) and the others' layers;
-// "layers", every window's layers rendered in the app, which leave out what
-// iOS draws itself (glass, the Settings' first page), as 841 and 842 did.
-enum screenshot_method {
-    SCREENSHOT_VIEWS,
-    SCREENSHOT_LAYERS,
-};
-extern const char *const screenshot_method_names[];
 // What the screen shows of the app now, a PNG (/proc/ish/screenshot): 0 with
 // *png malloc'd for the caller to free, or the error the read gives, _EAGAIN
 // while no window of the app is in front, where iOS draws none. NULL in the
 // command line tool, which has no windows.
-extern int (*take_screenshot)(enum screenshot_method method, void **png, size_t *size);
+extern int (*take_screenshot)(void **png, size_t *size);
 // An action in the app's window (/proc/ish/ui, ish-ui), the bytes written:
 // done without animation, it returns once the window shows it, 0, or the
 // error the write gives (UIActions.m). NULL in the command line tool.
