@@ -95,7 +95,9 @@ jobs:
           # the app that links them is a new build: its number (its extensions'
           # with it) one more, so that ci.yml publishes its ipa, ipa-<version>-<build>
           build=$(($(sed -n 's/^CURRENT_PROJECT_VERSION = //p' app/AppARM64.xcconfig) + 1))
-          versioned="app/AppARM64.xcconfig app/FileProviderARM64.xcconfig app/JITHelperARM64.xcconfig app/LoopbackTunnelARM64.xcconfig"
+          # the app's and each extension's, whichever there are (the share
+          # extension and the Live Activity's came after these were listed)
+          versioned=$(git grep -l '^CURRENT_PROJECT_VERSION = ' -- 'app/*ARM64.xcconfig')
           sed -i "s/^CURRENT_PROJECT_VERSION = .*/CURRENT_PROJECT_VERSION = $build/" $versioned
           files="$files $versioned"
           set=$(python3 -c "import json; print(json.load(open('benchmark/aojit/app-images.lock.json'))['set'])")
