@@ -2199,11 +2199,9 @@ static NSString *ShellQuoted(NSString *string) {
 
 // What iOS's paste button pastes (updatePasteControl): the first item's text,
 // as paste: pastes the clipboard's string. The button is hidden while the
-// Paste Stack has items (pasteKey:). Said in the kernel's log (dmesg), as is
-// a tap the button did not take (pasteKey:).
+// Paste Stack has items (pasteKey:). Text it could not read is said in the
+// kernel's log (dmesg), as is a tap the button did not take (pasteKey:).
 - (void)pasteItemProviders:(NSArray<NSItemProvider *> *)itemProviders {
-    printk("paste button: %lu item(s), the first's types %s\n", (unsigned long) itemProviders.count,
-           [itemProviders.firstObject.registeredTypeIdentifiers componentsJoinedByString:@" "].UTF8String);
     // another app's copy, taken into the clipboard's history as it is pasted
     [ClipboardStore.shared notePastedItemProviders:itemProviders];
     __weak typeof(self) weakSelf = self;
