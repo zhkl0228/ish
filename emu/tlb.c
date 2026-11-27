@@ -5,8 +5,14 @@
 #include "kernel/fs.h"
 #include "util/sync.h"
 
+static bool tlb_catch_up(struct tlb *tlb, struct mmu *mmu);
+
 void tlb_refresh(struct tlb *tlb, struct mmu *mmu) {
     if (tlb->mmu == mmu && tlb->mem_changes == mmu->changes)
+        return;
+    // The changes it missed while not attached, if the log has them all:
+    // their pages' entries go, the others stand
+    if (tlb->mmu == mmu && tlb_catch_up(tlb, mmu))
         return;
     if (tlb->mmu != mmu) {
         // Address space changed (execve); block cache and ret_cache are invalid
@@ -60,6 +66,19 @@ void mmu_poke_tlbs(struct mmu *mmu) {
 }
 
 // An entry of a page in [start, start + pages), read or write, emptied
+static void tlb_entry_drop(struct tlb_entry *entry, page_t start, pages_t pages);
+
+// Its entries of pages [start, start + pages) emptied
+static void tlb_drop_pages(struct tlb *tlb, page_t start, pages_t pages) {
+    if (pages >= TLB_SIZE) {
+        for (unsigned i = 0; i < TLB_SIZE; i++)
+            tlb_entry_drop(&tlb->entries[i], start, pages);
+        return;
+    }
+    for (pages_t i = 0; i < pages; i++)
+        tlb_entry_drop(&tlb->entries[TLB_INDEX((addr_t) (start + i) << PAGE_BITS)], start + i, 1);
+}
+
 static void tlb_entry_drop(struct tlb_entry *entry, page_t start, pages_t pages) {
     page_t r = __atomic_load_n(&entry->page, __ATOMIC_RELAXED);
     page_t w = __atomic_load_n(&entry->page_if_writable, __ATOMIC_RELAXED);
@@ -78,20 +97,60 @@ static void tlb_entry_drop(struct tlb_entry *entry, page_t start, pages_t pages)
 // nothing else. A TLB not attached is flushed as it comes back (tlb_refresh).
 // A thread filling an entry meanwhile reads mmu->changes again after
 // (tlb_handle_miss): of the two, one sees the other's.
-void mmu_tlbs_invalidate(struct mmu *mmu, page_t start, pages_t pages) {
+static void mmu_tlbs_invalidate(struct mmu *mmu, page_t start, pages_t pages) {
     __atomic_thread_fence(__ATOMIC_SEQ_CST);   // the caller's bump before the entries are read
     lock(&mmu->tlbs_lock);
     struct tlb *tlb;
-    list_for_each_entry(&mmu->tlbs, tlb, tlbs_link) {
-        if (pages >= TLB_SIZE) {
-            for (unsigned i = 0; i < TLB_SIZE; i++)
-                tlb_entry_drop(&tlb->entries[i], start, pages);
-            continue;
-        }
-        for (pages_t i = 0; i < pages; i++)
-            tlb_entry_drop(&tlb->entries[TLB_INDEX((addr_t) (start + i) << PAGE_BITS)], start + i, 1);
-    }
+    list_for_each_entry(&mmu->tlbs, tlb, tlbs_link)
+        tlb_drop_pages(tlb, start, pages);
     unlock(&mmu->tlbs_lock);
+}
+
+// The count moves, the change is logged (its slot's seq marked busy with it
+// while written, so that a reader takes it whole or not at all, and tells
+// this change being written from a later one taking the slot), then the
+// attached TLBs lose its pages: a TLB attached after its log slot is read
+// gets them from there or from here
+void mmu_changed(struct mmu *mmu, page_t start, pages_t pages) {
+    uint64_t seq = __atomic_add_fetch(&mmu->changes, 1, __ATOMIC_SEQ_CST);
+    struct mmu_change *c = &mmu->change_log[seq % MMU_CHANGE_LOG];
+    __atomic_store_n(&c->seq, seq | MMU_CHANGE_BUSY, __ATOMIC_RELAXED);
+    __atomic_thread_fence(__ATOMIC_RELEASE);
+    c->start = start;
+    c->pages = pages;
+    __atomic_store_n(&c->seq, seq, __ATOMIC_RELEASE);
+    mmu_tlbs_invalidate(mmu, start, pages);
+}
+
+// A TLB attached again (on the list already, tlb_attach) after missing the
+// changes since mem_changes: their pages' entries go, if the log still has
+// them all, and true. A change not logged yet, or being logged, is one whose
+// invalidation comes after this TLB was on the list: it reaches it there. A
+// slot taken by a later change (too many since, or one taking it as it is
+// read), or a change of more pages than the TLB has entries (a sweep each,
+// as dear as a flush): false, flushed.
+static bool tlb_catch_up(struct tlb *tlb, struct mmu *mmu) {
+    uint64_t to = __atomic_load_n(&mmu->changes, __ATOMIC_ACQUIRE);
+    uint64_t from = tlb->mem_changes;
+    if (to - from > MMU_CHANGE_LOG)
+        return false;
+    for (uint64_t s = from + 1; s <= to; s++) {
+        struct mmu_change *c = &mmu->change_log[s % MMU_CHANGE_LOG];
+        uint64_t s1 = __atomic_load_n(&c->seq, __ATOMIC_ACQUIRE);
+        page_t start = c->start;
+        pages_t pages = c->pages;
+        __atomic_thread_fence(__ATOMIC_ACQUIRE);
+        uint64_t s2 = __atomic_load_n(&c->seq, __ATOMIC_RELAXED);
+        if ((s1 & ~MMU_CHANGE_BUSY) > s || (s2 & ~MMU_CHANGE_BUSY) > s)
+            return false;   // taken by a later change
+        if (s1 != s || s2 != s)
+            continue;       // not logged yet, or being logged: its invalidation reaches this TLB
+        if (pages >= TLB_SIZE)
+            return false;
+        tlb_drop_pages(tlb, start, pages);
+    }
+    tlb->mem_changes = (unsigned) to;
+    return true;
 }
 
 void tlb_flush(struct tlb *tlb) {
@@ -155,8 +214,8 @@ __no_instrument void *tlb_handle_miss(struct tlb *tlb, addr_t addr, int type) {
         // Attached, the TLB has lost its entries of every page changed since
         // mem_changes: a change made with the address space's lock held to
         // read takes them out of the attached TLBs (mmu_tlbs_invalidate), one
-        // held to write has none attached, and an attach after it flushes
-        // (tlb_refresh). Its other entries stand: flushing it whole at each
+        // held to write has none attached, and an attach after it takes its
+        // pages out or flushes (tlb_refresh). Its other entries stand: flushing it whole at each
         // change cost java's threads, as it maps and protects, a 256 KB
         // TLB's refill. Not attached (a C access in a syscall), it may have
         // missed some: flushed.

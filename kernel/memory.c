@@ -51,6 +51,7 @@ void mem_init(struct mem *mem) {
     mem->mmu.asbestos = asbestos_new(&mem->mmu);
     atomic_init(&mem->mmu.detach_requested, false);
     mem->mmu.changes = 0;
+    memset(mem->mmu.change_log, 0, sizeof(mem->mmu.change_log));   // no slot of a change yet
     lock_init(&mem->mmu.tlbs_lock);
     list_init(&mem->mmu.tlbs);
     wrlock_init(&mem->lock);
@@ -1137,8 +1138,7 @@ int pt_copy_on_write(struct mem *src, struct mem *dst, page_t start, page_t page
 // a miss flushes the TLB) and the TLBs of the threads running guest code lose
 // their entries of those pages (mmu_tlbs_invalidate)
 static void mem_changed(struct mem *mem, page_t start, pages_t pages) {
-    __atomic_add_fetch(&mem->mmu.changes, 1, __ATOMIC_SEQ_CST);
-    mmu_tlbs_invalidate(&mem->mmu, start, pages);
+    mmu_changed(&mem->mmu, start, pages);
 }
 
 // Public wrapper: bump the memory-change generation so other threads' TLB

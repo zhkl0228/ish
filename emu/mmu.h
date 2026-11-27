@@ -22,14 +22,26 @@ typedef uint64_t pages_t;
 #define PAGE_ROUND_UP(bytes) (PAGE((bytes) + PAGE_SIZE - 1))
 #endif
 
+// The last changes to an address space's mappings (mmu_changed), by their
+// count: a TLB attached again takes out the pages of those it missed while
+// not attached (tlb_refresh), not all of its entries, while they are here.
+#define MMU_CHANGE_LOG 128
+#define MMU_CHANGE_BUSY (1ull << 63)
+struct mmu_change {
+    uint64_t seq;   // (__atomic_*) the change's count (changes after it), | MMU_CHANGE_BUSY while written
+    page_t start;
+    pages_t pages;
+};
+
 struct mmu {
     struct mmu_ops *ops;
     struct asbestos *asbestos;
     uint64_t changes;
     // The TLBs of the threads running guest code in this address space
-    // (tlb_attach()); a change to the mappings marks them stale.
+    // (tlb_attach()); a change to the mappings takes its pages out of them.
     lock_t tlbs_lock;
     struct list tlbs;
+    struct mmu_change change_log[MMU_CHANGE_LOG];
     // It wrote code of an asbestos other address spaces use (mem_code_written):
     // its threads leave it (INT_ASBESTOS_DETACH) before they run more of it
     _Atomic bool detach_requested;

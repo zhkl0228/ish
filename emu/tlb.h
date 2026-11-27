@@ -52,11 +52,13 @@ struct tlb {
 void tlb_refresh(struct tlb *tlb, struct mmu *mmu);
 // Around running guest code (the thread holds the mm and its lock to read):
 // an attached TLB loses its entries of pages whose mappings change
-// (mmu_tlbs_invalidate()); one not attached is flushed as it comes back
-// (tlb_refresh()).
+// (mmu_changed()); one not attached takes out those it missed as it comes
+// back, from the change log, or is flushed (tlb_refresh()).
 void tlb_attach(struct tlb *tlb, struct mmu *mmu);
 void tlb_detach(struct tlb *tlb);
-void mmu_tlbs_invalidate(struct mmu *mmu, page_t start, pages_t pages);
+// The mappings of pages [start, start + pages) changed: mmu->changes moves,
+// the change goes in its log, and the attached TLBs lose those pages' entries
+void mmu_changed(struct mmu *mmu, page_t start, pages_t pages);
 // Pokes every thread running guest code in this address space, so that it
 // leaves it at its next check and lets go of mem->lock (a writer waits).
 void mmu_poke_tlbs(struct mmu *mmu);
