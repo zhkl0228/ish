@@ -43,6 +43,7 @@
                         <outlet property="bar" destination="4pc-Ei-ihz" id="iy4-s8-7yt"/>
                         <outlet property="barButtonWidth" destination="1Ax-5U-2CI" id="Wlc-g8-GEs"/>
                         <outlet property="barHeight" destination="3cy-zm-9Qp" id="OcF-FY-cym"/>
+                        <outlet property="barTrailing" destination="RAD-x5-aAI" id="bTr-Ou-k01"/>
                         <outlet property="barView" destination="GyN-ob-WFz" id="lVV-s6-cQt"/>
                         <outlet property="bottomConstraint" destination="TjH-PI-NBO" id="ZSq-o1-EC4"/>
                         <outlet property="controlKey" destination="W9v-cj-FWz" id="c9i-VC-j7f"/>

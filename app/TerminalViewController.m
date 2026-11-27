@@ -127,6 +127,12 @@ typedef NS_ENUM(NSInteger, ColumnKeyProfile) {
 @property (weak, nonatomic) IBOutlet UIStackView *bar;
 @property (weak, nonatomic) IBOutlet NSLayoutConstraint *barButtonWidth;
 @property (weak, nonatomic) IBOutlet NSLayoutConstraint *barHeight;
+// The bar's right end: at the safe area's (barTrailing, the storyboard's), or,
+// with the column there and the keyboard up, under the column at the window's
+// edge, as the keyboard is (barUnderColumn: updateColumnKeys). Strong: one of
+// the two is inactive, and its view does not hold it then.
+@property (strong, nonatomic) IBOutlet NSLayoutConstraint *barTrailing;
+@property (nonatomic) NSLayoutConstraint *barUnderColumn;
 
 // The paste key: iOS's paste button lies over it (updatePasteControl), in the
 // key's colors it was made in, but while the Paste Stack has items, when the
@@ -522,6 +528,7 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
         key.layer.cornerRadius = kBarKeyRadius;
         key.layer.cornerCurve = kCACornerCurveContinuous;
     }
+    self.barUnderColumn = [self.bar.trailingAnchor constraintEqualToAnchor:self.barView.trailingAnchor];
     CGFloat keyFontSize = phone ? 18 : 21;
 
     // A key is 39 points wide on a 320-point screen: a name shrinks to fit.
@@ -1264,7 +1271,10 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
     bool phone = UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone;
     NSUInteger views = self.bar.arrangedSubviews.count;
     NSUInteger keys = views - 1;
-    CGFloat width = UIEdgeInsetsInsetRect(self.barView.bounds, self.barView.safeAreaInsets).size.width -
+    UIEdgeInsets insets = self.barView.safeAreaInsets;
+    if (self.barUnderColumn.active)
+        insets.right = 0; // the column's, the bar under it (updateColumnKeys)
+    CGFloat width = UIEdgeInsetsInsetRect(self.barView.bounds, insets).size.width -
                     self.bar.directionalLayoutMargins.leading - self.bar.directionalLayoutMargins.trailing;
     CGFloat fit = (width - self.bar.spacing * (views - 1)) / keys;
     self.barButtonWidth.constant = MIN(phone ? 41 : 50, floor(fit));
@@ -1894,6 +1904,22 @@ static NSString *ArrowGlyph(char direction) {
     BOOL glassHidden = !shown || !anyKey;
     if (self.columnKeysGlass.hidden != glassHidden)
         self.columnKeysGlass.hidden = glassHidden;
+    // The bar, the keyboard up, as wide as the keyboard under it, the column's
+    // room under its meters and keys empty there: its ten keys, kBarKeyGap
+    // apart, about as wide as the keyboard's ten letters and over them, where
+    // to the column's left they were some 80% of them. With the keyboard down
+    // the column's keys' room is at the bottom (columnKeysAtBottom), where the
+    // bar of an external keyboard's is: the bar keeps to the safe area.
+    // Narrower or wider, the bar's keys are sized again (resizeBar, from
+    // BarView's layoutSubviews).
+    BOOL underColumn = shown && up;
+    if (self.barUnderColumn.active != underColumn) {
+        NSLayoutConstraint *barOn = underColumn ? self.barUnderColumn : self.barTrailing;
+        NSLayoutConstraint *barOff = underColumn ? self.barTrailing : self.barUnderColumn;
+        barOff.active = NO;
+        barOn.active = YES;
+        [self.barView setNeedsLayout];
+    }
     // Hidden, its room at the bottom still (a place of its own). Only what changes, as
     // everything updateMonitorColumn sets, the one to go first, so that both
     // never hold at once: it runs in updateViewConstraints, where a constraint
