@@ -27,9 +27,10 @@ extern UIAccessibilityTraits UIAccessibilityTraitToggle;
 }
 
 - (void)setUpKey {
-    // Flat keys, square and without a shadow, a point apart in the row: the
-    // terminal's background shows between them. Light gray until the theme's
-    // colors are set.
+    // Flat keys without a shadow, shaped by their row (TerminalViewController:
+    // the bar's rounded as the keyboard's, the column's round), the
+    // terminal's background between them. Light gray until the theme's colors
+    // are set.
     [self setKeyColor:[UIColor colorWithWhite:209/255. alpha:1]
          pressedColor:[UIColor colorWithWhite:160/255. alpha:1]
             textColor:UIColor.blackColor];

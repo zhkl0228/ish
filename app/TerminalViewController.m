@@ -253,6 +253,12 @@ static NSArray<NSArray<NSString *> *> *HeldSymbols(void) {
     ];
 }
 
+// The bar's keys: their corners (continuous, about the keyboard's keys'),
+// the gap between two, the room from the row's ends, top and bottom to them
+static const CGFloat kBarKeyRadius = 8;
+static const CGFloat kBarKeyGap = 6;
+static const CGFloat kBarInset = 4;
+
 // An arrow key's face: a filled triangle pointing its way, narrower than an
 // equilateral one, `base` across and `base` * 14 / 11 from base to tip. nil
 // for a key with another tag.
@@ -498,14 +504,24 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
         [self.termView addGestureRecognizer:swipe];
     }
 
-    // The bar is a row of flat keys, a point apart: esc, ctrl, tab and / from
-    // the left edge, the four arrows, paste and hide keyboard to the right one,
-    // the room a wide screen leaves between them (the spacer, in the
-    // storyboard). 42 points tall on a phone (50 on an iPad) and about as wide
-    // (resizeBar). esc and ctrl are named in lowercase; tab, paste, hide
-    // keyboard and the arrows are drawn.
+    // The bar is a row of keys as the keyboard's under it are: rounded, flat,
+    // kBarKeyGap apart and kBarInset in from the row's ends, top and bottom:
+    // esc, ctrl, tab and / from the left, the four arrows, paste and hide
+    // keyboard to the right, the room a wide screen leaves between them (the
+    // spacer, in the storyboard). The row 42 points tall on a phone (50 on an
+    // iPad), its keys 34 (42) and about as wide (resizeBar). esc and ctrl are
+    // named in lowercase; tab, paste, hide keyboard and the arrows are drawn.
+    // They were square, a point apart, as tall as the row: a block of tiles
+    // over the keyboard's rounded keys.
     bool phone = UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone;
     self.barHeight.constant = phone ? 42 : 50;
+    self.bar.spacing = kBarKeyGap;
+    self.bar.layoutMarginsRelativeArrangement = YES;
+    self.bar.directionalLayoutMargins = NSDirectionalEdgeInsetsMake(kBarInset, kBarInset, kBarInset, kBarInset);
+    for (BarButton *key in self.barButtons) {
+        key.layer.cornerRadius = kBarKeyRadius;
+        key.layer.cornerCurve = kCACornerCurveContinuous;
+    }
     CGFloat keyFontSize = phone ? 18 : 21;
 
     // A key is 39 points wide on a 320-point screen: a name shrinks to fit.
@@ -1241,13 +1257,15 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
 
 - (void)resizeBar {
     // Keys 41 points wide on a phone and 50 on an iPad, which in Slide Over is
-    // as narrow as a phone; narrower if the row is (38 on a 393-point iPhone,
-    // 31 on a 320-point iPhone SE). Every arranged view but the spacer between
-    // / and the arrows is a key.
+    // as narrow as a phone; narrower if the row is (32 on a 393-point iPhone,
+    // 30 on a 375-point one, as the keyboard's letters). Every arranged view
+    // but the spacer between / and the arrows is a key; the row's ends are
+    // kBarInset in.
     bool phone = UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone;
     NSUInteger views = self.bar.arrangedSubviews.count;
     NSUInteger keys = views - 1;
-    CGFloat width = UIEdgeInsetsInsetRect(self.barView.bounds, self.barView.safeAreaInsets).size.width;
+    CGFloat width = UIEdgeInsetsInsetRect(self.barView.bounds, self.barView.safeAreaInsets).size.width -
+                    self.bar.directionalLayoutMargins.leading - self.bar.directionalLayoutMargins.trailing;
     CGFloat fit = (width - self.bar.spacing * (views - 1)) / keys;
     self.barButtonWidth.constant = MIN(phone ? 41 : 50, floor(fit));
     [UIView performWithoutAnimation:^{
@@ -1256,7 +1274,7 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
 }
 
 // A key of the bar's made here rather than in the storyboard, at index of the
-// row, as wide as the others
+// row, as wide as the others (rounded with them, in viewDidLoad)
 - (BarButton *)addBarKeyAtIndex:(NSUInteger)index {
     BarButton *key = [[BarButton alloc] initWithFrame:CGRectZero];
     key.translatesAutoresizingMaskIntoConstraints = NO;
@@ -2216,9 +2234,9 @@ static NSString *ShellQuoted(NSString *string) {
     [self.pasteControl removeFromSuperview];
     UIPasteControlConfiguration *config = [UIPasteControlConfiguration new];
     config.displayMode = UIPasteControlDisplayModeIconOnly;
-    // flat and square, in the key's colors
+    // flat and rounded as the key, in its colors
     config.cornerStyle = UIButtonConfigurationCornerStyleFixed;
-    config.cornerRadius = 0;
+    config.cornerRadius = kBarKeyRadius;
     config.baseBackgroundColor = key.keyColor;
     config.baseForegroundColor = key.tintColor;
     UIPasteControl *control = [[UIPasteControl alloc] initWithConfiguration:config];
