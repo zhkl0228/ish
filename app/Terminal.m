@@ -31,6 +31,8 @@ typedef struct tty *tty_t;
 @property (nonatomic) BOOL destroyed;
 // set by hangup; the signals are only sent once
 @property (nonatomic) BOOL hungUp;
+// under dataLock: a page asked for, for output no view has taken (sendOutput:)
+@property (nonatomic) BOOL pageAsked;
 
 @property DelayedUITask *refreshTask;
 @property DelayedUITask *scrollToBottomTask;
@@ -138,8 +140,14 @@ NSNotificationName const TerminalAttentionNotification = @"TerminalAttentionNoti
     @synchronized (self) {
         _tty = tty;
     }
+    // The window's size from the page, if it has one already: a terminal no
+    // view has shown (the consoles init's gettys open, tty1 to tty6) gets one
+    // as a view shows it, the size then once it loads. Asking made it one, a
+    // web content process loading the page for each console as the app
+    // started: seven of them for one tab, a tenth of a second of a core each.
     dispatch_async(dispatch_get_main_queue(), ^{
-        [self syncWindowSize];
+        if (self->_webView != nil)
+            [self syncWindowSize];
     });
 }
 
@@ -147,6 +155,8 @@ NSNotificationName const TerminalAttentionNotification = @"TerminalAttentionNoti
     if ([message.name isEqualToString:@"load"]) {
         self.loaded = YES;
         [self.refreshTask schedule];
+        // the tty's size, which it may not have had (setTty:)
+        [self syncWindowSize];
         // make sure this setting works if it's set before loading
         self.enableVoiceOverAnnounce = self.enableVoiceOverAnnounce;
     } else if ([message.name isEqualToString:@"log"]) {
@@ -203,8 +213,17 @@ NSNotificationName const TerminalAttentionNotification = @"TerminalAttentionNoti
     if (!NSThread.isMainThread) {
         // The main thread is the only one that can unblock this, so sleeping here would be a deadlock.
         // The only reason for this to be called on the main thread is if input is echoed.
-        while (_pendingData.length > BUF_SIZE && !_destroyed)
+        while (_pendingData.length > BUF_SIZE && !_destroyed) {
+            // A terminal no view has shown has no page to take its output
+            // (setTty:): one made for it now, or its writer waited for good
+            if (!_pageAsked) {
+                _pageAsked = YES;
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    (void) self.webView;
+                });
+            }
             wait_for_ignore_signals(&_dataConsumed, &_dataLock, NULL);
+        }
     }
     if (_destroyed) {
         // Nobody will ever render this; pretend it was written so the writer moves on to its EIO.
