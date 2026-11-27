@@ -6,6 +6,7 @@
 #import <UIKit/UIKit.h>
 #import "ShareInbox.h"
 #import "AppGroup.h"
+#include "debug.h"
 
 // The main thread's: what the extension left, moved into Documents/inbox
 static void MoveStaged(void) {
@@ -18,7 +19,7 @@ static void MoveStaged(void) {
     if (items == nil && [error.domain isEqualToString:NSCocoaErrorDomain] && error.code == NSFileReadNoSuchFileError)
         return;
     if (items == nil) {
-        NSLog(@"share inbox: %@ not read: %@", staging.path, error);
+        printk("share inbox: %s not read: %s\n", staging.path.UTF8String, error.description.UTF8String);
         return;
     }
     if (items.count == 0)
@@ -26,13 +27,14 @@ static void MoveStaged(void) {
     NSURL *documents = [files URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask].firstObject;
     NSURL *inbox = [documents URLByAppendingPathComponent:@"inbox" isDirectory:YES];
     if (![files createDirectoryAtURL:inbox withIntermediateDirectories:YES attributes:nil error:&error]) {
-        NSLog(@"share inbox: %@ not made: %@", inbox.path, error);
+        printk("share inbox: %s not made: %s\n", inbox.path.UTF8String, error.description.UTF8String);
         return;
     }
     for (NSURL *item in items) {
         NSURL *to = ShareInboxFreeURL(inbox, item.lastPathComponent);
         if (![files moveItemAtURL:item toURL:to error:&error])
-            NSLog(@"share inbox: %@ not moved to %@: %@", item.path, to.path, error);
+            printk("share inbox: %s not moved to %s: %s\n", item.path.UTF8String, to.path.UTF8String,
+                   error.description.UTF8String);
     }
 }
 

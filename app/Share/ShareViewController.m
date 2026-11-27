@@ -56,8 +56,30 @@
     [self.extensionContext completeRequestReturningItems:@[] completionHandler:nil];
 }
 
+// The app group's container, which the app has too: not ContainerURL(),
+// which, without one, is the extension's own Application Support, where the
+// app finds nothing (2026-11-27: Saved, and nothing in the app's inbox). nil,
+// and *problem, without one.
+static NSURL *GroupContainer(NSString **problem) {
+    NSArray<NSString *> *groups = CurrentAppGroups();
+    if (groups.count == 0) {
+        *problem = @"this extension is signed with no app group: re-sign iSH with its app group given to its extensions too";
+        return nil;
+    }
+    NSURL *container = [NSFileManager.defaultManager containerURLForSecurityApplicationGroupIdentifier:groups[0]];
+    if (container == nil)
+        *problem = [NSString stringWithFormat:@"no container for the app group %@", groups[0]];
+    return container;
+}
+
 - (void)saveAll {
-    NSURL *staging = [ContainerURL() URLByAppendingPathComponent:SHARE_INBOX_STAGING isDirectory:YES];
+    NSString *problem;
+    NSURL *container = GroupContainer(&problem);
+    if (container == nil) {
+        [self saidSaved:@[] failed:@[problem]];
+        return;
+    }
+    NSURL *staging = [container URLByAppendingPathComponent:SHARE_INBOX_STAGING isDirectory:YES];
     NSError *error;
     if (![NSFileManager.defaultManager createDirectoryAtURL:staging withIntermediateDirectories:YES attributes:nil error:&error]) {
         [self saidSaved:@[] failed:@[[NSString stringWithFormat:@"%@ not made: %@", staging.path, error.localizedDescription]]];
