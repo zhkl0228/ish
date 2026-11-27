@@ -14,7 +14,7 @@
     "tiers, the JIT translating with room in its code region, where V8's compilers run too (kernel/",
     "exec.c). claude.exe is recorded with",
     "JavaScriptCore's JIT off, as the app's claude-wrapper runs it, in print mode, a session of",
-    "tools and a long session on its interactive screen (guest/claude/claude_image.sh): the app",
+    "tools and a long session on its interactive screen, scrolled by the mouse wheel as a drag turns it in the app (guest/claude/claude_image.sh): the app",
     "runs it with no executable memory, where a block the image lacks runs through the gadgets.",
     "busybox (the root's commands:",
     "ls, grep, sed, find and the rest of what a session runs), ssh (git over ssh) and libcrypto (ssh's",

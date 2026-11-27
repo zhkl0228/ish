@@ -1,10 +1,16 @@
 # Claude Code as a long session runs it: on its interactive screen (screen.py
 # drives it in a pseudo-terminal), a session resumed, its tools (Read, Edit
 # with the screen asking to allow it, Write, Bash with long output, a
-# subagent) with thinking and a long markdown answer, its context compacted
+# subagent) with thinking and a long markdown answer, the conversation
+# scrolled back by the mouse wheel and down again, its context compacted
 # (/compact), and a fresh screen's prompt; and the session in print mode,
-# made and resumed. The model is ../llm/mock_llm.py, a "[long] <project>:"
-# prompt. What claude_train.sh's print mode never runs: on the phone, against
+# made and resumed. The wheel is the app's drag on claude's full screen,
+# which draws its conversation again for each line it moves: no recording
+# had turned it, and on the phone a drag through a long session took a core
+# of its own. A notch moves it a line (Claude Code 2.1.332); scrolled back,
+# it says "Jump to bottom". The model is ../llm/mock_llm.py, a "[long]
+# <project>:" prompt. What claude_train.sh's print mode never runs: on the
+# phone, against
 # its images, a long session resumed on the screen ran 85.6% of claude.exe's
 # blocks from the image, a prompt on a fresh screen 81.7%, print mode 95.3%
 # (2026-11-25, Claude Code 2.1.332).
@@ -79,12 +85,16 @@ echo
 git reset -q --hard "$base"
 
 # Resumed on the screen: a prompt of tools, the screen asking to allow each
-# edit (Edit not allowed beforehand), its answer; compacted; a plain prompt
+# edit (Edit not allowed beforehand), its answer; the conversation scrolled
+# back 120 lines by the wheel, which a drag turns in the app, and down to the
+# answer's last line again; compacted; a plain prompt
 python3 /tmp/aojit/claude/screen.py "$claude" --resume "$session" --permission-mode default \
     --allowedTools Bash Read Write Agent -- \
     ready "say:[long] $project: Raise the limit to 20 and tidy the helpers" \
     "until:make this edit to app.py" press:enter "until:make this edit to helper1.py" press:enter \
-    "until:Summary of the session" "say:/compact" "until:Compacted" "say:What changed" "until:plan" \
+    "until:Summary of the session" "until:says more of the limit" \
+    wheel:up:120 "until:Jump to bottom" wheel:down:160 "until:says more of the limit" \
+    "say:/compact" "until:Compacted" "say:What changed" "until:plan" \
     say:/exit end || status=1
 git reset -q --hard "$base"
 

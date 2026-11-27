@@ -6,8 +6,13 @@ usage: screen.py CLAUDE [ARG...] -- STEP...
   ready          wait for the input box (its prompt, U+276F) and for the screen to go quiet
   say:TEXT       type TEXT, then Return
   press:KEY      press KEY: enter, down, up, escape or tab
-  until:TEXT     wait for TEXT on a line of the screen written since the last Return or key
-                 pressed (on the screen, or scrolled off it since)
+  until:TEXT     wait for TEXT on a line of the screen written since the last Return, key
+                 pressed or wheel turned (on the screen, or scrolled off it since)
+  wheel:WAY:N    turn the mouse wheel N notches, WAY up or down, then wait for the screen to go
+                 quiet: SGR reports at the screen's middle, one every 0.05 s, as the app sends a
+                 drag's on claude's full screen, which asks for them (?1000h ?1006h) and scrolls
+                 its conversation by them. Only to a claude that has asked: to one that has not,
+                 they are keys typed into its input box
   end            wait for claude to exit (after say:/exit)
 
 The screen is what claude's output draws (Screen: the cursor moves, erasing and scrolling it
@@ -35,6 +40,9 @@ TIMEOUT = int(os.environ.get('SCREEN_TIMEOUT', '600'))
 ROWS, COLS = 40, 120
 KEYS = {'enter': '\r', 'down': '\x1b[B', 'up': '\x1b[A', 'escape': '\x1b', 'tab': '\t'}
 PROMPT = '❯'
+# An SGR report's button for a notch of the wheel
+WHEEL = {'up': 64, 'down': 65}
+WHEEL_GAP = 0.05
 
 
 class Screen:
@@ -50,6 +58,8 @@ class Screen:
         self.saved = (0, 0)
         self.state = 'text'
         self.params = ''
+        # the private modes set (CSI ? n h) and not reset since (CSI ? n l)
+        self.modes = set()
 
     def clear_written(self):
         self.written = [False] * ROWS
@@ -93,6 +103,12 @@ class Screen:
         private = params[:1] in ('?', '<', '>', '=')
         args = [int(p) if p.isdigit() else 0 for p in (params[1:] if private else params).split(';')]
         n = max(args[0], 1)
+        if params[:1] == '?' and final in 'hl':
+            for mode in args:
+                if final == 'h':
+                    self.modes.add(mode)
+                else:
+                    self.modes.discard(mode)
         if private or final in 'mhlqrtnc':
             return  # modes, colors, queries: no cells
         if final == 'A':
@@ -230,12 +246,13 @@ class Claude:
             with open(os.environ['SCREEN_LOG'], 'wb') as f:
                 f.write(self.raw)
 
-    def fail(self, what):
+    def fail(self, what, waited=True):
         self.log()
         os.kill(self.pid, signal.SIGKILL)
         os.waitpid(self.pid, 0)
         rows = [r for r in self.screen.text(False) if r.strip()]
-        sys.exit('FAIL screen.py: %s in %ds; the screen:\n%s' % (what, TIMEOUT, '\n'.join(rows)))
+        when = ' in %ds' % TIMEOUT if waited else ''
+        sys.exit('FAIL screen.py: %s%s; the screen:\n%s' % (what, when, '\n'.join(rows)))
 
     def until(self, text, only_written=True):
         end = time.time() + TIMEOUT
@@ -256,6 +273,17 @@ class Claude:
         self.screen.clear_written()
         os.write(self.fd, keys.encode())
         self.read_for(0.5)
+
+    def wheel(self, way, notches):
+        modes = self.screen.modes
+        if not (modes & {1000, 1002, 1003} and 1006 in modes):
+            self.fail('no SGR mouse reports asked for (private modes set: %s)' % sorted(modes), waited=False)
+        self.screen.clear_written()
+        report = ('\x1b[<%d;%d;%dM' % (WHEEL[way], COLS // 2, ROWS // 2)).encode()
+        for _ in range(notches):
+            os.write(self.fd, report)
+            self.read_for(WHEEL_GAP)
+        self.quiet(1)
 
     def end(self):
         end = time.time() + TIMEOUT
@@ -287,6 +315,9 @@ def main():
             claude.send(KEYS[text])
         elif kind == 'until':
             claude.until(text)
+        elif kind == 'wheel':
+            way, _, notches = text.partition(':')
+            claude.wheel(way, int(notches))
         elif kind == 'end':
             claude.end()
         else:
