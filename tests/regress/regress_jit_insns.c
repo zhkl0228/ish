@@ -13,7 +13,10 @@
 // element, smov, scalar shifts, add and saturating arithmetic, aese/aesmc;
 // and multiply-adds of four registers none pinned, which failed for want of
 // a register. claude.exe's start ran 2.3 times as fast with the JIT as with
-// the gadgets alone, python's 5.4 times.
+// the gadgets alone, python's 5.4 times. In java's, javac's and maven's
+// (HotSpot's generated code): ldr (literal), 89% of their cuts, isb and dsb,
+// msr fpcr, AdvSIMD's floating point and by-element multiplies, ssubw,
+// pmull (zip's CRC-32); gh's mrs cntfrq_el0.
 //
 // Checked: each instruction (or pair: ldxr and stxr), put in a copy of a
 // template made at run time, run once in a fresh copy (the gadgets: a block
@@ -238,6 +241,65 @@ extern const uint32_t insn_template[], insn_template_slot[], insn_template_end[]
     X("fixed point", 1, 0, 0, "fcvtzu w10, s3, #3")                                               \
     X("fixed point", 1, 0, 0, "scvtf d4, x10, #64")                                               \
     X("fixed point", 1, 0, 0, "fcvtzs w11, d5, #32")                                              \
+    X("ldr literal", 1, 0, 0, "ldr w9, . + 8")                                                    \
+    X("ldr literal", 1, 0, 0, "ldr x10, . - 8")                                                   \
+    X("ldr literal", 1, 0, 0, "ldrsw x11, . + 12")                                                \
+    X("ldr literal", 1, 0, 0, "ldr x1, . + 112")                                                  \
+    X("ldr literal", 1, 0, 0, "ldr x17, . - 4")                                                   \
+    X("ldr literal", 1, 0, 0, "ldr s1, . + 4")                                                    \
+    X("ldr literal", 1, 0, 0, "ldr d0, . - 60")                                                   \
+    X("ldr literal", 1, 0, 0, "ldr q2, . + 16")                                                   \
+    X("barriers, cntfrq_el0, FPCR", 1, 0, 0, "isb")                                               \
+    X("barriers, cntfrq_el0, FPCR", 1, 0, 0, "dsb ish")                                           \
+    X("barriers, cntfrq_el0, FPCR", 1, 0, 0, "dsb sy")                                            \
+    X("barriers, cntfrq_el0, FPCR", 1, 0, 0, "mrs x9, cntfrq_el0")                                \
+    X("barriers, cntfrq_el0, FPCR", 2, 0, 0, "msr fpcr, x9\n mrs x10, fpcr")                      \
+    X("barriers, cntfrq_el0, FPCR", 2, 0, 0, "msr fpcr, x11\n fadd d0, d1, d2")                   \
+    X("barriers, cntfrq_el0, FPCR", 2, 0, 0, "msr fpcr, xzr\n mrs x12, fpcr")                     \
+    X("SIMD floating point", 1, 0, 0, "fadd v0.2d, v1.2d, v2.2d")                                 \
+    X("SIMD floating point", 1, 0, 0, "fsub v3.4s, v4.4s, v5.4s")                                 \
+    X("SIMD floating point", 1, 0, 0, "fmul v6.2s, v7.2s, v0.2s")                                 \
+    X("SIMD floating point", 1, 0, 0, "fmla v1.2d, v2.2d, v3.2d")                                 \
+    X("SIMD floating point", 1, 0, 0, "fmls v4.4s, v5.4s, v6.4s")                                 \
+    X("SIMD floating point", 1, 0, 0, "fdiv v7.2d, v0.2d, v1.2d")                                 \
+    X("SIMD floating point", 1, 0, 0, "fmax v0.4s, v1.4s, v2.4s")                                 \
+    X("SIMD floating point", 1, 0, 0, "fmin v3.2d, v4.2d, v5.2d")                                 \
+    X("SIMD floating point", 1, 0, 0, "fmaxnm v6.2d, v7.2d, v0.2d")                               \
+    X("SIMD floating point", 1, 0, 0, "fminnm v1.4s, v2.4s, v3.4s")                               \
+    X("SIMD floating point", 1, 0, 0, "faddp v4.4s, v5.4s, v6.4s")                                \
+    X("SIMD floating point", 1, 0, 0, "fabd v7.2d, v0.2d, v1.2d")                                 \
+    X("SIMD floating point", 1, 0, 0, "fmaxp v2.2d, v3.2d, v4.2d")                                \
+    X("SIMD floating point", 1, 0, 0, "fminp v5.2s, v6.2s, v7.2s")                                \
+    X("SIMD floating point", 1, 0, 0, "fcmeq v0.2d, v1.2d, v2.2d")                                \
+    X("SIMD floating point", 1, 0, 0, "fcmge v3.4s, v4.4s, v5.4s")                                \
+    X("SIMD floating point", 1, 0, 0, "fcmgt v6.2d, v7.2d, v0.2d")                                \
+    X("SIMD floating point", 1, 0, 0, "facge v1.4s, v2.4s, v3.4s")                                \
+    X("SIMD floating point", 1, 0, 0, "facgt v4.2d, v5.2d, v6.2d")                                \
+    X("SIMD floating point", 1, 0, 0, "fmulx v7.4s, v0.4s, v1.4s")                                \
+    X("SIMD floating point", 1, 0, 0, "frecps v2.2d, v3.2d, v4.2d")                               \
+    X("SIMD floating point", 1, 0, 0, "frsqrts v5.4s, v6.4s, v7.4s")                              \
+    X("SIMD by element", 1, 0, 0, "mul v0.4s, v1.4s, v2.s[3]")                                    \
+    X("SIMD by element", 1, 0, 0, "mla v3.2s, v4.2s, v5.s[1]")                                    \
+    X("SIMD by element", 1, 0, 0, "mls v6.4s, v7.4s, v0.s[2]")                                    \
+    X("SIMD by element", 1, 0, 0, "smull v1.2d, v2.2s, v3.s[1]")                                  \
+    X("SIMD by element", 1, 0, 0, "umull2 v4.2d, v5.4s, v6.s[0]")                                 \
+    X("SIMD by element", 1, 0, 0, "smlal v7.2d, v0.2s, v1.s[3]")                                  \
+    X("SIMD by element", 1, 0, 0, "umlal2 v2.2d, v3.4s, v4.s[2]")                                 \
+    X("SIMD by element", 1, 0, 0, "smlsl2 v5.2d, v6.4s, v7.s[1]")                                 \
+    X("SIMD by element", 1, 0, 0, "umlsl v0.2d, v1.2s, v2.s[0]")                                  \
+    X("SIMD by element", 1, 0, 0, "fmul v3.2d, v4.2d, v5.d[1]")                                   \
+    X("SIMD by element", 1, 0, 0, "fmla v6.4s, v7.4s, v0.s[3]")                                   \
+    X("SIMD by element", 1, 0, 0, "fmls v1.2s, v2.2s, v3.s[1]")                                   \
+    X("SIMD by element", 1, 0, 0, "fmul v4.4s, v5.4s, v6.s[2]")                                   \
+    X("SIMD by element", 1, 0, 0, "fmla v7.2d, v0.2d, v1.d[0]")                                   \
+    X("SIMD", 1, 0, 0, "ssubw v0.4s, v1.4s, v2.4h")                                               \
+    X("SIMD", 1, 0, 0, "usubw2 v3.2d, v4.2d, v5.4s")                                              \
+    X("SIMD", 1, 0, 0, "ssubw2 v6.8h, v7.8h, v0.16b")                                             \
+    X("SIMD", 1, 0, 0, "usubw v1.2d, v2.2d, v3.2s")                                               \
+    X("SIMD", 1, 0, 0, "pmull v0.8h, v1.8b, v2.8b")                                               \
+    X("SIMD", 1, 0, 0, "pmull2 v3.8h, v4.16b, v5.16b")                                            \
+    X("SIMD", 1, 0, 0, "pmull v6.1q, v7.1d, v0.1d")                                               \
+    X("SIMD", 1, 0, 0, "pmull2 v1.1q, v2.2d, v3.2d")                                              \
     X("multiply-add, no register pinned", 1, 0, 0, "madd x1, x2, x3, x4")
 
 #define ASM_TEXT(group, n, p, p2, text) text "\n"
@@ -321,6 +383,7 @@ static void run(void *fn, const struct test *t, int k, struct io *out) {
         out->x[t->p2 - 1] = base + offsets[k] + 8;
     __asm__ volatile("msr fpsr, xzr");
     ((void (*)(struct io *)) fn)(out);
+    __asm__ volatile("msr fpcr, xzr");   // the rounding mode an msr fpcr under test left
     if (t->p)
         out->ox[t->p - 1] -= base;
     if (t->p2)
@@ -407,7 +470,7 @@ int main(void) {
         const char *name;
         int runs, wrong;
         char first[1400];
-    } groups[16];
+    } groups[24];
     int ngroups = 0;
     const uint32_t *w = insn_words;
     for (int i = 0; i < NTESTS; i++, w += tests[i - 1].n) {
@@ -480,6 +543,20 @@ int main(void) {
             got = o->ox[9 - 1];
             snprintf(detail, sizeof(detail), "%#llx", (unsigned long long) got);
             check("dczid_el0: 64-byte blocks (4)", got == 4, detail);
+        } else if (strcmp(t->text, "ldr w9, . + 8") == 0) {
+            got = o->ox[9 - 1];
+            snprintf(detail, sizeof(detail), "%#llx, want 0x91048000", (unsigned long long) got);
+            check("ldr w9, . + 8: the template's add x0, x0, #288", got == 0x91048000u, detail);
+        } else if (strcmp(t->text, "ldrsw x11, . + 12") == 0) {
+            got = o->ox[11 - 1];
+            snprintf(detail, sizeof(detail), "%#llx, want 0xffffffffad000400", (unsigned long long) got);
+            check("ldrsw x11, . + 12: the template's stp q0, q1, [x0], sign-extended", got == 0xffffffffad000400ull,
+                  detail);
+        } else if (strcmp(t->text, "msr fpcr, x9\n mrs x10, fpcr") == 0) {
+            got = o->ox[10 - 1];
+            want = o->x[9 - 1] & 0x07c80000u;   // FPCR_GUEST_BITS
+            snprintf(detail, sizeof(detail), "%#llx, want %#llx", (unsigned long long) got, (unsigned long long) want);
+            check("msr fpcr: the bits a guest may set, read back", got == want, detail);
         } else if (strcmp(t->text, "madd x1, x2, x3, x4") == 0 || strcmp(t->text, "madd x8, x9, x10, x11") == 0) {
             const uint64_t *in = o->x;   // the inputs, as run() set them (not overwritten by the run)
             int d = t->text[6] == '1' ? 1 : 8;

@@ -34,6 +34,7 @@
 #include <sys/ucontext.h>
 #include "asbestos/guest-arm64/jit.h"
 #include "asbestos/guest-arm64/aot.h"
+#include "asbestos/guest-arm64/fpcr.h"
 #include "asbestos/asbestos.h"
 #include "emu/cpu.h"
 #include "emu/mmu.h"
@@ -1135,8 +1136,32 @@ static bool emit_simd_more(struct em *e, uint32_t x) {
     uint32_t imm5 = (x >> 16) & 31;
     bool m = false, d_in = false;
     if ((x & 0xFFFFFC00u) == 0x5EF1B800u) {                                   // addp dd, vn.2d
-    } else if ((x & 0x9F20FC00u) == 0x0E201000u && ((x >> 22) & 3) != 3) {   // saddw/uaddw(2)
+    } else if (((x & 0x9F20FC00u) == 0x0E201000u || (x & 0x9F20FC00u) == 0x0E203000u) &&
+               ((x >> 22) & 3) != 3) {                                         // saddw/uaddw(2), ssubw/usubw(2)
         m = true;
+    } else if ((x & 0xBF20FC00u) == 0x0E20E000u) {                            // pmull(2): 8b to 8h, 1d to 1q
+        unsigned size = (x >> 22) & 3;
+        if (size != 0 && size != 3) return false;
+        m = true;
+    } else if ((x & 0x9F200400u) == 0x0E200400u && ((x >> 11) & 31) >= 0x18) {   // three same (FP)
+        // those the gadgets have (gen.c's table); .1d is reserved
+        unsigned op = (x >> 11) & 31, U = (x >> 29) & 1, a = (x >> 23) & 1;
+        if ((x & 0x00400000u) && !(x & 0x40000000u)) return false;
+        bool ok = (op == 0x18 && !U) || (op == 0x19 && !U) || op == 0x1A || (op == 0x1B && !a) ||
+                  (op == 0x1C && (U || !a)) || (op == 0x1D && U) || op == 0x1E || (op == 0x1F && (!U || !a));
+        if (!ok) return false;
+        m = true;
+        d_in = op == 0x19;                                                     // fmla, fmls
+    } else if ((x & 0x9F000400u) == 0x0F000000u) {                            // vector x indexed element
+        // S and D elements (Rm is M:Rm, any register): mul, mla, mls,
+        // [su]mull, [su]mlal, [su]mlsl (S); fmul, fmla, fmls (S, D)
+        unsigned op = (x >> 12) & 15, U = (x >> 29) & 1, size = (x >> 22) & 3;
+        bool integer = (!U && op == 0x8) || (U && (op == 0x0 || op == 0x4)) || op == 0xA || op == 0x2 || op == 0x6;
+        bool fp = !U && (op == 0x9 || op == 0x1 || op == 0x5);
+        if (integer ? size != 2 : !fp || size < 2) return false;
+        if (size == 3 && ((x & 0x00200000u) || !(x & 0x40000000u))) return false;   // d: L=1 or .1d reserved
+        m = true;
+        d_in = op != 0x8 && op != 0xA && op != 0x9;                            // the accumulating forms
     } else if ((x & 0xBFE0FC00u) == 0x0E000400u) {                            // dup vd.t, vn.t[i]
         if (!(imm5 & 15) || ((imm5 & 15) == 8 && !(x & 0x40000000u))) return false;
     } else if ((x & 0xFFE0FC00u) == 0x5E000400u) {                            // dup (mov) scalar, vn.t[i]
@@ -1184,6 +1209,15 @@ static bool emit_simd_more(struct em *e, uint32_t x) {
 static bool emit_fp(struct em *e, uint32_t x) {
     int rd = x & 31, rn = (x >> 5) & 31, rm = (x >> 16) & 31;
     unsigned type = (x >> 22) & 3;
+    if ((x & 0xFFFFFFE0u) == 0xD51B4400u) {                                   // msr fpcr
+        // as the gadget: the bits the guest may set, into cpu->fpcr and the host's
+        int ht = rd == 31 ? 31 : hreg(e, rd);
+        put(e, 0x52A00000u | ((FPCR_GUEST_BITS >> 16) << 5) | T_P);                      // movz w8, #bits, lsl #16
+        put(e, 0x0A000000u | ((uint32_t) T_P << 16) | ((uint32_t) ht << 5) | T_P);       // and w8, wt, w8
+        put(e, 0xB9000000u | ((offsetof(struct cpu_state, fpcr) / 4) << 10) | (1u << 5) | T_P);   // str w8, [x1, #fpcr]
+        put(e, 0xD51B4400u | T_P);                                                       // msr fpcr, x8
+        return true;
+    }
     if ((x & 0xFFFFFFE0u) == 0xD53B4400u || (x & 0xFFFFFFE0u) == 0xD53B4420u) {   // mrs fpcr / fpsr
         if (rd == 31) return true;
         int hd = hreg(e, rd);
@@ -1632,6 +1666,32 @@ writeback_base:
     return true;
 }
 
+// LDR (literal): w, x, sw; s, d, q. The address is pc's plus the offset, as
+// a guest pc value is (mov_guest: in PIC relative to the slot's base, so it
+// moves with the code as the literal does), then the TLB's as any load's
+static bool emit_ldr_literal(struct em *e, uint32_t x, uint64_t pc, unsigned spos) {
+    unsigned opc = x >> 30;
+    bool v = (x >> 26) & 1;
+    int rt = x & 31;
+    if (opc == 3 || (v && !simd_on)) return false;                            // prfm (literal); reserved
+    int64_t off = sext((x >> 5) & 0x7ffff, 19) * 4;
+    mov_guest(e, T_A, pc + (uint64_t) off, T_Q);
+    if (v) {
+        static const uint32_t ldr_v[3] = {0xBD400000u, 0xFD400000u, 0x3DC00000u};   // ldr s/d/q, [x9]
+        tlb_lookup(e, 4u << opc, false, spos);
+        put(e, ldr_v[opc] | (T_A << 5) | V_N);
+        vstore(e, V_N, rt);   // the host load zeroed the rest of the register
+        return true;
+    }
+    static const uint32_t ldr_x[3] = {0xB9400000u, 0xF9400000u, 0xB9800000u};       // ldr w/x, ldrsw, [x9]
+    tlb_lookup(e, opc == 1 ? 8 : 4, false, spos);
+    int ht = rt == 31 ? 31 : hreg(e, rt);
+    put(e, ldr_x[opc] | (T_A << 5) | (uint32_t) ht);
+    if (rt != 31)
+        writeback(e, rt);
+    return true;
+}
+
 // Whether a logical immediate's N:imms names a bitmask (DecodeBitMasks): N is
 // for a 64-bit element only, an element is 2 to 64 bits, and not all ones
 static bool bitmask_imm_defined(unsigned sf, unsigned n, unsigned imms) {
@@ -1651,12 +1711,21 @@ static bool emit_insn(struct em *e, uint32_t x, uint64_t pc, unsigned spos, bool
     *has_mem = false;
     if (x == NOP || (x & 0xFFFFF01Fu) == 0xD503201Fu)     // hints
         return true;
-    if ((x & 0xFFFFF0FFu) == 0xD50330BFu) {                // dmb: same barrier on the host
+    if ((x & 0xFFFFF0FFu) == 0xD50330BFu || (x & 0xFFFFF0FFu) == 0xD503309Fu ||
+        (x & 0xFFFFF0FFu) == 0xD50330DFu) {                // dmb, dsb, isb: same barrier on the host
         put(e, x);
         return true;
     }
     if (simd_on && emit_fp(e, x)) return !e->fail;                         // scalar FP
     if (simd_on && emit_simd_more(e, x)) return !e->fail;
+    if ((x & 0xFFFFFFE0u) == 0xD53BE000u) {                // mrs cntfrq_el0: the host's, as the gadget reads it
+        int rt = x & 31;
+        if (rt == 31) return true;
+        int h = hreg(e, rt);
+        put(e, 0xD53BE000u | (uint32_t) h);
+        writeback(e, rt);
+        return true;
+    }
     if ((x & 0xFFFFFFE0u) == 0xD53B00E0u) {                // mrs dczid_el0: the gadgets' 4 (64-byte blocks)
         int rt = x & 31;
         if (rt == 31) return true;
@@ -1763,6 +1832,8 @@ static bool emit_insn(struct em *e, uint32_t x, uint64_t pc, unsigned spos, bool
         *has_mem = true;
         if ((x & 0x3F000000u) == 0x08000000u)                 // exclusives, acquire/release, compare and swap
             return emit_excl(e, x, spos);
+        if ((x & 0x3B000000u) == 0x18000000u)                 // ldr (literal)
+            return emit_ldr_literal(e, x, pc, spos);
         return emit_ldst(e, x, spos);
     } else {
         return false;
@@ -3013,7 +3084,7 @@ void ish_aot_register(const struct aot_module *m) {
 
 // Bump whenever the code emitted for some guest instruction, stub or exit
 // changes: images made before would still pass every other check.
-#define JIT_CODE_VERSION 12
+#define JIT_CODE_VERSION 13
 
 // Everything the emitted code bakes in besides the gadgets it names: the
 // conventions, the struct layouts it loads from and the TLB / block cache
@@ -3027,7 +3098,7 @@ uint32_t jit_abi(void) {
         offsetof(struct fiber_block, jit_ctx),
         CPU_pc, CPU_cycle, CPU_poked_ptr, CPU_tls_ptr, offsetof(struct cpu_state, sp),
         offsetof(struct cpu_state, regs), offsetof(struct cpu_state, nzcv), offsetof(struct cpu_state, fp),
-        offsetof(struct cpu_state, excl_addr), offsetof(struct cpu_state, excl_val),
+        offsetof(struct cpu_state, excl_addr), offsetof(struct cpu_state, excl_val), offsetof(struct cpu_state, fpcr),
         LOCAL_last_block, LOCAL_ret_cache,
         sizeof(struct tlb_entry), offsetof(struct tlb_entry, page), offsetof(struct tlb_entry, page_if_writable),
         offsetof(struct tlb_entry, gen), offsetof(struct tlb_entry, data_minus_addr), TLB_BITS, PAGE_BITS,

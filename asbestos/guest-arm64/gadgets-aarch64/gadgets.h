@@ -9,11 +9,9 @@
 // #define ENABLE_WRITE_WATCHPOINT  1    // Check every store against watched pages (arm via ISH_WATCH_PAGE/ISH_WATCH_PAGE2; ~4 insns per store when compiled in)
 // =================================
 
-// Interrupt types (from emu/interrupt.h)
-// The FPCR bits a guest may set: AHP, DN, FZ, RMode and FZ16. Not the trap
-// enables, nor FEAT_AFP's FIZ, AH and NEP, which are not offered to it.
-#define FPCR_GUEST_BITS 0x07c80000
+#include "../fpcr.h"   // FPCR_GUEST_BITS
 
+// Interrupt types (from emu/interrupt.h)
 #define INT_NONE -1
 #define INT_DIV 0
 #define INT_DEBUG 1

@@ -760,7 +760,7 @@ EOF
         status=1
     fi
     echo
-    echo "########## JIT: atomics, SIMD loads and stores, dc zva, SIMD arithmetic, the gadgets' results and its alike (ish -Djit=true; skips otherwise) ##########"
+    echo "########## JIT: atomics, SIMD loads and stores, literal loads, dc zva, barriers, FPCR, SIMD arithmetic, the gadgets' results and its alike (ish -Djit=true; skips otherwise) ##########"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_jit_insns" tests/regress/regress_jit_insns.c; then
         out=$(ISH_JIT_PIC=1 timeout 300 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_jit_insns 2>&1)
         echo "$out"
