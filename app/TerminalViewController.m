@@ -44,6 +44,59 @@
 @implementation ColumnKeyHold
 @end
 
+// The column's keys, one over another (addColumnKeys), a hairline between
+// each two shown: without a color of their own till pressed, on the glass,
+// where one key ended and the next began was not to be seen. In the gap
+// between them, as wide as a key less 8 points at each end, a pixel high, in
+// separatorColor (the theme's).
+@interface ColumnKeysView : UIStackView
+@property (nonatomic) UIColor *separatorColor;
+@end
+@implementation ColumnKeysView {
+    NSMutableArray<CALayer *> *_separators;
+}
+
+- (void)setSeparatorColor:(UIColor *)separatorColor {
+    _separatorColor = separatorColor;
+    [self setNeedsLayout];
+}
+
+// Between the keys shown, the hidden ones (the profile's, the keyboard's)
+// skipped; put there at once, not moved with the keyboard's animation
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    if (_separators == nil)
+        _separators = [NSMutableArray new];
+    NSMutableArray<UIView *> *shown = [NSMutableArray new];
+    for (UIView *key in self.arrangedSubviews) {
+        if (!key.hidden)
+            [shown addObject:key];
+    }
+    NSUInteger count = shown.count > 1 ? shown.count - 1 : 0;
+    CGFloat scale = MAX(self.traitCollection.displayScale, 1);
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    while (_separators.count < count) {
+        CALayer *separator = [CALayer layer];
+        [self.layer addSublayer:separator];
+        [_separators addObject:separator];
+    }
+    for (NSUInteger i = 0; i < _separators.count; i++) {
+        CALayer *separator = _separators[i];
+        separator.hidden = i >= count;
+        if (separator.hidden)
+            continue;
+        CGRect above = shown[i].frame, below = shown[i + 1].frame;
+        CGFloat middle = (CGRectGetMaxY(above) + CGRectGetMinY(below)) / 2;
+        separator.frame = CGRectMake(CGRectGetMinX(above) + 8, floor(middle * scale) / scale,
+                                     CGRectGetWidth(above) - 16, 1 / scale);
+        separator.backgroundColor = self.separatorColor.CGColor;
+    }
+    [CATransaction commit];
+}
+
+@end
+
 // What the column's two middle keys are, by the program in the foreground
 // (columnProfileForSession:): tab and / for a shell, an AI agent and most
 // programs; : and / for vi; space and q for a pager. An AI agent's pad and
@@ -118,11 +171,11 @@ typedef NS_ENUM(NSInteger, ColumnKeyProfile) {
 // keyboard over the terminal. With the keyboard up, the arrows' pad and
 // Ctrl-C only, while the CPU and the memory leave them the room above the
 // keyboard's bar (columnKeysAboveKeyboard).
-@property UIStackView *columnKeys;
+@property ColumnKeysView *columnKeys;
 // The keys' capsule of glass, as the system's own bars in the column are
 // (Feather's tab bar and its toolbar's buttons, the phone's screenshots): the
-// keys in it without a key's color of their own, until pressed. Hidden with
-// none of its keys shown.
+// keys in it without a key's color of their own, until pressed, a hairline
+// between each two (ColumnKeysView). Hidden with none of its keys shown.
 @property UIVisualEffectView *columnKeysGlass;
 // With the keyboard down: esc and return, the profile's middle keys
 // (columnProfileKeys) and the keyboard's own two (columnKeysAlways, by
@@ -964,6 +1017,7 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
         }
         for (UILabel *badge in self.columnKeyBadges)
             badge.textColor = [foreground colorWithAlphaComponent:0.55];
+        self.columnKeys.separatorColor = [foreground colorWithAlphaComponent:0.3];
         // the gaps between the keys and the rest of the row
         self.barView.backgroundColor = self.view.backgroundColor;
     }];
@@ -1390,8 +1444,8 @@ static const CGFloat kColumnKeysBottom = 24;
     BarButton *enter = [self columnKey:@"return" name:NSLocalizedString(@"Return", @"The column's return key, read aloud")];
     [enter addTarget:self action:@selector(pressReturn:) forControlEvents:UIControlEventTouchUpInside];
 
-    UIStackView *keys = [[UIStackView alloc] initWithArrangedSubviews:@[escape, tab, colon, space, slash, quit, pad, interrupt,
-                                                                        previous, next, enter]];
+    ColumnKeysView *keys = [[ColumnKeysView alloc] initWithArrangedSubviews:@[escape, tab, colon, space, slash, quit, pad,
+                                                                              interrupt, previous, next, enter]];
     keys.axis = UILayoutConstraintAxisVertical;
     keys.spacing = kColumnKeysSpacing;
     keys.translatesAutoresizingMaskIntoConstraints = NO;
