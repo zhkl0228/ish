@@ -39,18 +39,19 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     // An IPv4 packet from the device to the peer comes back from the peer to
     // the device, and the device's answer, to the peer, the same. The two
     // addresses only change places, so neither the IP header's checksum nor
-    // TCP's and UDP's (which cover them) changes.
+    // TCP's and UDP's (which cover them) changes. They differ in their last
+    // byte only, compared and set in place: not two arrays made for each
+    // packet to compare them, as every packet of the helper's comes through.
     private func reflect() {
         packetFlow.readPackets { packets, protocols in
             var reflected = packets
             for i in reflected.indices where protocols[i].int32Value == AF_INET && reflected[i].count >= 20 {
                 reflected[i].withUnsafeMutableBytes { (header: UnsafeMutableRawBufferPointer) in
-                    let source = Array(header[12..<16]), destination = Array(header[16..<20])
-                    if source == Self.device {
-                        header.copyBytes(from: Self.peer, at: 12)
+                    if Self.isTunnelAddress(header, at: 12) && header[15] == Self.device[3] {
+                        header[15] = Self.peer[3]
                     }
-                    if destination == Self.peer {
-                        header.copyBytes(from: Self.device, at: 16)
+                    if Self.isTunnelAddress(header, at: 16) && header[19] == Self.peer[3] {
+                        header[19] = Self.device[3]
                     }
                 }
             }
@@ -58,10 +59,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             self.reflect()
         }
     }
-}
 
-private extension UnsafeMutableRawBufferPointer {
-    func copyBytes(from bytes: [UInt8], at offset: Int) {
-        UnsafeMutableRawBufferPointer(rebasing: self[offset..<offset + bytes.count]).copyBytes(from: bytes)
+    // Whether the address at offset is in 10.7.0.x, the device's and the peer's
+    private static func isTunnelAddress(_ header: UnsafeMutableRawBufferPointer, at offset: Int) -> Bool {
+        header[offset] == device[0] && header[offset + 1] == device[1] && header[offset + 2] == device[2]
     }
 }
