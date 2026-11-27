@@ -11,9 +11,9 @@
 
 #import <NetworkExtension/NetworkExtension.h>
 #import <arpa/inet.h>
-#import <fcntl.h>
+#import <ifaddrs.h>
+#import <net/if.h>
 #import <netinet/in.h>
-#import <poll.h>
 #import <sys/socket.h>
 #import <sys/sysctl.h>
 #import <unistd.h>
@@ -69,26 +69,25 @@ static bool JITTranslating(NSString **region) {
     return translating;
 }
 
-// Whether a loopback tunnel is up: the device answers at the peer address
-// (StikJIT's default, 10.7.0.1), refusing or taking a connection at once.
-// Without a tunnel the address leads nowhere.
+// Whether a loopback tunnel is up, iSH's (app/LoopbackTunnel) or
+// LocalDevVPN's: an interface up with the device's address in it, 10.7.0.0,
+// the peer (StikJIT's default, 10.7.0.1) the other end. A connection tried to
+// the peer instead waited out its second at every start, the tunnel not up
+// yet: the address then leads out the default route, where nothing answers.
 static bool LoopbackUp(void) {
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0)
+    struct ifaddrs *interfaces;
+    if (getifaddrs(&interfaces) != 0)
         return false;
-    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
-    struct sockaddr_in peer = {.sin_len = sizeof(peer), .sin_family = AF_INET, .sin_port = htons(49152)};
-    inet_pton(AF_INET, "10.7.0.1", &peer.sin_addr);
-    int err = connect(fd, (struct sockaddr *) &peer, sizeof(peer)) == 0 ? 0 : errno;
-    if (err == EINPROGRESS) {
-        struct pollfd p = {.fd = fd, .events = POLLOUT};
-        if (poll(&p, 1, 1000) == 1) {
-            socklen_t len = sizeof(err);
-            getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len);
-        }
+    struct in_addr device;
+    inet_pton(AF_INET, "10.7.0.0", &device);
+    bool up = false;
+    for (struct ifaddrs *i = interfaces; i != NULL; i = i->ifa_next) {
+        if (i->ifa_addr != NULL && i->ifa_addr->sa_family == AF_INET && (i->ifa_flags & IFF_UP) &&
+                ((struct sockaddr_in *) i->ifa_addr)->sin_addr.s_addr == device.s_addr)
+            up = true;
     }
-    close(fd);
-    return err == 0 || err == ECONNREFUSED;
+    freeifaddrs(interfaces);
+    return up;
 }
 
 // The private NSExtension: an app can start an extension of its own on
