@@ -1,0 +1,23 @@
+#!/bin/sh
+# Installed by the iSH app, which rewrites this file when it updates the root.
+# ish-ui ACTION: brings up something in iSH's window, for a program to look at
+# it then (ish-screenshot). Done without animation, it returns once the window
+# shows it (/proc/ish/ui). ACTION is one of:
+#   settings [appearance|keyboard|icon|jit|clipboard]
+#                        Settings, or one of its pages, over the terminal
+#   back                 the page before, in what is over the terminal
+#   close                what is over the terminal, closed
+#   tab N                the Nth tab
+#   keyboard show|hide   the keyboard, given to the terminal or taken
+#   clipboard show|hide  the clipboard's shelf
+# Refused while iSH is not in front, and while an alert waits for an answer.
+if [ $# -eq 0 ]; then
+    sed -n '3,13s/^# \{0,1\}//p' "$0" >&2
+    exit 1
+fi
+# busybox's echo writes it in one write, which the file takes as the whole
+# action
+if ! echo -n "$*" > /proc/ish/ui; then
+    echo "ish-ui: $* not done (invalid argument: no such action; try again: iSH not in front; busy: an alert waits for an answer)" >&2
+    exit 1
+fi

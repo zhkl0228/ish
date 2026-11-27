@@ -30,6 +30,8 @@
 #import "TerminalViewController.h"
 #import "UIApplication+OpenURL.h"
 #import "Screenshot.h"
+#import "UIActions.h"
+#import "DeviceStatus.h"
 #import "UserPreferences.h"
 #include "kernel/init.h"
 #include "kernel/calls.h"
@@ -431,8 +433,16 @@ static void mount_documents(void) {
     proc_ish_version = strdup(ishVersion.UTF8String);
     // A program's URL (xdg-open) opens once the person allows it
     open_url = ask_to_open_url;
-    // What the screen shows of the app, for a program to see (ish-screenshot)
+    // What the screen shows of the app, for a program to see (ish-screenshot);
+    // what it brings up in the app to see (ish-ui); the image on the clipboard
+    // (ish-paste-image)
     take_screenshot = take_app_screenshot;
+    do_ui_action = do_app_ui_action;
+    get_clipboard_image = clipboard_image_png;
+    // The device's network and power, for a program to decide by
+    DeviceStatusStart();
+    get_network_report = device_network_report;
+    get_power_report = device_power_report;
     get_thermal_state = thermal_state;
     // this defaults key is set when taking app store screenshots
     extern const char *uname_hostname_override;

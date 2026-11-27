@@ -32,6 +32,20 @@
 - (BOOL)showSessionWithUUID:(NSUUID *)uuid;
 @property UISceneSession *sceneSession;
 
+// What a program asks of the window (/proc/ish/ui, UIActions.m), each done at
+// once, without animation: Settings over the terminal at page, pushed over
+// its first page (that alone if nil), what was over the terminal gone first
+- (void)showSettingsPage:(UIViewController *)page;
+// Clipboard's settings over the terminal, what was over it gone first
+- (void)showClipboardSettingsPage;
+@property (readonly) NSUInteger tabCount;
+- (void)selectTabAtIndex:(NSUInteger)index;
+// Whether the terminal has the keyboard, which setting it gives or takes
+@property (nonatomic) BOOL keyboardShown;
+// The clipboard's shelf over the terminal, or away
+- (void)showClipboard;
+- (void)hideClipboard;
+
 @end
 
 extern struct tty_driver ios_tty_driver;

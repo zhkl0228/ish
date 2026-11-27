@@ -5,6 +5,7 @@
 #include "kernel/errno.h"
 #include "debug.h"
 #import "ClipboardStore.h"
+#import "PasteboardDevice.h"
 
 /**
  * buffer is dynamically sized buffer of size buffer_cap
@@ -255,3 +256,35 @@ struct dev_ops clipboard_dev = {
     .fd.close = clipboard_close,
     .fd.fsync = clipboard_write_sync,
 };
+
+// /proc/ish/clipboard_image (fs/proc/ish.h), read on the reading program's
+// thread as the text of /dev/clipboard is: hasImages asks nothing of the
+// person, the image itself may be asked for (iOS's Allow Paste), and is nil if
+// refused. A PNG drawn upright, at the image's size: a photo's orientation
+// (EXIF's) applied, which UIImagePNGRepresentation leaves out. Not made
+// smaller: Claude Code scales down what is too large for it (an 18 MB PNG of
+// 3000x2000 sent as 2353x1568, 2026-11-27).
+int clipboard_image_png(void **png, size_t *size) {
+    @autoreleasepool {
+        UIPasteboard *pasteboard = UIPasteboard.generalPasteboard;
+        if (!pasteboard.hasImages)
+            return _ENODATA;
+        UIImage *image = pasteboard.image;
+        if (image == nil)
+            return _EACCES;
+        UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat preferredFormat];
+        format.scale = image.scale;
+        format.preferredRange = UIGraphicsImageRendererFormatRangeStandard;
+        UIImage *upright = [[[UIGraphicsImageRenderer alloc] initWithSize:image.size format:format]
+                            imageWithActions:^(UIGraphicsImageRendererContext *_) {
+            [image drawAtPoint:CGPointZero];
+        }];
+        NSData *data = UIImagePNGRepresentation(upright);
+        *png = malloc(data.length);
+        if (*png == NULL)
+            return _ENOMEM;
+        memcpy(*png, data.bytes, data.length);
+        *size = data.length;
+        return 0;
+    }
+}

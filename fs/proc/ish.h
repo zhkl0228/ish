@@ -27,6 +27,20 @@ extern int (*open_url)(const char *url, size_t size);
 // while no window of the app is in front, where iOS draws none. NULL in the
 // command line tool, which has no windows.
 extern int (*take_screenshot)(void **png, size_t *size);
+// An action in the app's window (/proc/ish/ui, ish-ui), the bytes written:
+// done without animation, it returns once the window shows it, 0, or the
+// error the write gives (UIActions.m). NULL in the command line tool.
+extern int (*do_ui_action)(const char *action, size_t size);
+// The image on the clipboard, a PNG (/proc/ish/clipboard_image): 0 with *png
+// malloc'd for the caller to free, or the error the read gives, _ENODATA with
+// none there, _EACCES if pasting it was not allowed. NULL in the command line
+// tool.
+extern int (*get_clipboard_image)(void **png, size_t *size);
+// The device's network and power now (/proc/ish/network, /proc/ish/power),
+// as text, malloc'd for the caller to free; the network's NULL until iOS has
+// said what it is. NULL in the command line tool.
+extern char *(*get_network_report)(void);
+extern char *(*get_power_report)(void);
 // The processes the meters' details list, those taking the most of the CPUs
 // (app/MonitorSampler.m). Each process (its leader) but init and the zombies:
 // its pid, when it started (a pid used again is another process: start_ticks

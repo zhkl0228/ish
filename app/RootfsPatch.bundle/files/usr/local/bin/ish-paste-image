@@ -1,0 +1,18 @@
+#!/bin/sh
+# Installed by the iSH app, which rewrites this file when it updates the root.
+# ish-paste-image [FILE]: the image on the clipboard (a screenshot's Copy, an
+# image copied in Photos or Safari), a PNG, written to FILE
+# (/tmp/ish-clipboard.png if none is named), whose path it prints: for Claude
+# Code to look at, its Read taking an image (/proc/ish/clipboard_image). iOS
+# may ask whether to allow iSH to paste.
+if [ $# -gt 1 ]; then
+    echo 'usage: ish-paste-image [FILE]' >&2
+    exit 1
+fi
+file=${1:-/tmp/ish-clipboard.png}
+if ! cat /proc/ish/clipboard_image > "$file"; then
+    rm -f "$file"
+    echo 'ish-paste-image: none taken (no data available: no image on the clipboard; permission denied: pasting not allowed)' >&2
+    exit 1
+fi
+echo "$file"

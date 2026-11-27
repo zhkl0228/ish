@@ -1218,6 +1218,30 @@ static NSURL *SavedTabsDirectory(void) {
     [self.termView resignFirstResponder];
 }
 
+- (void)showSettingsPage:(UIViewController *)page {
+    [self dismissViewControllerAnimated:NO completion:nil];
+    UINavigationController *navigationController = [[UIStoryboard storyboardWithName:@"About" bundle:nil] instantiateInitialViewController];
+    if (page != nil)
+        [navigationController pushViewController:page animated:NO];
+    [self presentViewController:navigationController animated:NO completion:nil];
+    [self.termView resignFirstResponder];
+}
+
+- (NSUInteger)tabCount {
+    return self.tabs.count;
+}
+
+- (BOOL)keyboardShown {
+    return self.termView.isFirstResponder;
+}
+
+- (void)setKeyboardShown:(BOOL)keyboardShown {
+    if (keyboardShown)
+        [self.termView becomeFirstResponder];
+    else
+        [self.termView resignFirstResponder];
+}
+
 - (void)resizeBar {
     // Keys 41 points wide on a phone and 50 on an iPad, which in Slide Over is
     // as narrow as a phone; narrower if the row is (32 on a 393-point iPhone,
@@ -2751,16 +2775,24 @@ static NSString *ShellQuoted(NSString *string) {
     [self.shelf promptForNewPinboard];
 }
 
-- (void)showClipboardSettings:(id)sender {
+- (UIViewController *)clipboardSettings {
     __weak typeof(self) weakSelf = self;
-    UIViewController *settings = [ClipboardSettingsViewController navigationControllerWithDismissHandler:^{
+    return [ClipboardSettingsViewController navigationControllerWithDismissHandler:^{
         if (weakSelf.shelfShown)
             [weakSelf.shelf becomeFirstResponder];
     }];
+}
+
+- (void)showClipboardSettings:(id)sender {
     UIViewController *presenter = self;
     while (presenter.presentedViewController != nil)
         presenter = presenter.presentedViewController;
-    [presenter presentViewController:settings animated:YES completion:nil];
+    [presenter presentViewController:[self clipboardSettings] animated:YES completion:nil];
+}
+
+- (void)showClipboardSettingsPage {
+    [self dismissViewControllerAnimated:NO completion:nil];
+    [self presentViewController:[self clipboardSettings] animated:NO completion:nil];
 }
 
 // The stack panel follows the store, so every window shows it while it is open.

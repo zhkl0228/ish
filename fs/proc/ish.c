@@ -30,6 +30,10 @@ bool (*remove_user_default)(const char *name);
 char *(*get_documents_directory)(void);
 int (*open_url)(const char *url, size_t size);
 int (*take_screenshot)(void **png, size_t *size);
+int (*do_ui_action)(const char *action, size_t size);
+int (*get_clipboard_image)(void **png, size_t *size);
+char *(*get_network_report)(void);
+char *(*get_power_report)(void);
 int (*get_thermal_state)(void);
 char *(*get_builtin_jit_report)(void);
 
@@ -403,7 +407,51 @@ static int proc_ish_show_screenshot(struct proc_entry *UNUSED(entry), struct pro
     return 0;
 }
 
+// An action in the app's window, one write for the whole of it; the write
+// returns once it is done
+static ssize_t proc_ish_write_ui(struct proc_entry *UNUSED(entry), struct proc_data *data, off_t UNUSED(off)) {
+    if (do_ui_action == NULL)
+        return _ENODEV;
+    int err = do_ui_action(data->data, data->size);
+    return err < 0 ? err : (ssize_t) data->size;
+}
+
+// The image on the clipboard, a PNG, taken at each read from the start
+static int proc_ish_show_clipboard_image(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    if (get_clipboard_image == NULL)
+        return _ENODEV;
+    void *png;
+    size_t size;
+    int err = get_clipboard_image(&png, &size);
+    if (err < 0)
+        return err;
+    proc_buf_append(buf, png, size);
+    free(png);
+    return 0;
+}
+
+static int proc_ish_show_network(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    if (get_network_report == NULL)
+        return _ENODEV;
+    char *report = get_network_report();
+    if (report == NULL)
+        return _EAGAIN;
+    proc_printf(buf, "%s", report);
+    free(report);
+    return 0;
+}
+
+static int proc_ish_show_power(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    if (get_power_report == NULL)
+        return _ENODEV;
+    char *report = get_power_report();
+    proc_printf(buf, "%s", report);
+    free(report);
+    return 0;
+}
+
 struct proc_children proc_ish_children = PROC_CHILDREN({
+    {"clipboard_image", .show = proc_ish_show_clipboard_image},
     {"colors", .show = proc_ish_show_colors},
     {".defaults", S_IFDIR, .readdir = proc_ish_underlying_defaults_readdir},
     {"defaults", S_IFDIR, .readdir = proc_ish_defaults_readdir},
@@ -412,11 +460,14 @@ struct proc_children proc_ish_children = PROC_CHILDREN({
 #ifdef ISH_JIT
     {"jit", .show = proc_ish_show_jit, .pwrite = proc_ish_write_jit},
 #endif
+    {"network", .show = proc_ish_show_network},
     {"open_url", S_IFREG | 0222, .pwrite = proc_ish_write_open_url},
     {"poll_spin", .show = proc_ish_show_poll_spin, .pwrite = proc_ish_write_poll_spin},
+    {"power", .show = proc_ish_show_power},
     {"screenshot", .show = proc_ish_show_screenshot},
     {"thermal", .show = proc_ish_show_thermal},
     {"threads", .show = proc_ish_show_threads},
     {"translations", S_IFREG | 0644, .show = proc_ish_show_translations, .pwrite = proc_ish_write_translations},
+    {"ui", S_IFREG | 0222, .pwrite = proc_ish_write_ui},
     {"version", .show = proc_ish_show_version},
 });

@@ -575,7 +575,7 @@
         <!--External Keyboard-->
         <scene sceneID="VbH-40-Znm">
             <objects>
-                <tableViewController title="External Keyboard" id="Zzy-IN-laJ" customClass="AboutExternalKeyboardViewController" sceneMemberID="viewController">
+                <tableViewController title="External Keyboard" storyboardIdentifier="ExternalKeyboard" id="Zzy-IN-laJ" customClass="AboutExternalKeyboardViewController" sceneMemberID="viewController">
                     <tableView key="view" clipsSubviews="YES" contentMode="scaleToFill" alwaysBounceVertical="YES" dataMode="static" style="grouped" separatorStyle="default" rowHeight="-1" estimatedRowHeight="-1" sectionHeaderHeight="18" sectionFooterHeight="18" id="ZlS-Ig-a8Z">
                         <rect key="frame" x="0.0" y="0.0" width="320" height="568"/>
                         <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
@@ -785,7 +785,7 @@
         <!--App Icon-->
         <scene sceneID="jc8-Gv-xpK">
             <objects>
-                <viewController title="App Icon" id="cfv-rk-mN1" customClass="AltIconViewController" sceneMemberID="viewController">
+                <viewController title="App Icon" storyboardIdentifier="AppIcon" id="cfv-rk-mN1" customClass="AltIconViewController" sceneMemberID="viewController">
                     <view key="view" contentMode="scaleToFill" id="bZC-Ac-YDX">
                         <rect key="frame" x="0.0" y="0.0" width="320" height="568"/>
                         <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
@@ -955,7 +955,7 @@
         <!--Appearance-->
         <scene sceneID="Sh1-9Z-h4V">
             <objects>
-                <tableViewController title="Appearance" id="ItN-wa-djf" customClass="AboutAppearanceViewController" sceneMemberID="viewController">
+                <tableViewController title="Appearance" storyboardIdentifier="Appearance" id="ItN-wa-djf" customClass="AboutAppearanceViewController" sceneMemberID="viewController">
                     <tableView key="view" clipsSubviews="YES" contentMode="scaleToFill" alwaysBounceVertical="YES" dataMode="prototypes" style="grouped" separatorStyle="default" rowHeight="-1" estimatedRowHeight="-1" sectionHeaderHeight="18" sectionFooterHeight="18" id="mE8-Gn-C1h">
                         <rect key="frame" x="0.0" y="0.0" width="320" height="568"/>
                         <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>

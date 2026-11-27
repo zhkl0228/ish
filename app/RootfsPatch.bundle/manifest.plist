@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>version</key>
-    <integer>36</integer>
+    <integer>37</integer>
     <key>files</key>
     <array>
         <dict>
@@ -151,6 +151,26 @@
             <string>files/usr/local/bin/ish-screenshot</string>
             <key>dst</key>
             <string>/usr/local/bin/ish-screenshot</string>
+            <!-- 0755 -->
+            <key>mode</key>
+            <integer>493</integer>
+        </dict>
+        <!-- brings up something in iSH's window for Claude Code to look at (/proc/ish/ui) -->
+        <dict>
+            <key>src</key>
+            <string>files/usr/local/bin/ish-ui</string>
+            <key>dst</key>
+            <string>/usr/local/bin/ish-ui</string>
+            <!-- 0755 -->
+            <key>mode</key>
+            <integer>493</integer>
+        </dict>
+        <!-- the image on the clipboard, a PNG for Claude Code to look at (/proc/ish/clipboard_image) -->
+        <dict>
+            <key>src</key>
+            <string>files/usr/local/bin/ish-paste-image</string>
+            <key>dst</key>
+            <string>/usr/local/bin/ish-paste-image</string>
             <!-- 0755 -->
             <key>mode</key>
             <integer>493</integer>
