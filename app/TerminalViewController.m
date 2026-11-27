@@ -118,6 +118,11 @@ typedef NS_ENUM(NSInteger, ColumnKeyProfile) {
 // pad and Ctrl-C only, at the column's bottom above the keyboard's bar
 // (columnKeysAboveKeyboard), where the CPU and the memory leave the room.
 @property UIStackView *columnKeys;
+// The keys' capsule of glass, as the system's own bars in the column are
+// (Feather's tab bar and its toolbar's buttons, the phone's screenshots): the
+// keys in it without a key's color of their own, until pressed. Hidden with
+// none of its keys shown.
+@property UIVisualEffectView *columnKeysGlass;
 // With the keyboard down: esc and return, the profile's middle keys
 // (columnProfileKeys) and the keyboard's own two (columnKeysAlways, by
 // profile too). With it up, those two only, as the bar has the rest: the
@@ -946,9 +951,12 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
         }
         self.monitorStrip.foregroundColor = foreground;
         self.monitorColumn.foregroundColor = foreground;
+        // The column's keys on their glass: the theme's foreground, a circle
+        // of it under the finger as the system's bar marks its chosen tab
+        self.columnKeysGlass.overrideUserInterfaceStyle = UserPreferences.shared.requestingDarkAppearance ? UIUserInterfaceStyleDark : UIUserInterfaceStyleLight;
         for (BarButton *key in self.columnKeys.arrangedSubviews) {
-            [key setKeyColor:[background ish_blendedWithColor:foreground fraction:0.18]
-                pressedColor:[background ish_blendedWithColor:foreground fraction:0.36]
+            [key setKeyColor:UIColor.clearColor
+                pressedColor:[foreground colorWithAlphaComponent:0.18]
                    textColor:foreground];
         }
         for (UILabel *badge in self.columnKeyBadges)
@@ -1311,15 +1319,24 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
 
 #pragma mark The column's keys
 
+// A key's side; the capsule's width (the system's in the column is 49
+// points); the keys' ends in it, as far from its ends as from its sides; the
+// keys' gap; the capsule's bottom over the screen's (addColumnKeys)
+static const CGFloat kColumnKeySide = 40;
+static const CGFloat kColumnKeysWidth = 48;
+static const CGFloat kColumnKeysInset = 4;
+static const CGFloat kColumnKeysSpacing = 4;
+static const CGFloat kColumnKeysBottom = 24;
+
 // One over another at the bottom of the column, under the meters' middle,
-// above the home indicator: esc; two keys for what runs (columnProfileKeys,
-// updateColumnProfile): tab and / for a shell, an AI agent and most programs,
-// : and / for vi, space and q for a pager; the arrows' pad (arrowPadKey) and
-// Ctrl-C, sent only held (a tap would end what runs), or for an AI agent the
-// up arrow, Ctrl-C held, and the down arrow; return. Held, esc is
-// backspace, tab shift-tab, / Ctrl-U (clearing the line) and space b (a
-// pager's page up), each said in a callout before it is let go
-// (columnKeyHeld:) and marked in its key's corner (badgeKey:with:). Esc and /
+// in a capsule of glass by the home indicator: esc; two keys for what runs
+// (columnProfileKeys, updateColumnProfile): tab and / for a shell, an AI
+// agent and most programs, : and / for vi, space and q for a pager; the
+// arrows' pad (arrowPadKey) and Ctrl-C, sent only held (a tap would end what
+// runs), or for an AI agent the up arrow, Ctrl-C held, and the down arrow;
+// return. Held, esc is backspace, tab shift-tab, / Ctrl-U (clearing the
+// line) and space b (a pager's page up), each said in a callout before it is
+// let go (columnKeyHeld:) and marked in its key's corner (badgeKey:with:). Esc and /
 // are named as on the bar; the bar's / keeps its held symbols, whose popup
 // opens over its row.
 - (void)addColumnKeys {
@@ -1368,11 +1385,16 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
     UIStackView *keys = [[UIStackView alloc] initWithArrangedSubviews:@[escape, tab, colon, space, slash, quit, pad, interrupt,
                                                                         previous, next, enter]];
     keys.axis = UILayoutConstraintAxisVertical;
-    keys.spacing = 8;
+    keys.spacing = kColumnKeysSpacing;
     keys.translatesAutoresizingMaskIntoConstraints = NO;
     keys.hidden = YES;
-    [self.view addSubview:keys];
+    UIVisualEffectView *glass = ClipGlassView(kColumnKeysWidth / 2);
+    glass.translatesAutoresizingMaskIntoConstraints = NO;
+    glass.hidden = YES;
+    [glass.contentView addSubview:keys];
+    [self.view addSubview:glass];
     self.columnKeys = keys;
+    self.columnKeysGlass = glass;
     self.columnKeysEdge = @[escape, enter];
     self.columnProfileKeys = @{
         @(ColumnKeyProfileDefault): @[tab, slash],
@@ -1386,14 +1408,25 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
         @(ColumnKeyProfilePager): @[pad, interrupt],
         @(ColumnKeyProfileAgent): @[previous, next],
     };
-    // The meters' room is the column's, down to the keys: the rows that fit
-    // in it show (MonitorColumnView's rowsForRoom:)
-    [self.monitorColumn.bottomAnchor constraintEqualToAnchor:keys.topAnchor constant:-8].active = YES;
-    self.columnKeysAtBottom = [keys.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor
-                                                                constant:-8];
+    // The keys in their capsule, kColumnKeysInset from its ends; the meters'
+    // room is the column's, down to the capsule: the rows that fit in it show
+    // (MonitorColumnView's rowsForRoom:)
+    [NSLayoutConstraint activateConstraints:@[
+        [glass.widthAnchor constraintEqualToConstant:kColumnKeysWidth],
+        [glass.centerXAnchor constraintEqualToAnchor:self.monitorColumn.metersCenterXAnchor],
+        [keys.centerXAnchor constraintEqualToAnchor:glass.centerXAnchor],
+        [keys.topAnchor constraintEqualToAnchor:glass.topAnchor constant:kColumnKeysInset],
+        [keys.bottomAnchor constraintEqualToAnchor:glass.bottomAnchor constant:-kColumnKeysInset],
+        [self.monitorColumn.bottomAnchor constraintEqualToAnchor:glass.topAnchor constant:-8],
+    ]];
+    // Where the system's bar in the column ends: 23.7 points over the screen's
+    // bottom folded, 23.3 unfolded (Feather's tab bar, the phone's
+    // screenshots), in the safe area's bottom 34 kept for the home indicator,
+    // which is in the screen's middle, not under the column
+    self.columnKeysAtBottom = [glass.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor
+                                                                 constant:-kColumnKeysBottom];
     // as the terminal's bottom is (applyBottomPad)
-    self.columnKeysAboveKeyboard = [keys.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor];
-    [keys.centerXAnchor constraintEqualToAnchor:self.monitorColumn.metersCenterXAnchor].active = YES;
+    self.columnKeysAboveKeyboard = [glass.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor];
     self.columnKeyFeedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
     self.holdFeedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
     self.holdChangeFeedback = [UISelectionFeedbackGenerator new];
@@ -1702,7 +1735,8 @@ static NSString *ArrowGlyph(char direction) {
 - (BarButton *)columnKey:(NSString *)symbol name:(NSString *)name {
     BarButton *key = [self columnKeyNamed:nil name:name];
     [key setImage:[UIImage systemImageNamed:symbol] forState:UIControlStateNormal];
-    [key setPreferredSymbolConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:15
+    // A bar button's symbol's size, as the system's bar beside them has
+    [key setPreferredSymbolConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:17
                                                                                          weight:UIImageSymbolWeightMedium]
                          forImageInState:UIControlStateNormal];
     return key;
@@ -1714,16 +1748,15 @@ static NSString *ArrowGlyph(char direction) {
     key.translatesAutoresizingMaskIntoConstraints = NO;
     if (title != nil) {
         [key setTitle:title forState:UIControlStateNormal];
-        key.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
+        key.titleLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightMedium];
     }
     key.accessibilityLabel = name;
     [key addTarget:self action:@selector(columnKeyDown:) forControlEvents:UIControlEventTouchDown];
-    // Round, as the meters over them are rings: 40 points across, a filled
-    // circle looking as large as their 44-point rings
-    key.layer.cornerRadius = 20;
+    // Round, its circle shown pressed only, in the capsule's round ends
+    key.layer.cornerRadius = kColumnKeySide / 2;
     [NSLayoutConstraint activateConstraints:@[
-        [key.widthAnchor constraintEqualToConstant:40],
-        [key.heightAnchor constraintEqualToConstant:40],
+        [key.widthAnchor constraintEqualToConstant:kColumnKeySide],
+        [key.heightAnchor constraintEqualToConstant:kColumnKeySide],
     ]];
     return key;
 }
@@ -1733,9 +1766,9 @@ static NSString *ArrowGlyph(char direction) {
 }
 
 // Shown while the column is, at its bottom, the meters over them: with the
-// keyboard down six, the profile's (updateColumnProfile), above the home
-// indicator; up the arrows' pad and Ctrl-C, above the keyboard's bar, while
-// the CPU and the memory have the room over them. They are what the bar has
+// keyboard down six, the profile's (updateColumnProfile), by the home
+// indicator as the system's bar is; up the arrows' pad and Ctrl-C, above the
+// keyboard's bar, while the CPU and the memory have the room over them. They are what the bar has
 // not: it has esc, tab and / (folded or with the column hidden their only
 // place), and the column had them again. Up, the keys were under the memory
 // once, the column's last meter then, as far from the keyboard as the meters
@@ -1751,13 +1784,19 @@ static NSString *ArrowGlyph(char direction) {
     NSArray<UIView *> *alwaysKeys = self.columnKeysAlways[@(self.columnProfile)];
     BOOL upKeysFit = up && [self columnHasRoomForKeys:alwaysKeys];
     NSArray<UIView *> *middle = self.columnProfileKeys[@(self.columnProfile)];
+    BOOL anyKey = NO;
     for (UIView *key in self.columnKeys.arrangedSubviews) {
         BOOL always = [alwaysKeys containsObject:key];
         BOOL wanted = up ? upKeysFit && always
                          : always || [self.columnKeysEdge containsObject:key] || [middle containsObject:key];
         if (key.hidden != !wanted)
             key.hidden = !wanted;
+        anyKey |= wanted;
     }
+    // No empty capsule: up and folded, the pad and Ctrl-C give way
+    BOOL glassHidden = !shown || !anyKey;
+    if (self.columnKeysGlass.hidden != glassHidden)
+        self.columnKeysGlass.hidden = glassHidden;
     // Hidden, at the bottom still (a place of its own). Only what changes, as
     // everything updateMonitorColumn sets, the one to go first, so that both
     // never hold at once: it runs in updateViewConstraints, where a constraint
@@ -1773,9 +1812,9 @@ static NSString *ArrowGlyph(char direction) {
 // Whether the column, the keyboard up, has the room for these keys under its
 // CPU and memory: from where the meters begin (updateMonitorColumn) to 8
 // points over the keyboard (applyBottomPad), 8 between the meters and the
-// keys (addColumnKeys)
+// keys' capsule, the keys kColumnKeysInset from its ends (addColumnKeys)
 - (BOOL)columnHasRoomForKeys:(NSArray<UIView *> *)keys {
-    CGFloat height = self.monitorColumn.leastHeight + 8 - self.columnKeys.spacing;
+    CGFloat height = self.monitorColumn.leastHeight + 8 + 2 * kColumnKeysInset - self.columnKeys.spacing;
     for (UIView *key in keys)
         height += self.columnKeys.spacing + [key systemLayoutSizeFittingSize:UILayoutFittingCompressedSize].height;
     CGFloat bottom = self.view.bounds.size.height - MAX(self.keyboardPad, self.view.safeAreaInsets.bottom) - 8;
