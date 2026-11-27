@@ -117,6 +117,7 @@ static _Atomic uint64_t st_unsupported_insns, st_fail_regs;
 static _Atomic uint64_t st_block_ends, st_block_end_fail, st_links, st_loops;
 static _Atomic uint64_t st_shared, st_aot, st_aot_moved, st_aot_busy, st_aot_fixed;
 static _Atomic uint64_t st_find_ticks;   // jit_ticks() spent in aot_lookup()
+static _Atomic uint64_t st_tlb_reused;   // accesses whose TLB check reuses the last one's entry
 
 // ---------------------------------------------------------------- code region
 //
@@ -765,6 +766,12 @@ struct em {
     uint8_t npromo;
     int8_t promo_g[8], donor_g[8], promo_h[8];
     int loop_head, body_end;
+    // The guest register whose access left its TLB entry in x10, -1 none
+    // (tlb_lookup()), and the full lookups of the checks that reused one,
+    // out of line: the b.hi at `at`, for an access of `bytes` at spos
+    int8_t tc_g;
+    struct { unsigned at, spos; uint8_t bytes; bool write; } slow[256];
+    unsigned nslow;
 };
 
 static void put(struct em *e, uint32_t x) {
@@ -1219,16 +1226,20 @@ static uint32_t remap(struct em *e, uint32_t x, int kd, int kn, int km, int ka, 
     return out;
 }
 
-// Inline TLB lookup for guest address in T_A (bytes = access size); leaves
-// the host address in T_A. Branches to the unit's stub on a miss or crossing.
-static void tlb_lookup(struct em *e, unsigned bytes, bool write, unsigned spos) {
-    e->hflags = false;   // the checks below use cmp
+// The TLB lookup's first word (access_exit() knows a full lookup by it) and
+// the words of tlb_check() before its b.hi
+#define TLB_LOOKUP_FIRST (0xD34C6000u | (T_A << 5) | T_I)   // ubfx x10, x9, #12, #13
+#define TLB_CHECK_WORDS 7
+
+// x10 = the TLB entry of guest address x9, and the check of x9 against its
+// page (page_if_writable for a write): hi when the access is not all in it.
+static void tlb_check(struct em *e, unsigned bytes, bool write) {
     // No mask to 48 bits first (an and on the way to every access, 4-6% of
     // sqlite's, python's and node's time): an address with any of bits 48..63
     // set (a tag) fails the page check below and goes to the stub, whose
     // gadget takes it, and one that passes has none, so the add gives the
     // host address the masked one did. The index uses bits 12 and up.
-    put(e, 0xD34C6000u | (T_A << 5) | T_I);                    // ubfx x10, x9, #12, #13
+    put(e, TLB_LOOKUP_FIRST);                                  // ubfx x10, x9, #12, #13
     put(e, 0xCA400000u | (T_A << 16) | (25u << 10) | (T_I << 5) | T_I);  // eor x10, x10, x9, lsr #25
     put(e, 0x12003000u | (T_I << 5) | T_I);                    // and w10, w10, #0x1fff
     put(e, 0x8B000000u | (T_I << 16) | (5u << 10) | (2u << 5) | T_I);    // add x10, x2, x10, lsl #5
@@ -1242,9 +1253,44 @@ static void tlb_lookup(struct em *e, unsigned bytes, bool write, unsigned spos) 
     // 5-8% of sqlite's, python's and node's time).
     put(e, 0xCB000000u | (T_E << 16) | (T_A << 5) | T_P);      // sub x8, x9, x11
     put(e, 0xF100001Fu | ((0x1000 - bytes) << 10) | (T_P << 5));   // cmp x8, #(0x1000-bytes)
-    branch_stub(e, spos, 2);                                   // b.hi stub
+}
+
+// Inline TLB lookup for guest address in T_A (bytes = access size); leaves
+// the host address in T_A. Branches to the unit's stub on a miss or crossing.
+//
+// g: the guest register the address is based on (-1: none, or the lookup is
+// not on every path through the instruction). An access through the same
+// register as the last in the segment, which has not moved it far since
+// (tc_after()), is likely on the same page: x10 still holds that page's
+// entry, and its page is checked first, without the hash (4 words: the
+// hash and the page load the hash waits for, emitted twice, took 15-31% more
+// time). If the access is not on it, the check goes to the full lookup,
+// placed out of line after the segment (finish_native()), which comes back
+// to the dma load or goes to the stub. The entry's page and dma are loaded
+// at the access as the full lookup's are, so an entry another thread took
+// out since fails the check alike.
+static void tlb_lookup(struct em *e, unsigned bytes, bool write, unsigned spos, int g) {
+    e->hflags = false;   // the checks below use cmp
+    unsigned slow_max = sizeof(e->slow) / sizeof(e->slow[0]);
+    if (g >= 0 && g == e->tc_g && e->nslow < slow_max) {
+        unsigned pg = write ? offsetof(struct tlb_entry, page_if_writable) : offsetof(struct tlb_entry, page);
+        put(e, 0xF9400000u | ((pg / 8) << 10) | (T_I << 5) | T_E);            // ldr x11, [x10, #page]
+        put(e, 0xCB000000u | (T_E << 16) | (T_A << 5) | T_P);                 // sub x8, x9, x11
+        put(e, 0xF100001Fu | ((0x1000 - bytes) << 10) | (T_P << 5));          // cmp x8, #(0x1000-bytes)
+        e->slow[e->nslow].at = e->n;
+        e->slow[e->nslow].spos = spos;
+        e->slow[e->nslow].bytes = (uint8_t) bytes;
+        e->slow[e->nslow].write = write;
+        e->nslow++;
+        put(e, 0x54000008u);                                                  // b.hi <the full lookup>
+        atomic_fetch_add_explicit(&st_tlb_reused, 1, memory_order_relaxed);
+    } else {
+        tlb_check(e, bytes, write);
+        branch_stub(e, spos, 2);                               // b.hi stub
+    }
     put(e, 0xF9400000u | ((offsetof(struct tlb_entry, data_minus_addr) / 8) << 10) | (T_I << 5) | T_E);  // ldr x11, [x10, #dma]
     put(e, 0x8B000000u | (T_A << 16) | (T_E << 5) | T_A);      // add x9, x11, x9
+    e->tc_g = (int8_t) g;
 }
 
 // Load/store translation. Returns false if the form is unsupported.
@@ -1607,7 +1653,7 @@ static bool emit_ldst_fp(struct em *e, uint32_t x, unsigned spos) {
         if (imm < -4095 || imm > 4095) return false;
         int gn = rn == 31 ? G_SP : rn;
         int hn = ldst_addr(e, gn, imm, idx == 1);
-        tlb_lookup(e, 2u << scale, !L, spos);
+        tlb_lookup(e, 2u << scale, !L, spos, gn);
         if (!L) { vload(e, V_N, rt); vload(e, V_M, rt2); }
         put(e, (x & 0xC0400000u) | 0x2D000000u | ((uint32_t) V_M << 10) | (T_A << 5) | V_N);   // ldp/stp vN, vM, [x9]
         if (L) { vstore(e, V_N, rt); vstore(e, V_M, rt2); }
@@ -1643,7 +1689,7 @@ static bool emit_ldst_fp(struct em *e, uint32_t x, unsigned spos) {
     } else {
         return false;
     }
-    tlb_lookup(e, 1u << scale, !load, spos);
+    tlb_lookup(e, 1u << scale, !load, spos, (x & 0x3B200C00u) == 0x38200800u ? -1 : gn);
     if (!load) vload(e, V_N, rt);
     put(e, (x & 0xC0C00000u) | 0x3D000000u | (T_A << 5) | V_N);              // ldr/str vN, [x9]
     if (load) vstore(e, V_N, rt);   // the host load zeroed the rest of the register
@@ -1669,7 +1715,7 @@ static bool emit_ldst_multi(struct em *e, uint32_t x, unsigned spos) {
     if (!L)
         for (int i = 0; i < n; i++) vload(e, V_N + i, (rt + i) & 31);
     put(e, 0xAA0003E0u | ((uint32_t) hn << 16) | T_A);                       // mov x9, xn
-    tlb_lookup(e, bytes, !L, spos);
+    tlb_lookup(e, bytes, !L, spos, gn);
     put(e, 0x0C000000u | (x & 0x40400000u) | (x & 0xFC00u) | (T_A << 5) | V_N);   // ldN/stN {v16..}, [x9]
     if (L)
         for (int i = 0; i < n; i++) vstore(e, V_N + i, (rt + i) & 31);
@@ -1711,7 +1757,7 @@ static bool emit_ldst_rep(struct em *e, uint32_t x, unsigned spos) {
     int hn = hreg(e, gn);
     int hm = post && rm != 31 ? hreg(e, rm) : -1;
     put(e, 0xAA0003E0u | ((uint32_t) hn << 16) | T_A);                       // mov x9, xn
-    tlb_lookup(e, bytes, false, spos);
+    tlb_lookup(e, bytes, false, spos, gn);
     put(e, 0x0D000000u | (x & 0x4060FC00u) | (T_A << 5) | V_N);              // ldNr {v16..}, [x9] / ld1 {v16.t}[i], [x9]
     for (int i = 0; i < n; i++) vstore(e, V_N + i, (rt + i) & 31);
     if (post) {
@@ -1736,7 +1782,7 @@ static bool emit_excl(struct em *e, uint32_t x, unsigned spos) {
         bool load = (x >> 22) & 1;
         int ht = rt == 31 ? 31 : hreg(e, rt);
         put(e, 0xAA0003E0u | ((uint32_t) hreg(e, gn) << 16) | T_A);         // mov x9, xn
-        tlb_lookup(e, 1u << size, !load, spos);
+        tlb_lookup(e, 1u << size, !load, spos, gn);
         put(e, (x & ~0x3FFu) | (T_A << 5) | (uint32_t) ht);                // ldar/stlr wt, [x9]
         if (load && rt != 31) writeback(e, rt);
         return true;
@@ -1746,7 +1792,7 @@ static bool emit_excl(struct em *e, uint32_t x, unsigned spos) {
         int ht = rt == 31 ? 31 : hreg(e, rt);
         put(e, 0xAA0003E0u | ((uint32_t) hreg(e, gn) << 16) | T_A);         // mov x9, xn
         put(e, 0xF9000000u | ((excl_addr / 8) << 10) | (1u << 5) | T_A);     // str x9, [x1, #excl_addr]
-        tlb_lookup(e, 1u << size, false, spos);
+        tlb_lookup(e, 1u << size, false, spos, gn);
         // ldar (ldaxr's acquire) or ldr, of its size, into x8
         put(e, (acquire ? 0x08DFFC00u : 0x39400000u) | size << 30 | (T_A << 5) | T_P);
         put(e, 0xF9000000u | ((excl_val / 8) << 10) | (1u << 5) | T_P);      // str x8, [x1, #excl_val]
@@ -1767,7 +1813,7 @@ static bool emit_excl(struct em *e, uint32_t x, unsigned spos) {
         e->hflags = false;
         unsigned bne = e->n;
         put(e, 0);                                                            // b.ne failed
-        tlb_lookup(e, 1u << size, true, spos);
+        tlb_lookup(e, 1u << size, true, spos, -1);   // not on the failed path
         // stored if memory still holds what ldxr loaded, at its size (the
         // gadget's c_stxr_cas, a compare and swap): casal's old value in x8
         put(e, 0xF9400000u | ((excl_val / 8) << 10) | (1u << 5) | T_P);      // ldr x8, [x1, #excl_val]
@@ -1791,7 +1837,7 @@ static bool emit_excl(struct em *e, uint32_t x, unsigned spos) {
         int ht = rt == 31 ? 31 : hreg(e, rt);
         int hs = rs == 31 ? 31 : hreg(e, rs);
         put(e, 0xAA0003E0u | ((uint32_t) hreg(e, gn) << 16) | T_A);         // mov x9, xn
-        tlb_lookup(e, 1u << size, true, spos);
+        tlb_lookup(e, 1u << size, true, spos, gn);
         put(e, (x & ~0x001F03FFu) | ((uint32_t) hs << 16) | (T_A << 5) | (uint32_t) ht);   // cas ws, wt, [x9]
         if (rs != 31) writeback(e, rs);
         return true;
@@ -1811,7 +1857,7 @@ static bool emit_ldst(struct em *e, uint32_t x, unsigned spos) {
         int ht = rt == 31 ? 31 : hreg(e, rt);
         int hs = rs == 31 ? 31 : hreg(e, rs);
         put(e, 0xAA0003E0u | ((uint32_t) hreg(e, rn == 31 ? G_SP : rn) << 16) | T_A);   // mov x9, xn
-        tlb_lookup(e, 1u << size, true, spos);
+        tlb_lookup(e, 1u << size, true, spos, rn == 31 ? G_SP : rn);
         put(e, (x & ~0x001F03FFu) | ((uint32_t) hs << 16) | (T_A << 5) | (uint32_t) ht);   // ldadd ws, wt, [x9]
         if (rt != 31) writeback(e, rt);
         return true;
@@ -1831,7 +1877,7 @@ static bool emit_ldst(struct em *e, uint32_t x, unsigned spos) {
         if (idx == 1) put(e, 0xAA0003E0u | ((uint32_t) hn << 16) | T_A);       // mov x9, xn (post-index)
         else if (imm >= 0) put(e, 0x91000000u | ((uint32_t) imm << 10) | ((uint32_t) hn << 5) | T_A);
         else put(e, 0xD1000000u | ((uint32_t) -imm << 10) | ((uint32_t) hn << 5) | T_A);
-        tlb_lookup(e, 2u << scale, !L, spos);
+        tlb_lookup(e, 2u << scale, !L, spos, gn);
         int ht = rt == 31 ? 31 : hreg(e, rt), ht2 = rt2 == 31 ? 31 : hreg(e, rt2);
         // host pair access, signed-offset form, offset 0
         put(e, (x & 0xC0400000u) | 0x29000000u | ((uint32_t) ht2 << 10) | (T_A << 5) | (uint32_t) ht);
@@ -1887,7 +1933,7 @@ static bool emit_ldst(struct em *e, uint32_t x, unsigned spos) {
     }
     if (prfm)
         goto writeback_base;
-    tlb_lookup(e, 1u << size, !load, spos);
+    tlb_lookup(e, 1u << size, !load, spos, regoff ? -1 : gn);
     {
         int ht = rt == 31 ? 31 : hreg(e, rt);
         put(e, (x & 0xC0C00000u) | 0x39000000u | (T_A << 5) | (uint32_t) ht);   // host access: same size/opc, [x9]
@@ -1915,13 +1961,13 @@ static bool emit_ldr_literal(struct em *e, uint32_t x, uint64_t pc, unsigned spo
     mov_guest(e, T_A, pc + (uint64_t) off, T_Q);
     if (v) {
         static const uint32_t ldr_v[3] = {0xBD400000u, 0xFD400000u, 0x3DC00000u};   // ldr s/d/q, [x9]
-        tlb_lookup(e, 4u << opc, false, spos);
+        tlb_lookup(e, 4u << opc, false, spos, -1);
         put(e, ldr_v[opc] | (T_A << 5) | V_N);
         vstore(e, V_N, rt);   // the host load zeroed the rest of the register
         return true;
     }
     static const uint32_t ldr_x[3] = {0xB9400000u, 0xF9400000u, 0xB9800000u};       // ldr w/x, ldrsw, [x9]
-    tlb_lookup(e, opc == 1 ? 8 : 4, false, spos);
+    tlb_lookup(e, opc == 1 ? 8 : 4, false, spos, -1);
     int ht = rt == 31 ? 31 : hreg(e, rt);
     put(e, ldr_x[opc] | (T_A << 5) | (uint32_t) ht);
     if (rt != 31)
@@ -1941,8 +1987,48 @@ static bool bitmask_imm_defined(unsigned sf, unsigned n, unsigned imms) {
     return (imms & levels) != levels;
 }
 
+// After instruction x: forget the TLB entry x10 holds (tlb_lookup()) if x
+// gave the register its access was based on a value that need not be near
+// it: any write to it but a load or store's writeback or an add or sub of
+// an immediate to itself. Whether an access is on the entry's page is
+// checked as it runs; this keeps the check from failing often.
+static void tc_after(struct em *e, uint32_t x) {
+    int g = e->tc_g;
+    if (g < 0)
+        return;
+    unsigned r = g == G_SP ? 31 : (unsigned) g, rd = x & 31, rn = (x >> 5) & 31;
+    if ((x & 0x1F000000u) == 0x11000000u && rd == rn && !((x >> 22) & 1))       // add/sub xg, xg, #imm
+        return;
+    bool moved;
+    if ((x & 0x0A000000u) == 0x08000000u) {                                     // loads and stores
+        if ((x & 0x3F000000u) == 0x08000000u)                                   // exclusives, cas: Rt, Rt2, Rs
+            moved = g != G_SP && (rd == r || ((x >> 10) & 31) == r || ((x >> 16) & 31) == r);
+        else if ((x >> 26) & 1)                                                 // into V registers
+            moved = false;
+        else                                                                    // Rt, a pair's Rt2
+            moved = g != G_SP && (rd == r || ((x & 0x3A000000u) == 0x28000000u && ((x >> 10) & 31) == r));
+    } else if (g == G_SP) {
+        // what can write sp: add/sub (immediate, extended register) and the
+        // logical immediates, but the flag-setting ones (whose 31 is xzr)
+        moved = rd == 31 && (((x & 0x1F000000u) == 0x11000000u && !((x >> 29) & 1)) ||
+                             ((x & 0x1FE00000u) == 0x0B200000u && !((x >> 29) & 1)) ||
+                             ((x & 0x1F800000u) == 0x12000000u && ((x >> 29) & 3) != 3));
+    } else {
+        moved = rd == r;   // any other's Rd (a V register's number too: only more lookups)
+    }
+    if (moved)
+        e->tc_g = -1;
+}
+
 // Translate one guest instruction. has_mem: set if it may bail out.
+static bool emit_insn1(struct em *e, uint32_t x, uint64_t pc, unsigned spos, bool *has_mem);
 static bool emit_insn(struct em *e, uint32_t x, uint64_t pc, unsigned spos, bool *has_mem) {
+    bool ok = emit_insn1(e, x, pc, spos, has_mem);
+    tc_after(e, x);
+    return ok;
+}
+
+static bool emit_insn1(struct em *e, uint32_t x, uint64_t pc, unsigned spos, bool *has_mem) {
     int wrote = -1;
     e->locked = 0;
     *has_mem = false;
@@ -1976,7 +2062,7 @@ static bool emit_insn(struct em *e, uint32_t x, uint64_t pc, unsigned spos, bool
         for (int v = 0; v < 4; v++)
             put(e, 0x6F00E400u | (uint32_t) (V_N + v));    // movi v16+v.2d, #0
         put(e, 0x927AE400u | ((uint32_t) hreg(e, x & 31) << 5) | T_A);   // and x9, xt, #~63
-        tlb_lookup(e, 64, true, spos);
+        tlb_lookup(e, 64, true, spos, -1);
         put(e, 0x4C002000u | (T_A << 5) | V_N);            // st1 {v16.16b-v19.16b}, [x9]: one access
         return true;
     }
@@ -2135,9 +2221,19 @@ static struct rec_seg *record_segment(const struct em *e) {
     return r;
 }
 
+static void patch_here(struct em *e, unsigned at);
+
 // Resolve stub branches and append stubs: x28 = &code[spos + 1]; b code[spos].
 // Returns the installed code, NULL if the segment could not be installed.
 static uint8_t *finish_native(struct em *e, struct fiber_block *b, uintptr_t orig_first, unsigned first_pos) {
+    // The full lookups of the checks that reused an entry (tlb_lookup()):
+    // a miss there goes to the stub, a hit back to the dma load after the check
+    for (unsigned i = 0; i < e->nslow; i++) {
+        patch_here(e, e->slow[i].at);
+        tlb_check(e, e->slow[i].bytes, e->slow[i].write);
+        branch_stub(e, e->slow[i].spos, 2);                                   // b.hi stub
+        put(e, ENC_B(4 * ((int64_t) e->slow[i].at + 1 - (int64_t) e->n)));   // b <the dma load>
+    }
     // one stub per distinct stream position
     unsigned stub_pos[256], stub_at[256], ns = 0;
     for (unsigned i = 0; i < e->nfix; i++) {
@@ -2914,6 +3010,8 @@ static unsigned emit_segment(struct em *e, struct fiber_block *b, const struct j
     e->hflags = false;
     e->body_end = -1;
     e->chain_fwd = false;
+    e->tc_g = -1;
+    e->nslow = 0;
     unsigned covered = 0, real = 0;   // real: units that emitted code
     bool ended = false;
     e->b = b;
@@ -2937,8 +3035,9 @@ static unsigned emit_segment(struct em *e, struct fiber_block *b, const struct j
     while (ui < U->n) {
         const struct jit_unit *u = &U->u[ui];
         if (u->last) {
-            unsigned n0 = e->n, nfix0 = e->nfix, nrel0 = e->nrel;
+            unsigned n0 = e->n, nfix0 = e->nfix, nrel0 = e->nrel, nslow0 = e->nslow;
             uint8_t npool0 = e->npool, victim0 = e->victim;
+            int8_t tc0 = e->tc_g;
             bool hf0 = e->hflags;
             int8_t host0[33], owner0[32];
             memcpy(host0, e->host, sizeof(host0));
@@ -2952,6 +3051,7 @@ static unsigned emit_segment(struct em *e, struct fiber_block *b, const struct j
             } else {
                 e->link_at[0] = e->link_at[1] = -1;   // only the block end sets them
                 e->n = n0; e->nfix = nfix0; e->nrel = nrel0; e->npool = npool0; e->fail = false; e->hflags = hf0;
+                e->nslow = nslow0; e->tc_g = tc0;
                 e->victim = victim0;
                 memcpy(e->host, host0, sizeof(host0));
                 memcpy(e->owner, owner0, sizeof(owner0));
@@ -2961,8 +3061,9 @@ static unsigned emit_segment(struct em *e, struct fiber_block *b, const struct j
         if (!u->follow && (u->n == 0 || u->start == u->end))
             break;
         // snapshot for rollback
-        unsigned n0 = e->n, nfix0 = e->nfix, nrel0 = e->nrel;
+        unsigned n0 = e->n, nfix0 = e->nfix, nrel0 = e->nrel, nslow0 = e->nslow;
         uint8_t npool0 = e->npool, victim0 = e->victim;
+        int8_t tc0 = e->tc_g;
         bool hf0 = e->hflags;
         int8_t host0[33], owner0[32];
         memcpy(host0, e->host, sizeof(host0));
@@ -2980,6 +3081,7 @@ static unsigned emit_segment(struct em *e, struct fiber_block *b, const struct j
         }
         if (!ok) {
             e->n = n0; e->nfix = nfix0; e->nrel = nrel0; e->npool = npool0; e->fail = false; e->hflags = hf0;
+            e->nslow = nslow0; e->tc_g = tc0;
             e->victim = victim0;
             memcpy(e->host, host0, sizeof(host0));
             memcpy(e->owner, owner0, sizeof(owner0));
@@ -3381,7 +3483,7 @@ void ish_aot_register(const struct aot_module *m) {
 
 // Bump whenever the code emitted for some guest instruction, stub or exit
 // changes: images made before would still pass every other check.
-#define JIT_CODE_VERSION 17
+#define JIT_CODE_VERSION 18
 
 // Everything the emitted code bakes in besides the gadgets it names: the
 // conventions, the struct layouts it loads from and the TLB / block cache
@@ -4061,7 +4163,9 @@ static enum jit_outcome jit_translate(struct fiber_block *b, const struct jit_un
 // A host fault (SIGSEGV, SIGBUS) in native code. Native code reaches guest
 // memory only through tlb_lookup(), and the emitters lay every access out the
 // same way:
-//   b.hi  exit                          the TLB check: a miss goes to the unit's exit
+//   b.hi  exit                          the TLB check: a miss goes to the unit's exit (or,
+//                                       a check of the last access's entry, to the full
+//                                       lookup out of line, whose b.hi goes there)
 //   ldr   x11, [x10, #data_minus_addr]
 //   add   x9, x11, x9                   the host address
 //   ldr   xN or qN, [x1, #...]          0 to 2: registers loaded on first use
@@ -4097,6 +4201,15 @@ static uintptr_t access_exit(uintptr_t pc, uintptr_t lo, uintptr_t hi) {
         return 0;
     uintptr_t at = pc - 4 * (k + 2);
     uintptr_t target = at + (uintptr_t) (4 * sext((bhi >> 5) & 0x7ffff, 19));
+    // A check that reused the last access's TLB entry goes to the full
+    // lookup (tlb_lookup()), whose b.hi goes to the exit
+    if (target >= lo && target + 4 * (TLB_CHECK_WORDS + 1) <= hi && *(const uint32_t *) target == TLB_LOOKUP_FIRST) {
+        at = target + 4 * TLB_CHECK_WORDS;
+        bhi = *(const uint32_t *) at;
+        if ((bhi & 0xFF00001Fu) != 0x54000008u)
+            return 0;
+        target = at + (uintptr_t) (4 * sext((bhi >> 5) & 0x7ffff, 19));
+    }
     return target >= lo && target < hi ? target : 0;
 }
 
@@ -4811,6 +4924,8 @@ size_t jit_describe(char *buf, size_t size) {
         (unsigned long long) st_search_n, jit_ticks_ms(st_search_ticks));
     OUT("host faults in native code: %llu went on at the access's TLB-miss exit, %llu elsewhere (process killed)\n",
         (unsigned long long) st_fault_resumed, (unsigned long long) st_fault_unknown);
+    OUT("TLB checks of the last access's entry (an access through the same register), translated: %llu\n",
+        (unsigned long long) st_tlb_reused);
     OUT("images: %u in use, %u rejected (abi %08x)\n", aot_nimages, aot_nrejected, jit_abi());
     for (unsigned i = 0; i < aot_nimages; i++)
         OUT("  ok        %s (%u translations, family %s)\n", aot_images[i]->path, aot_images[i]->ntrans,
@@ -4914,12 +5029,13 @@ void jit_report(void) {
     fprintf(stderr,
             "🛠  JIT(%s): blocks %llu, segments %llu, units %llu, code %llu KB, compile %.1f ms | "
             "block ends %llu (not translated %llu), direct links %llu, loop blocks %llu | "
-            "unsupported insns %llu, out of regs %llu | shared %llu, AOT %llu (%u images)\n",
+            "unsupported insns %llu, out of regs %llu | TLB checks of the last entry %llu | shared %llu, AOT %llu (%u images)\n",
             dual_map ? (pic_on ? "dual-map, PIC" : "dual-map") : (pic_on ? "MAP_JIT, PIC" : "MAP_JIT"),
             (unsigned long long) st_blocks, (unsigned long long) st_segments, (unsigned long long) st_units,
             (unsigned long long) st_bytes / 1024, jit_ticks_ms(st_ticks), (unsigned long long) st_block_ends,
             (unsigned long long) st_block_end_fail, (unsigned long long) st_links, (unsigned long long) st_loops,
             (unsigned long long) st_unsupported_insns, (unsigned long long) st_fail_regs,
+            (unsigned long long) st_tlb_reused,
             (unsigned long long) st_shared, (unsigned long long) st_aot, aot_nimages);
 }
 

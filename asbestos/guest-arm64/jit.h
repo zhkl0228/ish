@@ -11,7 +11,8 @@
 //
 // - The hottest guest registers live in fixed host registers across native
 //   code and are stored back whenever control leaves it.
-// - Loads/stores inline the TLB lookup; a miss resumes the unit's gadget.
+// - Loads/stores inline the TLB lookup; a miss resumes the unit's gadget. An
+//   access through the register of the last one checks that one's entry first.
 // - Block ends (b/bl/b.cond/cbz/tbz/ret/br/blr) are translated; chained
 //   successors are reached through patched direct branches.
 //

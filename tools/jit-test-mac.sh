@@ -12,7 +12,8 @@
 # On macOS it builds ish with -Djit=true in the build dir (default
 # build-mac-jit), then runs under it:
 #   - regress_jit_fault: a host fault at a guest access in native code goes on
-#     at the access's TLB-miss exit (ISH_JIT_FAULT_TEST=resume), and one
+#     at the access's TLB-miss exit (ISH_JIT_FAULT_TEST=resume), also after a
+#     check of the last access's TLB entry and the full lookup out of line, and one
 #     anywhere else kills the process with SIGSEGV and logs a sample
 #     (ISH_JIT_FAULT_TEST=unknown);
 #   - regress_jit_flush: a 1 MB code region (ISH_JIT_REGION_MB=1), flushed
@@ -25,6 +26,10 @@
 #   - regress_jit_insns: atomics, SIMD loads and stores, literal loads, dc
 #     zva, barriers, msr fpcr, SIMD arithmetic, SHA and CRC32, multiply-adds
 #     of unpinned registers, likewise;
+#   - regress_jit_tlb_reuse: an access through the register of the last one
+#     checks that one's TLB entry first, its full lookup out of line: every
+#     result right, on the same page, the next, one not in the TLB, across a
+#     page's end, and SIGSEGV where the page is read-only or PROT_NONE;
 #   - regression tests the JIT can break: instructions compared against
 #     hardware, faults, signals, memory.
 # Needs meson, ninja and timeout. Exits 1 if any test failed.
@@ -53,6 +58,7 @@ if [ "${1:-}" = --prepare ]; then
     build jit_flush -O0 tests/regress/regress_jit_flush.c
     build jit_fp -O0 tests/regress/regress_jit_fp.c
     build jit_insns -O0 tests/regress/regress_jit_insns.c
+    build jit_tlb_reuse -O0 tests/regress/regress_jit_tlb_reuse.c
     build mmap_spin -O1 tests/regress/regress_mmap_spin.c
     build tlb_cross_thread -O1 tests/regress/regress_tlb_cross_thread.c
     build stack_extent -O0 tests/regress/regress_stack_extent.c
@@ -139,6 +145,10 @@ echo "== regress_jit_insns"
 out=$(ISH_JIT_PIC=1 timeout 300 "$ISH" -r "$ROOT" /tmp/regress_jit_insns 2>&1)
 echo "$out" | grep -v '^PASS' | tail -20
 echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || fail "regress_jit_insns"
+echo "== regress_jit_tlb_reuse"
+out=$(ISH_JIT_PIC=1 timeout 120 "$ISH" -r "$ROOT" /tmp/regress_jit_tlb_reuse 2>&1)
+echo "$out" | grep -v '^PASS' | tail -20
+echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || fail "regress_jit_tlb_reuse"
 
 for t in $TESTS; do
     echo "== regress_$t"
