@@ -45,8 +45,8 @@
 
 // What the column's two middle keys are, by the program in the foreground
 // (columnProfileForSession:): tab and / for a shell, an AI agent and most
-// programs; : and / for vi; space and q for a pager. An AI agent's Ctrl-C key
-// is its up arrow instead (columnKeysAlways).
+// programs; : and / for vi; space and q for a pager. An AI agent's pad and
+// Ctrl-C key are its up and down arrows instead (columnKeysAlways).
 typedef NS_ENUM(NSInteger, ColumnKeyProfile) {
     ColumnKeyProfileDefault,
     ColumnKeyProfileEditor,
@@ -121,9 +121,10 @@ typedef NS_ENUM(NSInteger, ColumnKeyProfile) {
 // With the keyboard down: esc and return, the profile's middle keys
 // (columnProfileKeys) and the keyboard's own two (columnKeysAlways, by
 // profile too). With it up, those two only, as the bar has the rest: the
-// arrows' pad and Ctrl-C, or for an AI agent the up arrow, which sends
-// Ctrl-C held: there the prompt's history and a menu's choices go up more
-// often than what runs is interrupted.
+// arrows' pad and Ctrl-C, or for an AI agent the up and down arrows, the up
+// one Ctrl-C held: there the prompt's history and a menu's choices go up and
+// down more often than what runs is interrupted, and the pad's up and down
+// wanted a slide each, its left and right seldom.
 @property NSArray<UIView *> *columnKeysEdge;
 @property NSDictionary<NSNumber *, NSArray<UIView *> *> *columnProfileKeys;
 @property NSDictionary<NSNumber *, NSArray<UIView *> *> *columnKeysAlways;
@@ -1313,9 +1314,9 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
 // One over another at the bottom of the column, under the meters' middle,
 // above the home indicator: esc; two keys for what runs (columnProfileKeys,
 // updateColumnProfile): tab and / for a shell, an AI agent and most programs,
-// : and / for vi, space and q for a pager; the arrows' pad (arrowPadKey);
-// Ctrl-C, sent only held (a tap would end what runs), or for an AI agent
-// the up arrow, Ctrl-C held; return. Held, esc is
+// : and / for vi, space and q for a pager; the arrows' pad (arrowPadKey) and
+// Ctrl-C, sent only held (a tap would end what runs), or for an AI agent the
+// up arrow, Ctrl-C held, and the down arrow; return. Held, esc is
 // backspace, tab shift-tab, / Ctrl-U (clearing the line) and space b (a
 // pager's page up), each said in a callout before it is let go
 // (columnKeyHeld:) and marked in its key's corner (badgeKey:with:). Esc and /
@@ -1359,11 +1360,13 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
     [self holdKey:previous badge:@"⌃C"
           callout:[@"⌃C " stringByAppendingString:NSLocalizedString(@"Interrupt", @"The column's Ctrl-C key held: what it sends")]
              send:^{ [weakSelf.termView insertSequence:@"\x03"]; }];
+    BarButton *next = [self columnKey:@"arrow.down" name:NSLocalizedString(@"Down", @"The column's down arrow key, read aloud")];
+    [next addTarget:self action:@selector(pressColumnDown:) forControlEvents:UIControlEventTouchUpInside];
     BarButton *enter = [self columnKey:@"return" name:NSLocalizedString(@"Return", @"The column's return key, read aloud")];
     [enter addTarget:self action:@selector(pressReturn:) forControlEvents:UIControlEventTouchUpInside];
 
     UIStackView *keys = [[UIStackView alloc] initWithArrangedSubviews:@[escape, tab, colon, space, slash, quit, pad, interrupt,
-                                                                        previous, enter]];
+                                                                        previous, next, enter]];
     keys.axis = UILayoutConstraintAxisVertical;
     keys.spacing = 8;
     keys.translatesAutoresizingMaskIntoConstraints = NO;
@@ -1381,7 +1384,7 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
         @(ColumnKeyProfileDefault): @[pad, interrupt],
         @(ColumnKeyProfileEditor): @[pad, interrupt],
         @(ColumnKeyProfilePager): @[pad, interrupt],
-        @(ColumnKeyProfileAgent): @[pad, previous],
+        @(ColumnKeyProfileAgent): @[previous, next],
     };
     // The meters' room is the column's, down to the keys: the rows that fit
     // in it show (MonitorColumnView's rowsForRoom:)
@@ -1530,9 +1533,13 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
              besideKey:key];
 }
 
-// An AI agent's up arrow, with the bar's modifiers as the pad's arrows
+// An AI agent's up and down arrows, with the bar's modifiers as the pad's
+// arrows
 - (void)pressColumnUp:(UIView *)key {
     [self.termView insertSequence:[self.terminal arrow:'A' modifiers:[self.termView takeBarModifiers]]];
+}
+- (void)pressColumnDown:(UIView *)key {
+    [self.termView insertSequence:[self.terminal arrow:'B' modifiers:[self.termView takeBarModifiers]]];
 }
 
 // The middle keys a profile has that are plain text: vi's :, a pager's
@@ -1739,8 +1746,8 @@ static NSString *ArrowGlyph(char direction) {
     BOOL up = self.keyboardUp;
     if (self.columnKeys.hidden == shown)
         self.columnKeys.hidden = !shown;
-    // Up, the pad and Ctrl-C (an agent's up arrow), where they fit; down, all
-    // the profile's
+    // Up, the pad and Ctrl-C (an agent's up and down arrows), where they fit;
+    // down, all the profile's
     NSArray<UIView *> *alwaysKeys = self.columnKeysAlways[@(self.columnProfile)];
     BOOL upKeysFit = up && [self columnHasRoomForKeys:alwaysKeys];
     NSArray<UIView *> *middle = self.columnProfileKeys[@(self.columnProfile)];

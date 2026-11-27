@@ -157,7 +157,7 @@ enum {
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     switch (section) {
         case PreviewSection: return @"Change the color scheme used for the preview.";
-        case MetersSection: return @"The CPUs, the memory and the heat, right of the terminal's last column. Tap them for more. Where the window has a column, its keys follow the program: vim's : and /, a pager's space and q, an AI agent's up arrow in Ctrl-C's place (held, it is Ctrl-C).";
+        case MetersSection: return @"The CPUs, the memory and the heat, right of the terminal's last column. Tap them for more. Where the window has a column, its keys follow the program: vim's : and /, a pager's space and q, an AI agent's up and down arrows in the pad's and Ctrl-C's places (the up one held is Ctrl-C).";
         default: return nil;
     }
 }
