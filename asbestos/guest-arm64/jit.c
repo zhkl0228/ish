@@ -2464,8 +2464,11 @@ static void store_ret_cache(struct em *e, int h, uint64_t ret, int base) {
 }
 
 // x9 = the block cached for guest address x10 (tlb->block_cache, as
-// fiber_ret's lookup keeps it); the three branches go to a miss.
-static void emit_block_cache_lookup(struct em *e, unsigned *miss1, unsigned *miss2, unsigned *miss3) {
+// fiber_ret's lookup keeps it); the four branches go to a miss. An entry may
+// be a block invalidated since (is_jetsam): a miss. A stale generation is one
+// too, so that the run loop empties the ret_cache.
+static void emit_block_cache_lookup(struct em *e, unsigned *miss1, unsigned *miss2, unsigned *miss3,
+                                    unsigned *miss4) {
     // stale cache? tlb->block_cache_gen != mmu->asbestos->invalidate_gen
     int mmu_off = (int) offsetof(struct tlb, mmu) - (int) offsetof(struct tlb, entries);
     put(e, 0xF8400000u | ((uint32_t) (mmu_off & 0x1ff) << 12) | (2u << 5) | 12);  // ldur x12, [x2, #mmu]
@@ -2484,6 +2487,8 @@ static void emit_block_cache_lookup(struct em *e, unsigned *miss1, unsigned *mis
     put(e, 0xF9400000u | ((FIBER_BLOCK_addr / 8) << 10) | (9u << 5) | 12);       // ldr x12, [x9, #addr]
     put(e, 0xEB0A019Fu);                                                         // cmp x12, x10
     *miss3 = e->n; put(e, 0x54000001u);                                  // b.ne miss
+    put(e, 0x39400000u | ((uint32_t) offsetof(struct fiber_block, is_jetsam) << 10) | (9u << 5) | 12);  // ldrb w12, [x9, #is_jetsam]
+    *miss4 = e->n; put(e, 0x3500000Cu);                                  // cbnz w12, miss
 }
 
 // PIC, at a block end's `unchained` exit with the slot in x9: a slot
@@ -2514,8 +2519,8 @@ static void emit_indirect(struct em *e, struct fiber_block *b, const struct jit_
         store_ret_cache(e, h30, ret, 12);
     }
     put(e, 0xF9000000u | ((CPU_pc / 8) << 10) | (1u << 5) | 10);                 // str x10, [x1, #pc]
-    unsigned miss1, miss2, miss3;
-    emit_block_cache_lookup(e, &miss1, &miss2, &miss3);
+    unsigned miss1, miss2, miss3, miss_jetsam;
+    emit_block_cache_lookup(e, &miss1, &miss2, &miss3, &miss_jetsam);
     // hit: same bookkeeping as a chained branch
     unsigned miss4, miss5;
     if (n_pinned) {
@@ -2548,7 +2553,7 @@ static void emit_indirect(struct em *e, struct fiber_block *b, const struct jit_
     }
     put(e, 0x91000000u | (FIBER_BLOCK_code << 10) | (9u << 5) | 28);             // add x28, x9, #code
     emit_native_dispatch_ex(e, true);
-    patch_here(e, miss1); patch_here(e, miss2); patch_here(e, miss3);
+    patch_here(e, miss1); patch_here(e, miss2); patch_here(e, miss3); patch_here(e, miss_jetsam);
     patch_here(e, miss4);
     if (miss5 != miss4) patch_here(e, miss5);
     set_last_block(e, b);
@@ -3088,7 +3093,7 @@ void ish_aot_register(const struct aot_module *m) {
 
 // Bump whenever the code emitted for some guest instruction, stub or exit
 // changes: images made before would still pass every other check.
-#define JIT_CODE_VERSION 14
+#define JIT_CODE_VERSION 15
 
 // Everything the emitted code bakes in besides the gadgets it names: the
 // conventions, the struct layouts it loads from and the TLB / block cache
@@ -3099,7 +3104,7 @@ uint32_t jit_abi(void) {
     const uint64_t v[] = {
         JIT_CODE_VERSION, (uint64_t) prologue_words, entry_off(), (uint64_t) n_pinned, CTX_BLK, CTX_SLOT, CTX_FAR,
         FIBER_BLOCK_code, FIBER_BLOCK_addr, offsetof(struct fiber_block, native_entry),
-        offsetof(struct fiber_block, jit_ctx),
+        offsetof(struct fiber_block, jit_ctx), offsetof(struct fiber_block, is_jetsam),
         CPU_pc, CPU_cycle, CPU_poked_ptr, CPU_tls_ptr, offsetof(struct cpu_state, sp),
         offsetof(struct cpu_state, regs), offsetof(struct cpu_state, nzcv), offsetof(struct cpu_state, fp),
         offsetof(struct cpu_state, excl_addr), offsetof(struct cpu_state, excl_val), offsetof(struct cpu_state, fpcr),

@@ -453,6 +453,7 @@ struct asbestos *asbestos_new(struct mmu *mmu) {
     atomic_init(&asbestos->last_active_ms, asbestos_now_ms());
     atomic_init(&asbestos->refs, 1);
     asbestos->invalidate_gen = asbestos_next_gen();
+    asbestos->free_gen = asbestos_next_gen();
 #ifdef ISH_JIT
     lock(&all_lock);
     list_add(&all_asbestos, &asbestos->jit_all);
@@ -625,9 +626,17 @@ static inline size_t fiber_hash(addr_t addr, size_t size) {
     return (size_t) (addr ^ (addr >> 2) ^ (addr >> 19)) & (size - 1);
 }
 
+// Readers without the lock (fiber_lookup_unlocked) see hash_seq odd while
+// the blocks move, and the larger array before its size: an index from
+// either size is within the array they read. The array replaced may be read
+// still, till the jetsam blocks are freed (fiber_free_jetsam_counted): its
+// element past the buckets links it to the others retired (next) and has its
+// start (prev).
 static void fiber_resize_hash(struct asbestos *asbestos, size_t new_size) {
     TRACE_(verbose, "%d resizing hash to %lu, using %lu bytes for gadgets\n", current_pid(), new_size, asbestos->mem_used);
-    struct list *new_hash = calloc(new_size, sizeof(struct list));
+    struct list *new_hash = calloc(new_size + 1, sizeof(struct list));
+    atomic_fetch_add_explicit(&asbestos->hash_seq, 1, memory_order_relaxed);
+    atomic_thread_fence(memory_order_release);
     for (size_t i = 0; i < asbestos->hash_size; i++) {
         if (list_null(&asbestos->hash[i]))
             continue;
@@ -637,9 +646,31 @@ static void fiber_resize_hash(struct asbestos *asbestos, size_t new_size) {
             list_init_add(&new_hash[fiber_hash(block->addr, new_size)], &block->chain);
         }
     }
-    free(asbestos->hash);
-    asbestos->hash = new_hash;
-    asbestos->hash_size = new_size;
+    struct list *old = asbestos->hash;
+    size_t old_size = asbestos->hash_size;
+    __atomic_store_n(&asbestos->hash, new_hash, __ATOMIC_RELEASE);
+    __atomic_store_n(&asbestos->hash_size, new_size, __ATOMIC_RELEASE);
+    atomic_fetch_add_explicit(&asbestos->hash_seq, 1, memory_order_release);
+    if (old != NULL) {
+        struct list *link = &old[old_size];
+        link->prev = old;
+        link->next = asbestos->retired_hash;
+        asbestos->retired_hash = link;
+    }
+}
+
+// list_init_add for a hash bucket, published to readers without the lock:
+// the item's links are set before the bucket's points to it
+static void fiber_hash_add(struct list *bucket, struct list *item) {
+    if (list_null(bucket)) {
+        bucket->prev = bucket;
+        __atomic_store_n(&bucket->next, bucket, __ATOMIC_RELEASE);
+    }
+    struct list *next = bucket->next;
+    item->prev = bucket;
+    item->next = next;
+    next->prev = item;
+    __atomic_store_n(&bucket->next, item, __ATOMIC_RELEASE);
 }
 
 // Every address space's translated blocks, counted where their mem_used and
@@ -661,7 +692,7 @@ static void fiber_insert(struct asbestos *asbestos, struct fiber_block *block) {
     if (asbestos->num_blocks >= asbestos->hash_size * 2)
         fiber_resize_hash(asbestos, asbestos->hash_size * 2);
 
-    list_init_add(&asbestos->hash[fiber_hash(block->addr, asbestos->hash_size)], &block->chain);
+    fiber_hash_add(&asbestos->hash[fiber_hash(block->addr, asbestos->hash_size)], &block->chain);
     list_init_add(blocks_list(asbestos, PAGE(block->addr), 0), &block->page[0]);
     if (PAGE(block->addr) != PAGE(block->end_addr))
         list_init_add(blocks_list(asbestos, PAGE(block->end_addr), 1), &block->page[1]);
@@ -677,6 +708,42 @@ static struct fiber_block *fiber_lookup(struct asbestos *asbestos, addr_t addr) 
             return block;
     }
     return NULL;
+}
+
+// fiber_lookup without asbestos->lock, for the run loop after a block cache
+// miss (jetsam_lock held to read: no block or retired hash array is freed
+// meanwhile). With the lock, threads waiting for one another there were most
+// of java's system time: javac ran 3.4 s, not 4.1 (a Mac, PIC). NULL if none
+// was found, as when the chain it walks changed under it (a removed block's
+// links are NULL) or the hash was resized (hash_seq): the locked lookup
+// decides then. Not for an asbestos ever shared, whose lookups check tags.
+static struct fiber_block *fiber_lookup_unlocked(struct asbestos *asbestos, addr_t addr) {
+    unsigned seq = atomic_load_explicit(&asbestos->hash_seq, memory_order_acquire);
+    if (seq & 1)
+        return NULL;
+    size_t size = __atomic_load_n(&asbestos->hash_size, __ATOMIC_ACQUIRE);
+    struct list *hash = __atomic_load_n(&asbestos->hash, __ATOMIC_ACQUIRE);
+    struct list *bucket = &hash[fiber_hash(addr, size)];
+    struct fiber_block *found = NULL;
+    struct list *pos = __atomic_load_n(&bucket->next, __ATOMIC_ACQUIRE);
+    // bounded: a chain walked while a resize moved its blocks may not come
+    // back to this bucket
+    for (int steps = 0; pos != NULL && pos != bucket && steps < 64; steps++) {
+        struct fiber_block *block = list_entry(pos, struct fiber_block, chain);
+        if (block->addr == addr) {
+            found = block;
+            break;
+        }
+        pos = __atomic_load_n(&pos->next, __ATOMIC_ACQUIRE);
+    }
+    atomic_thread_fence(memory_order_acquire);
+    if (atomic_load_explicit(&asbestos->hash_seq, memory_order_relaxed) != seq)
+        return NULL;
+    // a block another address space put in after sharing began: shared is
+    // seen with it (mem_asbestos_share sets it before the child runs)
+    if (__atomic_load_n(&asbestos->ever_shared, __ATOMIC_ACQUIRE))
+        return NULL;
+    return found;
 }
 
 #ifdef ISH_JIT
@@ -998,6 +1065,13 @@ static void fiber_block_free(struct asbestos *asbestos, struct fiber_block *bloc
 
 static void fiber_free_jetsam_counted(struct asbestos *asbestos, size_t *blocks, size_t *bytes) {
     struct fiber_block *block, *tmp;
+    while (asbestos->retired_hash != NULL) {
+        struct list *link = asbestos->retired_hash;
+        asbestos->retired_hash = link->next;
+        free(link->prev);   // the retired array (fiber_resize_hash)
+    }
+    if (!list_empty(&asbestos->jetsam))
+        asbestos->free_gen = asbestos_next_gen();   // block caches may hold them
     list_for_each_entry_safe(&asbestos->jetsam, block, tmp, jetsam) {
         list_remove(&block->jetsam);
         *blocks += 1;
@@ -1102,13 +1176,23 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
     // This prevents jetsam cleanup from freeing blocks while we're executing them.
     read_wrlock(&asbestos->jetsam_lock);
 
-    // Use persistent block cache and frame from TLB; invalidate when blocks are jetsam'd
-    bool caches_stale = (tlb->block_cache_gen != asbestos->invalidate_gen);
+    // The persistent block cache and frame of the TLB. With the read lock
+    // held no block is freed, so the cache's are all there, unless some were
+    // freed while this thread held none (free_gen): emptied then, as a cache
+    // of another asbestos is. Blocks invalidated since (is_jetsam) stay in
+    // it, passed over by the lookups: emptying the whole cache at every
+    // invalidation sent every thread to asbestos->lock for each block it ran
+    // after, 3.2 million lookups in javac's 4.3 s run (HotSpot patches its
+    // code all the time, and each patch invalidates), contended.
     struct fiber_block **cache = tlb->block_cache;
-    if (caches_stale) {
+    bool caches_stale = tlb->block_cache_gen != asbestos->invalidate_gen;
+    if (tlb->block_cache_free_gen != asbestos->free_gen) {
         memset(cache, 0, sizeof(tlb->block_cache));
-        tlb->block_cache_gen = asbestos->invalidate_gen;
+        tlb->block_cache_free_gen = asbestos->free_gen;
+        caches_stale = true;
     }
+    if (caches_stale)
+        tlb->block_cache_gen = asbestos->invalidate_gen;
 
     // Use persistent frame from TLB (avoids malloc/free + ret_cache zeroing)
     struct fiber_frame *frame = tlb->frame;
@@ -1137,9 +1221,10 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
     while (interrupt == INT_NONE) {
         // Check if blocks were invalidated since last check (e.g. CoW by another thread).
         // This must be inside the loop, not just at function entry, because invalidation
-        // can happen while we're in the JIT cycle (between fiber_enter calls).
+        // can happen while we're in the JIT cycle (between fiber_enter calls). The
+        // ret_cache goes (its entries point into blocks' code); the block cache's
+        // invalidated blocks are passed over (is_jetsam), none freed under the read lock.
         if (tlb->block_cache_gen != asbestos->invalidate_gen) {
-            memset(cache, 0, sizeof(tlb->block_cache));
             tlb->block_cache_gen = asbestos->invalidate_gen;
             memset(frame->ret_cache, 0, sizeof(frame->ret_cache));
         }
@@ -1294,11 +1379,19 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
                 fiber_insert(asbestos, block);
                 unlock(&asbestos->lock);
             } else
-            if (block == NULL || block->addr != ip) {
+            if (block == NULL || block->addr != ip || block->is_jetsam) {
                 extern int stage_trace_on(void);
                 extern _Atomic uint64_t st_block_cache_miss, st_block_compile;
                 if (stage_trace_on())
                     atomic_fetch_add_explicit(&st_block_cache_miss, 1, memory_order_relaxed);
+                if (!__atomic_load_n(&asbestos->ever_shared, __ATOMIC_RELAXED)) {
+                    struct fiber_block *found = fiber_lookup_unlocked(asbestos, ip);
+                    if (found != NULL && !found->is_jetsam) {
+                        cache[cache_index] = found;
+                        block = found;
+                        goto looked_up;
+                    }
+                }
                 lock(&asbestos->lock);
                 block = fiber_lookup(asbestos, ip);
                 if (block != NULL && asbestos->ever_shared &&
@@ -1348,6 +1441,7 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
                 cache[cache_index] = block;
                 unlock(&asbestos->lock);
             }
+        looked_up:;
         }
         // ISH_NO_CHAIN=1: never patch direct-jump chains between blocks, so
         // every block exit returns to this dispatch loop (diagnostic).

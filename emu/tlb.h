@@ -41,6 +41,7 @@ struct tlb {
     // Size defined by FIBER_CACHE_SIZE in asbestos.h
     struct fiber_block *block_cache[1 << 12];  // must match FIBER_CACHE_SIZE
     unsigned block_cache_gen; // tracks asbestos->invalidate_gen for invalidation
+    unsigned block_cache_free_gen; // asbestos->free_gen when the block cache was last emptied
 
     // Persistent fiber_frame (avoids malloc/free + ret_cache zeroing per syscall)
     struct fiber_frame *frame;

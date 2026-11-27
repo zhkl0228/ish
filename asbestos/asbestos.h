@@ -27,9 +27,18 @@ struct asbestos {
         struct list blocks[2];
     } *page_hash;
 
-    // Incremented on every block invalidation; used to invalidate persistent
-    // per-thread block caches (which may hold pointers to jetsam'd blocks)
+    // A new value (asbestos_next_gen) on every block invalidation: a thread
+    // that sees it empties its ret_cache, whose entries point into blocks'
+    // code. Its block cache stays: an entry of a block invalidated since
+    // (is_jetsam) is passed over where it is read, the run loop's lookup and
+    // native code's alike.
     unsigned invalidate_gen;
+
+    // A new value whenever jetsam'd blocks are freed (jetsam_lock held to
+    // write, so no thread is running): a thread that held no read lock
+    // meanwhile may have them in its block cache, and empties it. Never
+    // another asbestos's value, so a cache of another's is emptied too.
+    unsigned free_gen;
 
     // Number of threads currently inside cpu_run_to_interrupt.
     // When 1, we can skip jetsam_lock (no other thread to synchronize with).
@@ -68,6 +77,12 @@ struct asbestos {
     // space looking one up has there (a page another mapped since), so each
     // is looked up checked (fiber_block->tag)
     bool ever_shared;
+    // The run loop looks blocks up without the lock after a block cache miss
+    // (fiber_lookup_unlocked): odd while hash is being resized, and the
+    // arrays a resize replaced, freed where jetsam blocks are (no thread
+    // running then, so none reading them)
+    _Atomic unsigned hash_seq;
+    struct list *retired_hash;
 };
 
 // this is roughly the average number of instructions in a basic block according to anonymous sources
