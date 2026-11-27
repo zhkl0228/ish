@@ -168,9 +168,9 @@ typedef NS_ENUM(NSInteger, ColumnKeyProfile) {
 // Keys in the column, right under its meters, while it is shown
 // (updateColumnKeys, addColumnKeys): with the keyboard down, what a program's
 // menus take (claude's: / for its commands, esc to leave one) without the
-// keyboard over the terminal. With the keyboard up, the arrows' pad and
-// Ctrl-C only, while the CPU and the memory leave them the room above the
-// keyboard's bar (columnKeysAboveKeyboard).
+// keyboard over the terminal. With the keyboard up, esc and tab only, while
+// the CPU and the memory leave them the room above the keyboard's bar
+// (columnKeysAboveKeyboard).
 @property ColumnKeysView *columnKeys;
 // The keys' capsule of glass, as the system's own bars in the column are
 // (Feather's tab bar and its toolbar's buttons, the phone's screenshots): the
@@ -178,15 +178,19 @@ typedef NS_ENUM(NSInteger, ColumnKeyProfile) {
 // between each two (ColumnKeysView). Hidden with none of its keys shown.
 @property UIVisualEffectView *columnKeysGlass;
 // With the keyboard down: esc and return, the profile's middle keys
-// (columnProfileKeys) and the keyboard's own two (columnKeysAlways, by
-// profile too). With it up, those two only, as the bar has the rest: the
+// (columnProfileKeys) and two more by the profile (columnKeysAlways): the
 // arrows' pad and Ctrl-C, or for an AI agent the up and down arrows, the up
 // one Ctrl-C held: there the prompt's history and a menu's choices go up and
 // down more often than what runs is interrupted, and the pad's up and down
-// wanted a slide each, its left and right seldom.
+// wanted a slide each, its left and right seldom. With it up, esc and tab
+// whatever runs (columnKeysUp): the bar over the keyboard has the arrows, and
+// ctrl for Ctrl-C, which the column's two then were again, and its own esc
+// and tab are at its left end, away from the right hand, where Claude Code's
+// menus and vi want esc, and Claude Code's modes shift-tab (tab held).
 @property NSArray<UIView *> *columnKeysEdge;
 @property NSDictionary<NSNumber *, NSArray<UIView *> *> *columnProfileKeys;
 @property NSDictionary<NSNumber *, NSArray<UIView *> *> *columnKeysAlways;
+@property NSArray<UIView *> *columnKeysUp;
 @property ColumnKeyProfile columnProfile;
 // The marks of what a held key sends, in its corner (badgeKey:), in the
 // theme's colors as the keys are
@@ -1138,8 +1142,8 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
     // The on-screen keyboard up (100 points of it or more over the terminal,
     // as hasExternalKeyboard tells it from the bar of extra keys alone, or a
     // floating keyboard's): the column keeps the CPU and the memory only, and
-    // of its keys the arrows' pad and Ctrl-C, over the keyboard where the
-    // memory leaves them the room: what the bar has not
+    // of its keys esc and tab, under the memory where it leaves them the
+    // room over the keyboard (columnKeysUp)
     self.keyboardUp = pad >= 100;
     self.monitorColumn.keyboardUp = self.keyboardUp;
     // and the meters' details, open, the CPUs and the memory only then
@@ -1470,6 +1474,7 @@ static const CGFloat kColumnKeysBottom = 24;
         @(ColumnKeyProfilePager): @[pad, interrupt],
         @(ColumnKeyProfileAgent): @[previous, next],
     };
+    self.columnKeysUp = @[escape, tab];
     // The keys in their capsule, kColumnKeysInset from its ends. Its room, as
     // tall as it, is at the column's bottom: the meters' room is the column's,
     // down to it, and the rows that fit in it show (MonitorColumnView's
@@ -1843,32 +1848,31 @@ static NSString *ArrowGlyph(char direction) {
 }
 
 // Shown while the column is, right under its meters: with the keyboard down
-// six, the profile's (updateColumnProfile); up the arrows' pad and Ctrl-C,
+// six, the profile's (updateColumnProfile); up esc and tab (columnKeysUp),
 // while the CPU and the memory leave them the room above the keyboard's bar.
-// They are what the bar has not: it has esc, tab and / (folded or with the
-// column hidden their only place), and the column had them again. Folded,
-// the column has not the room for two from the status bar's region (174) to
-// the bar (371): it squashed the memory.
+// The bar keeps its own esc and tab: folded, or with the column hidden, they
+// are their only place. Folded, the column has not the room for two from the
+// status bar's region (174) to the bar (371): it squashed the memory.
 - (void)updateColumnKeys {
     BOOL shown = !self.monitorColumn.hidden;
     BOOL up = self.keyboardUp;
     if (self.columnKeys.hidden == shown)
         self.columnKeys.hidden = !shown;
-    // Up, the pad and Ctrl-C (an agent's up and down arrows), where they fit;
-    // down, all the profile's
+    // Up, esc and tab, where they fit; down, all the profile's
+    NSArray<UIView *> *upKeys = self.columnKeysUp;
+    BOOL upKeysFit = up && [self columnHasRoomForKeys:upKeys];
     NSArray<UIView *> *alwaysKeys = self.columnKeysAlways[@(self.columnProfile)];
-    BOOL upKeysFit = up && [self columnHasRoomForKeys:alwaysKeys];
     NSArray<UIView *> *middle = self.columnProfileKeys[@(self.columnProfile)];
     BOOL anyKey = NO;
     for (UIView *key in self.columnKeys.arrangedSubviews) {
-        BOOL always = [alwaysKeys containsObject:key];
-        BOOL wanted = up ? upKeysFit && always
-                         : always || [self.columnKeysEdge containsObject:key] || [middle containsObject:key];
+        BOOL wanted = up ? upKeysFit && [upKeys containsObject:key]
+                         : [alwaysKeys containsObject:key] || [self.columnKeysEdge containsObject:key] ||
+                               [middle containsObject:key];
         if (key.hidden != !wanted)
             key.hidden = !wanted;
         anyKey |= wanted;
     }
-    // No empty capsule: up and folded, the pad and Ctrl-C give way
+    // No empty capsule: up and folded, esc and tab give way
     BOOL glassHidden = !shown || !anyKey;
     if (self.columnKeysGlass.hidden != glassHidden)
         self.columnKeysGlass.hidden = glassHidden;
