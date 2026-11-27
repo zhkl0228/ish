@@ -47,9 +47,11 @@
 #ifdef __APPLE__
 #define UC_X(uc, n) ((uc)->uc_mcontext->__ss.__x[n])
 #define UC_PC(uc) ((uc)->uc_mcontext->__ss.__pc)
+#define UC_SP(uc) ((uc)->uc_mcontext->__ss.__sp)
 #else
 #define UC_X(uc, n) ((uc)->uc_mcontext.regs[n])
 #define UC_PC(uc) ((uc)->uc_mcontext.pc)
+#define UC_SP(uc) ((uc)->uc_mcontext.sp)
 static void sys_icache_invalidate(void *start, size_t len) {
     __builtin___clear_cache((char *) start, (char *) start + len);
 }
@@ -2926,6 +2928,8 @@ static uint64_t reg_hash(const uint32_t *k, unsigned n, uint64_t *h2_out) {
 // so two images of one module (two versions of the file) need two contexts.
 struct ctx_node {
     struct ctx_node *next;
+    struct ctx_node *all_next;   // every address space's (all_ctxs), for a fault's report
+    struct asbestos *asbestos;
     int mod;
     uint64_t base;
     const void *owner;      // the AOT image, NULL for this process's own translations
@@ -2934,6 +2938,7 @@ struct ctx_node {
     struct jit_ctx *ctx;
 };
 static pthread_mutex_t ctx_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct ctx_node *all_ctxs;   // ctx_lock
 
 static struct jit_ctx *ctx_get(struct asbestos *a, int mod, uint64_t base, const struct aot_module *owner) {
     pthread_mutex_lock(&ctx_lock);
@@ -2960,6 +2965,9 @@ static struct jit_ctx *ctx_get(struct asbestos *a, int mod, uint64_t base, const
             n->ctx->base = base;
             n->next = a->jit_ctxs;
             a->jit_ctxs = n;
+            n->asbestos = a;
+            n->all_next = all_ctxs;
+            all_ctxs = n;
         }
     }
     pthread_mutex_unlock(&ctx_lock);
@@ -2970,6 +2978,12 @@ void jit_asbestos_free(struct asbestos *a) {
     pthread_mutex_lock(&ctx_lock);
     struct ctx_node *n = a->jit_ctxs;
     a->jit_ctxs = NULL;
+    for (struct ctx_node **p = &all_ctxs; *p != NULL;) {
+        if ((*p)->asbestos == a)
+            *p = (*p)->all_next;
+        else
+            p = &(*p)->all_next;
+    }
     pthread_mutex_unlock(&ctx_lock);
     while (n) {
         struct ctx_node *next = n->next;
@@ -3000,13 +3014,41 @@ static bool one_mapping(const struct jit_units *U, int mod, uint64_t base) {
     return true;
 }
 
+// The slots' last claims and releases (slot_set, jit_block_free), for a
+// fault in native code not at a guest access: native code that found a slot
+// empty or another's tells from them which block had it, and when it let it
+// go (jit_take_unknown_fault)
+enum { SLOT_CLAIMED, SLOT_RELEASED, SLOT_NOT_OWNED };
+struct slot_event {
+    uint64_t ms;
+    const struct jit_ctx *ctx;
+    const struct fiber_block *b;
+    uint64_t addr;
+    uint32_t idx, kind;
+};
+#define SLOT_EVENTS (1u << 16)
+static struct slot_event slot_events[SLOT_EVENTS];
+static _Atomic uint64_t slot_events_n;
+
+static uint64_t mono_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t) ts.tv_sec * 1000 + (uint64_t) ts.tv_nsec / 1000000;
+}
+
+static void slot_note(const struct jit_ctx *ctx, unsigned idx, const struct fiber_block *b, unsigned kind) {
+    uint64_t i = atomic_fetch_add_explicit(&slot_events_n, 1, memory_order_relaxed);
+    slot_events[i % SLOT_EVENTS] = (struct slot_event) {mono_ms(), ctx, b, b->addr, idx, kind};
+}
+
 void jit_block_free(struct fiber_block *b) {
     struct jit_ctx *ctx = b->jit_ctx;
     if (!ctx || !pic_on)
         return;
     struct fiber_block *expected = b;
-    __atomic_compare_exchange_n(&ctx->slot[b->jit_idx].blk, &expected, NULL, false,
-                                __ATOMIC_ACQ_REL, __ATOMIC_RELAXED);
+    bool owned = __atomic_compare_exchange_n(&ctx->slot[b->jit_idx].blk, &expected, NULL, false,
+                                             __ATOMIC_ACQ_REL, __ATOMIC_RELAXED);
+    slot_note(ctx, b->jit_idx, b, owned ? SLOT_RELEASED : SLOT_NOT_OWNED);
 }
 
 // Point a slot at block b, whose translation's constants are relative to base.
@@ -3017,6 +3059,7 @@ static void slot_set(struct jit_ctx *ctx, unsigned idx, struct fiber_block *b, u
     ctx_far(ctx, idx)->dbase = dbase;
     ctx->slot[idx].base = base;
     __atomic_store_n(&ctx->slot[idx].blk, b, __ATOMIC_RELEASE);
+    slot_note(ctx, idx, b, SLOT_CLAIMED);
 }
 
 // Take slot idx for b if it is free (or b's already): a slot has one owner,
@@ -3823,6 +3866,7 @@ static __thread struct {
     const char *area;          // the AOT image's guest path, NULL for the code region
     uint32_t words[8];         // from pc - 4 * before
     unsigned before, n;
+    uint64_t host[31], host_sp;
 } unknown_fault;
 
 enum jit_fault jit_native_fault(void *ucontext, uintptr_t addr, bool as_unknown, uintptr_t *resume) {
@@ -3857,12 +3901,138 @@ enum jit_fault jit_native_fault(void *ucontext, uintptr_t addr, bool as_unknown,
     unknown_fault.n = 0;
     for (uintptr_t a = pc - 4 * unknown_fault.before; a < hi && unknown_fault.n < 8; a += 4)
         unknown_fault.words[unknown_fault.n++] = *(const uint32_t *) a;
+    for (int r = 0; r < 31; r++)
+        unknown_fault.host[r] = UC_X(uc, r);
+    unknown_fault.host_sp = UC_SP(uc);
     unknown_fault.pending = true;
     return JIT_FAULT_UNKNOWN;
 }
 
 bool jit_unknown_fault_pending(void) {
     return unknown_fault.pending;
+}
+
+// The slot of context ctx the code at the fault read, from the words before
+// the faulting load: ldr_off()'s `ldr xd, [x29, #off]`, or `add xd, x29,
+// #hi, lsl #12` and `ldr xd, [xd, #lo]`. -1 if they are neither.
+static long fault_slot_read(void) {
+    unsigned k = unknown_fault.before;
+    if (k < 1)
+        return -1;
+    uint32_t ldr = unknown_fault.words[k - 1];
+    unsigned off;
+    if ((ldr & 0xFFC003E0u) == (0xF9400000u | 29u << 5)) {
+        off = ((ldr >> 10) & 0xfff) * 8;
+    } else if (k >= 2 && (ldr & 0xFFC00000u) == 0xF9400000u &&
+               (unknown_fault.words[k - 2] & 0xFFC003E0u) == (0x91400000u | 29u << 5) &&
+               ((ldr >> 5) & 31) == (unknown_fault.words[k - 2] & 31)) {
+        off = ((unknown_fault.words[k - 2] >> 10) & 0xfff) << 12 | ((ldr >> 10) & 0xfff) * 8;
+    } else {
+        return -1;
+    }
+    if (off < CTX_BLK || (off - CTX_BLK) % CTX_SLOT != 0)
+        return -1;
+    return (long) ((off - CTX_BLK) / CTX_SLOT);
+}
+
+// What the native code at the fault ran with and was (PIC): its context (x29)
+// -- module, mapping and address space, against the faulting thread's --, the
+// translation at pc, the slot it read, and that slot's last claims and
+// releases.
+static size_t fault_ctx_report(char *buf, size_t size, const struct cpu_state *cpu) {
+    size_t n = 0;
+#define OUT(...) do { if (n < size) n += (size_t) snprintf(buf + n, size - n, __VA_ARGS__); } while (0)
+    uintptr_t x29 = (uintptr_t) unknown_fault.host[29];
+    struct asbestos *own = cpu->mmu != NULL ? cpu->mmu->asbestos : NULL;
+    bool found = false;
+    int mod = -1;
+    uint64_t base = 0;
+    const char *image = NULL;
+    struct asbestos *of = NULL;
+    pthread_mutex_lock(&ctx_lock);
+    for (struct ctx_node *c = all_ctxs; c != NULL; c = c->all_next) {
+        if ((uintptr_t) c->ctx != x29)
+            continue;
+        found = true;
+        mod = c->mod;
+        base = c->base;
+        image = c->owner != NULL ? ((const struct aot_module *) c->owner)->path : NULL;
+        of = c->asbestos;
+        break;
+    }
+    pthread_mutex_unlock(&ctx_lock);
+    char path[256] = "";
+    if (found) {
+        jit_module_path(mod, path, sizeof(path));
+        OUT("  context (x29) %#lx: module %d %s at %#llx%s%s, of address space %p%s\n", (unsigned long) x29, mod, path,
+            (unsigned long long) base, image != NULL ? ", image " : "", image != NULL ? image : "", (void *) of,
+            of == own ? " (the faulting thread's)" : ", not the faulting thread's");
+    } else {
+        OUT("  context (x29) %#lx: none of the address spaces' (the faulting thread's: %p)\n", (unsigned long) x29,
+            (void *) own);
+    }
+
+    // the translation at pc: the registry's segment starting nearest below it
+    const struct reg_entry *tr = NULL;
+    uintptr_t seg = 0;
+    unsigned tr_mod = 0, tr_idx = 0, tr_nseg = 0;
+    uint64_t tr_off = 0;
+    pthread_mutex_lock(&reg_lock);
+    for (unsigned i = 0; reg_table != NULL && i < REG_BUCKETS; i++)
+        for (const struct reg_entry *r = reg_table[i]; r != NULL; r = r->next)
+            for (unsigned s = 0; s < r->nseg; s++) {
+                uintptr_t c = (uintptr_t) r->seg[s].code;
+                if (c <= unknown_fault.pc && c > seg) {
+                    seg = c;
+                    tr = r;
+                }
+            }
+    if (tr != NULL) {
+        tr_mod = tr->key[0];
+        tr_off = tr->key[1] | (uint64_t) tr->key[2] << 32;
+        tr_idx = tr->idx;
+        tr_nseg = tr->nseg;
+    }
+    pthread_mutex_unlock(&reg_lock);
+    if (tr != NULL) {
+        jit_module_path((int) tr_mod, path, sizeof(path));
+        OUT("  translation: module %u %s, file offset %#llx, slot %u, %u segments; pc %#lx past its segment's start\n",
+            tr_mod, path, (unsigned long long) tr_off, tr_idx, tr_nseg, (unsigned long) (unknown_fault.pc - seg));
+    } else {
+        OUT("  translation: none of the registry's\n");
+    }
+
+    long read = fault_slot_read();
+    if (read >= 0)
+        OUT("  the slot it read: %ld, %s\n", read,
+            tr != NULL && (unsigned long) read == tr_idx ? "the translation's" : "not the translation's");
+    long idx = read >= 0 ? read : tr != NULL ? (long) tr_idx : -1;
+    if (found && idx >= 0 && (unsigned long) idx < CTX_MAX) {
+        const struct jit_ctx *ctx = (const struct jit_ctx *) x29;
+        const struct fiber_block *holder = __atomic_load_n(&ctx->slot[idx].blk, __ATOMIC_ACQUIRE);
+        OUT("  slot %ld now: block %p, base %#llx\n", idx, (void *) holder, (unsigned long long) ctx->slot[idx].base);
+    }
+    if (idx < 0)
+        return n;
+    uint64_t total = atomic_load_explicit(&slot_events_n, memory_order_relaxed);
+    uint64_t span = total < SLOT_EVENTS ? total : SLOT_EVENTS, now = mono_ms();
+    static const char *const kinds[] = {"claimed", "released", "released, not its own (another's)"};
+    unsigned shown = 0, for_ctx = 0;
+    OUT("  slot %ld, newest first, of the last %llu claims and releases:", idx, (unsigned long long) span);
+    for (uint64_t k = 0; k < span; k++) {
+        const struct slot_event *ev = &slot_events[(total - 1 - k) % SLOT_EVENTS];
+        if ((uintptr_t) ev->ctx != x29)
+            continue;
+        for_ctx++;
+        if (ev->idx != (uint32_t) idx || shown >= 8)
+            continue;
+        shown++;
+        OUT("\n    %llu ms ago: %s by block %p (guest %#llx)", (unsigned long long) (now - ev->ms),
+            ev->kind < 3 ? kinds[ev->kind] : "?", (void *) ev->b, (unsigned long long) ev->addr);
+    }
+    OUT("%s\n  (%u of them of this context)\n", shown == 0 ? " none" : "", for_ctx);
+#undef OUT
+    return n;
 }
 
 size_t jit_take_unknown_fault(char *buf, size_t size, const struct cpu_state *cpu) {
@@ -3880,7 +4050,12 @@ size_t jit_take_unknown_fault(char *buf, size_t size, const struct cpu_state *cp
     OUT("\n  guest: block pc %#llx sp %#llx", (unsigned long long) cpu->pc, (unsigned long long) cpu->sp);
     for (int r = 0; r < 31; r++)
         OUT("%sx%d %#llx", r % 4 == 0 ? "\n   " : " ", r, (unsigned long long) cpu->regs[r]);
+    OUT("\n  host: sp %#llx", (unsigned long long) unknown_fault.host_sp);
+    for (int r = 0; r < 31; r++)
+        OUT("%sx%d %#llx", r % 4 == 0 ? "\n   " : " ", r, (unsigned long long) unknown_fault.host[r]);
     OUT("\n");
+    if (pic_on && unknown_fault.area == NULL && n < size)
+        n += fault_ctx_report(buf + n, size - n, cpu);
 #undef OUT
     return n;
 }

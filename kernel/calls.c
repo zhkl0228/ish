@@ -572,7 +572,7 @@ void handle_interrupt(int interrupt) {
     } else if (interrupt == INT_JIT_NATIVE_FAULT) {
         // A host fault in native code not at a guest access: no position to
         // retry from. Killed as by a SIGSEGV no handler can take for its own.
-        char text[2048];
+        char text[8192];
         jit_take_unknown_fault(text, sizeof(text), cpu);
         printk("%d(%s): %s", current->pid, current->comm, text);
         do_exit_group(SIGSEGV_);
