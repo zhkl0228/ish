@@ -315,17 +315,6 @@ const utf8 = (s) => Buffer.from(s, 'utf8').toString('latin1');
           shown.rows.slice(2).every((r) => r == '') && shown.x == 7 && shown.y == 1,
           JSON.stringify(shown));
 
-    // serialize: what a restored tab shows, colors and all, not a full-screen
-    // program's screen
-    await page.evaluate(() => { exports.reset(); exports.clearScrollback(); });
-    await write('plain \x1b[31mred\x1b[0m line\r\n$ ');
-    let saved = await page.evaluate(() => exports.serialize());
-    check('serialize keeps the text and its colors', saved.includes('plain') && saved.includes('red') && /\x1b\[[0-9;]*31m/.test(saved), JSON.stringify(saved));
-    await write('\x1b[?1049hFULLSCREEN');
-    saved = await page.evaluate(() => exports.serialize());
-    check("serialize leaves out a full-screen program's screen", saved.includes('plain') && !saved.includes('FULLSCREEN'), JSON.stringify(saved));
-    await write('\x1b[?1049l');
-
     // what a program asks to be told of: the bell, iTerm2's and ghostty's
     // notifications as Claude Code writes them; not ConEmu's progress
     await take();

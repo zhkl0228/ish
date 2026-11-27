@@ -398,10 +398,10 @@ static int start_process(NSArray<NSString *> *command, NSString *directory, Term
 }
 
 - (TerminalSession *)startSessionWithError:(int *)errorOut {
-    return [self startSessionInDirectory:nil restoredOutput:nil error:errorOut];
+    return [self startSessionInDirectory:nil error:errorOut];
 }
 
-- (TerminalSession *)startSessionInDirectory:(NSString *)directory restoredOutput:(NSData *)output error:(int *)errorOut {
+- (TerminalSession *)startSessionInDirectory:(NSString *)directory error:(int *)errorOut {
     NSAssert(NSThread.isMainThread, @"sessions are started from the main thread");
     Terminal *terminal = nil;
     int pid = start_process(UserPreferences.shared.launchCommand, directory, &terminal);
@@ -422,9 +422,6 @@ static int start_process(NSArray<NSString *> *command, NSString *directory, Term
     // Register before the process can run, so an immediately exiting command is still matched.
     [self.mutableSessions addObject:session];
     [self.livePids addObject:@(pid)];
-    // Before the process runs: ahead of anything it writes
-    if (output != nil)
-        [terminal sendOutput:output.bytes length:(int) output.length];
     if (boot_is_awaited())
         current->before_run = wait_for_boot;
     int err = task_start(current);

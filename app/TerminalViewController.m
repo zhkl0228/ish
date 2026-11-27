@@ -682,73 +682,32 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
 #pragma mark Saved tabs
 
 // The tabs saved for the app's next start: their order, names and directories
-// in the defaults ({"uuid", "title", "directory", "selected"}, the windows' one
-// after another), and what each showed (term.js's serialize) in a file of
-// Application Support/Saved Tabs named by its uuid
+// in the defaults ({"title", "directory", "selected"}, the windows' one after
+// another). Not what each showed: a restored tab starts empty, its shell
+// in its directory.
 static NSString *const kSavedTabsKey = @"Saved Tabs";
 
+// Where an earlier version kept what each tab showed (term.js's serialize), a
+// file named by its uuid: removed as the tabs are restored
 static NSURL *SavedTabsDirectory(void) {
     NSURL *support = [NSFileManager.defaultManager URLsForDirectory:NSApplicationSupportDirectory
                                                           inDomains:NSUserDomainMask].firstObject;
     return [support URLByAppendingPathComponent:@"Saved Tabs" isDirectory:YES];
 }
 
-static NSURL *SavedTabOutputURL(NSString *uuid) {
-    return [SavedTabsDirectory() URLByAppendingPathComponent:[uuid stringByAppendingPathExtension:@"txt"]];
-}
-
 + (void)saveTabs {
     NSMutableArray<NSDictionary *> *saved = [NSMutableArray new];
-    NSMutableArray<TerminalSession *> *sessions = [NSMutableArray new];
     for (TerminalViewController *vc in ConnectedTerminalViewControllers()) {
         for (TerminalSession *session in vc.tabs) {
-            NSMutableDictionary *tab = [NSMutableDictionary dictionaryWithObject:session.uuid.UUIDString forKey:@"uuid"];
+            NSMutableDictionary *tab = [NSMutableDictionary new];
             tab[@"title"] = session.title;
             tab[@"directory"] = session.currentDirectory;
             if (session == vc.selectedSession)
                 tab[@"selected"] = @YES;
             [saved addObject:tab];
-            [sessions addObject:session];
         }
     }
     [NSUserDefaults.standardUserDefaults setObject:saved forKey:kSavedTabsKey];
-
-    // What tabs closed since showed goes
-    NSFileManager *manager = NSFileManager.defaultManager;
-    NSURL *directory = SavedTabsDirectory();
-    [manager createDirectoryAtURL:directory withIntermediateDirectories:YES attributes:nil error:nil];
-    NSMutableSet<NSString *> *names = [NSMutableSet new];
-    for (TerminalSession *session in sessions)
-        [names addObject:SavedTabOutputURL(session.uuid.UUIDString).lastPathComponent];
-    for (NSURL *file in [manager contentsOfDirectoryAtURL:directory includingPropertiesForKeys:nil options:0 error:nil]) {
-        if (![names containsObject:file.lastPathComponent])
-            [manager removeItemAtURL:file error:nil];
-    }
-
-    // Each terminal's page has its text; asking takes a moment, which the app
-    // is given in the background until the last page answers
-    if (sessions.count == 0)
-        return;
-    __block NSUInteger pending = sessions.count;
-    __block UIBackgroundTaskIdentifier task = UIBackgroundTaskInvalid;
-    void (^end)(void) = ^{
-        if (task != UIBackgroundTaskInvalid) {
-            [UIApplication.sharedApplication endBackgroundTask:task];
-            task = UIBackgroundTaskInvalid;
-        }
-    };
-    task = [UIApplication.sharedApplication beginBackgroundTaskWithName:@"save tabs" expirationHandler:end];
-    for (TerminalSession *session in sessions) {
-        NSURL *url = SavedTabOutputURL(session.uuid.UUIDString);
-        [session.terminal.webView evaluateJavaScript:@"exports.serialize()" completionHandler:^(NSString *text, NSError *error) {
-            if (error != nil)
-                NSLog(@"saving what tab %@ showed: %@", session.uuid, error);
-            else
-                [[text dataUsingEncoding:NSUTF8StringEncoding] writeToURL:url atomically:YES];
-            if (--pending == 0)
-                end();
-        }];
-    }
 }
 
 - (BOOL)restoreSavedTabs {
@@ -756,15 +715,10 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
     if (saved.count == 0)
         return NO;
     [NSUserDefaults.standardUserDefaults removeObjectForKey:kSavedTabsKey];
-    NSData *mark = [@"\r\n\x1b[2m--- restored ---\x1b[0m\r\n" dataUsingEncoding:NSUTF8StringEncoding];
     TerminalSession *toSelect = nil;
     for (NSDictionary *tab in saved) {
-        NSString *uuid = tab[@"uuid"];
-        NSMutableData *output = [NSMutableData dataWithContentsOfURL:SavedTabOutputURL(uuid)];
-        [output appendData:mark];
         int err = 0;
         TerminalSession *session = [TerminalSessionStore.shared startSessionInDirectory:tab[@"directory"]
-                                                                         restoredOutput:output
                                                                                   error:&err];
         if (session == nil) {
             [self showMessage:@"could not restore a tab" subtitle:[NSString stringWithFormat:@"error code %d", err]];

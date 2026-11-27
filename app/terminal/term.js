@@ -62,8 +62,6 @@ term.loadAddon(new Unicode11Addon.Unicode11Addon());
 term.unicode.activeVersion = '11';
 const search = new SearchAddon.SearchAddon();
 term.loadAddon(search);
-const serializer = new SerializeAddon.SerializeAddon();
-term.loadAddon(serializer);
 term.open(document.getElementById('terminal'));
 
 // WebGL draws it. A context lost (the app in the background a while) leaves
@@ -339,11 +337,6 @@ exports.wheel = (dy, x, y) => {
     }
 };
 
-// The text the terminal showed, as the sequences that draw it again: the
-// lines of its normal screen and up to 1000 above, without a full-screen
-// program's screen (vim's, claude's) or the modes, for the tab the app
-// restores when it starts again
-exports.serialize = () => serializer.serialize({scrollback: 1000, excludeAltBuffer: true, excludeModes: true});
 // Called by the app when a TerminalView (re)attaches, since what it was told
 // of the scroll, the cursor and the cells' edge while detached was dropped.
 exports.resyncScroll = () => {

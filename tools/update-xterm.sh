@@ -15,7 +15,6 @@ PACKAGES=(
     @xterm/addon-fit@0.11.0
     @xterm/addon-webgl@0.19.0
     @xterm/addon-search@0.16.0
-    @xterm/addon-serialize@0.14.0
 )
 
 cd "$(dirname "$0")/.."
