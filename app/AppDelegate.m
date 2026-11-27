@@ -443,6 +443,7 @@ static void mount_documents(void) {
     DeviceStatusStart();
     get_network_report = device_network_report;
     get_power_report = device_power_report;
+    get_device_report = device_device_report;
     get_thermal_state = thermal_state;
     // this defaults key is set when taking app store screenshots
     extern const char *uname_hostname_override;

@@ -24,6 +24,17 @@ typedef NS_ENUM(NSInteger, TerminalSessionActivity) {
     TerminalSessionActivityBell,     // a program rang the bell or sent a notification
 };
 
+// What an AI agent owning the terminal says of itself in the title it sets:
+// Claude Code's alone, as one recorded on a phone shows it (2026-11-27,
+// script(1) around claude): ✳ and a space before its title while it waits
+// for the person (for a prompt, or to be allowed a tool), ◐ or ◑ (in turn,
+// a turning glyph) while it works, and no title once it exits.
+typedef NS_ENUM(NSInteger, TerminalSessionAgent) {
+    TerminalSessionAgentNone,    // no agent it can tell of owns the terminal
+    TerminalSessionAgentWaiting, // ✳
+    TerminalSessionAgentWorking, // ◐ ◑
+};
+
 typedef NS_ENUM(NSInteger, TerminalSessionState) {
     TerminalSessionStateRunning,
     TerminalSessionStateExited, // the shell exited; the terminal still shows its last output
@@ -43,7 +54,8 @@ typedef NS_ENUM(NSInteger, TerminalSessionState) {
 // Set by the user (tab rename). nil means use the default title.
 @property (nonatomic, copy, nullable) NSString *title;
 // The tab's title: the user's, else the title the job owning the terminal set
-// (OSC 0 or 2: claude, vim), else that job's program and the directory (top ·
+// (OSC 0 or 2: claude, vim; an agent's without the glyph of what it does,
+// which agent tells), else that job's program and the directory (top ·
 // ~), else the directory while the shell owns the terminal (~ for root's
 // home, else its last component), else "Shell <number>". It follows the
 // terminal: TerminalSessionStore checks it every second and on each title a
@@ -58,6 +70,13 @@ typedef NS_ENUM(NSInteger, TerminalSessionState) {
 @property (readonly) TerminalSessionActivity activity;
 // Its tab is looked at: what it did so far is seen
 - (void)markSeen;
+// What the agent owning the terminal does, by its title; checked, and a
+// change posted, with displayTitle
+@property (readonly) TerminalSessionAgent agent;
+// The agent stopped working since the tab was last looked at (working, then
+// waiting): done, or asking to be allowed a tool, which its title does not
+// tell apart. Over once it works again, and by markSeen.
+@property (readonly) BOOL agentStoppedUnseen;
 // The program of the job that owns the terminal (top, claude), nil while the
 // shell does
 @property (readonly, nullable) NSString *foregroundProgram;

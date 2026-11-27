@@ -13,6 +13,7 @@
 #include "kernel/calls.h"
 #include "fs/devices.h"
 #include "fs/path.h"
+#include "debug.h"
 
 NSNotificationName const TerminalSessionDidChangeNotification = @"TerminalSessionDidChangeNotification";
 NSString *const TerminalSessionNotificationUUIDKey = @"session";
@@ -26,6 +27,8 @@ NSString *const TerminalSessionNotificationUUIDKey = @"session";
 @property NSDate *startDate;
 @property (nullable) NSString *shownTitle; // displayTitle as last announced
 @property TerminalSessionActivity shownActivity; // activity as last announced
+@property TerminalSessionAgent shownAgent; // agent as last announced
+@property BOOL agentStoppedUnseen;
 // What of it is seen: its output and its programs' bells and notifications
 // so far, and whether a job ended since
 @property NSUInteger seenOutputCount;
@@ -52,6 +55,63 @@ NSString *const TerminalSessionNotificationUUIDKey = @"session";
     return [NSString stringWithFormat:@"Shell %lu", (unsigned long) self.number];
 }
 
+// Claude Code's titles' glyphs (TerminalSessionAgent), each with the space
+// after it
+static NSDictionary<NSString *, NSNumber *> *ClaudeTitleGlyphs(void) {
+    static NSDictionary<NSString *, NSNumber *> *glyphs;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        glyphs = @{
+            @"✳ ": @(TerminalSessionAgentWaiting),
+            @"◐ ": @(TerminalSessionAgentWorking),
+            @"◑ ": @(TerminalSessionAgentWorking),
+        };
+    });
+    return glyphs;
+}
+
+// The title the job owning the terminal set, nil if none: the agent's state
+// told by its glyph, which *rest leaves off. Claude Code's begins with a
+// glyph of those recorded; one it begins otherwise is said in the kernel log
+// (the first of each), and is shown as it is, telling no state.
+- (nullable NSString *)jobTitleWithAgent:(TerminalSessionAgent *)agent {
+    *agent = TerminalSessionAgentNone;
+    if (self.state != TerminalSessionStateRunning)
+        return nil;
+    int fg_group = self.terminal.foregroundProcessGroup;
+    NSString *title = self.terminal.windowTitle;
+    if (title.length == 0 || self.terminal.windowTitleGroup != fg_group)
+        return nil;
+    if (![self.foregroundProgram isEqualToString:@"claude"])
+        return title;
+    for (NSString *glyph in ClaudeTitleGlyphs()) {
+        if ([title hasPrefix:glyph]) {
+            *agent = ClaudeTitleGlyphs()[glyph].integerValue;
+            return [title substringFromIndex:glyph.length];
+        }
+    }
+    static NSMutableSet<NSString *> *unknown;
+    NSString *first = [title substringWithRange:[title rangeOfComposedCharacterSequenceAtIndex:0]];
+    if (unknown == nil)
+        unknown = [NSMutableSet new];
+    if (![unknown containsObject:first]) {
+        [unknown addObject:first];
+        NSData *bytes = [title dataUsingEncoding:NSUTF8StringEncoding];
+        NSMutableString *hex = [NSMutableString new];
+        for (NSUInteger i = 0; i < MIN(bytes.length, 16); i++)
+            [hex appendFormat:@"%02x", ((const uint8_t *) bytes.bytes)[i]];
+        printk("claude's title begins with none of its glyphs known (✳ ◐ ◑), shown as it is: %s (%s)\n",
+               title.UTF8String, hex.UTF8String);
+    }
+    return title;
+}
+
+- (TerminalSessionAgent)agent {
+    TerminalSessionAgent agent;
+    [self jobTitleWithAgent:&agent];
+    return agent;
+}
+
 // What runs in the terminal, and where: the title the job owning it set,
 // else, while a job rather than the shell owns it, the job's program and
 // the directory, else the directory. A title set by a job that has since
@@ -59,9 +119,10 @@ NSString *const TerminalSessionNotificationUUIDKey = @"session";
 - (nullable NSString *)runningTitle {
     if (self.state != TerminalSessionStateRunning)
         return nil;
-    int fg_group = self.terminal.foregroundProcessGroup;
-    if (self.terminal.windowTitle.length > 0 && self.terminal.windowTitleGroup == fg_group)
-        return self.terminal.windowTitle;
+    TerminalSessionAgent agent;
+    NSString *jobTitle = [self jobTitleWithAgent:&agent];
+    if (jobTitle != nil)
+        return jobTitle;
     NSString *program = self.foregroundProgram;
     NSString *place = self.placeName;
     if (program != nil && place != nil)
@@ -112,6 +173,7 @@ NSString *const TerminalSessionNotificationUUIDKey = @"session";
     self.seenOutputCount = self.terminal.outputCount;
     self.seenAttentionCount = self.terminal.attentionCount;
     self.finishedUnseen = NO;
+    self.agentStoppedUnseen = NO;
     [self announceChanges];
 }
 
@@ -137,10 +199,16 @@ NSString *const TerminalSessionNotificationUUIDKey = @"session";
         return;
     NSString *title = self.displayTitle;
     TerminalSessionActivity activity = self.activity;
-    if ([title isEqualToString:self.shownTitle] && activity == self.shownActivity)
+    TerminalSessionAgent agent = self.agent;
+    if (agent == TerminalSessionAgentWorking)
+        self.agentStoppedUnseen = NO;
+    else if (self.shownAgent == TerminalSessionAgentWorking)
+        self.agentStoppedUnseen = YES;
+    if ([title isEqualToString:self.shownTitle] && activity == self.shownActivity && agent == self.shownAgent)
         return;
     self.shownTitle = title;
     self.shownActivity = activity;
+    self.shownAgent = agent;
     [self notifyChanged];
 }
 

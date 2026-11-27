@@ -89,6 +89,13 @@ static NSString *SymbolForProgram(NSString *_Nullable program) {
 @property BOOL hovered;
 @property BOOL exited;
 @property TerminalSessionActivity activity;
+// What its agent does (TerminalSession's agent), and whether it stopped
+// unseen
+@property TerminalSessionAgent agent;
+@property BOOL agentStopped;
+// The symbol the icon shows, and whether it breathes (an agent at work)
+@property (nullable) NSString *iconSymbol;
+@property BOOL iconBreathes;
 @end
 
 @implementation TabItemView
@@ -414,9 +421,11 @@ static NSString *SymbolForProgram(NSString *_Nullable program) {
         item.tabSelected = i == selectedIndex;
         item.exited = session.state == TerminalSessionStateExited;
         item.activity = session.activity;
+        item.agent = item.exited ? TerminalSessionAgentNone : session.agent;
+        item.agentStopped = !item.exited && session.agentStoppedUnseen;
         NSString *title = session.displayTitle;
         item.label.text = title;
-        item.icon.image = [UIImage systemImageNamed:item.exited ? @"xmark.circle" : SymbolForProgram(session.foregroundProgram)];
+        [self updateIconOfItem:item program:session.foregroundProgram];
         // ⌘1 to ⌘8 the first eight, ⌘9 the last (TerminalViewController)
         if (i < 8)
             item.hintLabel.text = [NSString stringWithFormat:@"⌘%lu", (unsigned long) i + 1];
@@ -425,6 +434,10 @@ static NSString *SymbolForProgram(NSString *_Nullable program) {
         item.accessibilityLabel = title;
         if (item.exited)
             item.accessibilityValue = @"exited";
+        else if (item.agent == TerminalSessionAgentWorking)
+            item.accessibilityValue = @"working";
+        else if (item.agentStopped)
+            item.accessibilityValue = @"stopped";
         else if (!item.tabSelected && item.activity == TerminalSessionActivityBell)
             item.accessibilityValue = @"bell";
         else if (!item.tabSelected && item.activity == TerminalSessionActivityFinished)
@@ -502,7 +515,7 @@ static NSString *SymbolForProgram(NSString *_Nullable program) {
         item.capsule.backgroundColor = active ? hoverFill : UIColor.clearColor;
         UIColor *text = item.exited ? exitedText : item.tabSelected ? self.foreground : dimText;
         item.label.textColor = text;
-        item.icon.tintColor = text;
+        item.icon.tintColor = item.agentStopped ? UIColor.systemGreenColor : text;
         item.dot.backgroundColor = UIColor.systemBlueColor;
         item.check.tintColor = UIColor.systemGreenColor;
         item.bell.tintColor = UIColor.systemOrangeColor;
@@ -510,6 +523,26 @@ static NSString *SymbolForProgram(NSString *_Nullable program) {
         item.actionButton.tintColor = [self.foreground colorWithAlphaComponent:item.tabSelected ? 0.7 : 0.55];
         [self updateAccessoriesOfItem:item showingHint:showHints && item.hintLabel.text != nil];
     }];
+}
+
+// The icon at a tab's start: its program's (an X once its shell exited), an
+// agent at work's breathing, and one that stopped since the tab was looked at
+// a green check (applyColors' tint) till it works again
+- (void)updateIconOfItem:(TabItemView *)item program:(nullable NSString *)program {
+    NSString *symbol = item.exited ? @"xmark.circle"
+        : item.agentStopped ? @"checkmark.circle.fill"
+        : SymbolForProgram(program);
+    // the same symbol not set again, which would start its breathing over
+    if (![symbol isEqualToString:item.iconSymbol]) {
+        item.iconSymbol = symbol;
+        item.icon.image = [UIImage systemImageNamed:symbol];
+    }
+    BOOL breathes = item.agent == TerminalSessionAgentWorking;
+    if (breathes && !item.iconBreathes)
+        [item.icon addSymbolEffect:[NSSymbolBreatheEffect effect]];
+    else if (!breathes && item.iconBreathes)
+        [item.icon removeAllSymbolEffects];
+    item.iconBreathes = breathes;
 }
 
 // What a tab shows at its end: the restart arrow once its shell exited; else,

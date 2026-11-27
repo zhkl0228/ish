@@ -9,3 +9,5 @@ void DeviceStatusStart(void);
 // Their get_network_report and get_power_report (fs/proc/ish.h)
 char *device_network_report(void);
 char *device_power_report(void);
+// /proc/ish/device's get_device_report (fs/proc/ish.h)
+int device_device_report(char **report);

@@ -34,6 +34,7 @@ int (*do_ui_action)(const char *action, size_t size);
 int (*get_clipboard_image)(void **png, size_t *size);
 char *(*get_network_report)(void);
 char *(*get_power_report)(void);
+int (*get_device_report)(char **report);
 int (*get_thermal_state)(void);
 char *(*get_builtin_jit_report)(void);
 
@@ -441,6 +442,18 @@ static int proc_ish_show_network(struct proc_entry *UNUSED(entry), struct proc_d
     return 0;
 }
 
+static int proc_ish_show_device(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    if (get_device_report == NULL)
+        return _ENODEV;
+    char *report;
+    int err = get_device_report(&report);
+    if (err < 0)
+        return err;
+    proc_printf(buf, "%s", report);
+    free(report);
+    return 0;
+}
+
 static int proc_ish_show_power(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
     if (get_power_report == NULL)
         return _ENODEV;
@@ -455,6 +468,7 @@ struct proc_children proc_ish_children = PROC_CHILDREN({
     {"colors", .show = proc_ish_show_colors},
     {".defaults", S_IFDIR, .readdir = proc_ish_underlying_defaults_readdir},
     {"defaults", S_IFDIR, .readdir = proc_ish_defaults_readdir},
+    {"device", .show = proc_ish_show_device},
     {"documents", .show = proc_ish_show_documents},
     {"host", .show = proc_ish_show_host},
 #ifdef ISH_JIT

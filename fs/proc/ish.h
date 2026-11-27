@@ -41,6 +41,11 @@ extern int (*get_clipboard_image)(void **png, size_t *size);
 // said what it is. NULL in the command line tool.
 extern char *(*get_network_report)(void);
 extern char *(*get_power_report)(void);
+// The device and the window of the terminal in front (/proc/ish/device), as
+// text in *report, malloc'd for the caller to free: 0, or the error the read
+// gives, _EAGAIN while no terminal window is in front. NULL in the command
+// line tool.
+extern int (*get_device_report)(char **report);
 // The processes the meters' details list, those taking the most of the CPUs
 // (app/MonitorSampler.m). Each process (its leader) but init and the zombies:
 // its pid, when it started (a pid used again is another process: start_ticks

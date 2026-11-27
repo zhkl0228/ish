@@ -19,10 +19,25 @@
 //    state: unplugged, charging, full (plugged in), unknown
 //    low power mode: on or off
 //
+//  /proc/ish/device, what a program changing the app's look goes by (with
+//  ish-screenshot), read on the main thread as it is asked for:
+//    model: the hardware's (iPhone18,1)
+//    system: iOS and its version
+//    window: the terminal's window in front, its size in points and scale (a
+//            phone that folds: 466x678 folded, 951x669 unfolded, @3)
+//    orientation: portrait, portrait upside down, landscape left or right
+//    size classes: its width's and height's, compact or regular
+//    appearance: dark or light
+//    external keyboard: yes or no
+//
 
 #import <UIKit/UIKit.h>
 #import <Network/Network.h>
+#import <GameController/GameController.h>
+#include <sys/sysctl.h>
 #import "DeviceStatus.h"
+#import "SceneDelegate.h"
+#include "kernel/errno.h"
 #include "util/sync.h"
 
 static lock_t status_lock = LOCK_INITIALIZER;
@@ -115,6 +130,89 @@ void DeviceStatusStart(void) {
                              queue:NSOperationQueue.mainQueue usingBlock:update],
     ];
     UpdatePower();
+}
+
+static const char *OrientationName(UIInterfaceOrientation orientation) {
+    switch (orientation) {
+    case UIInterfaceOrientationUnknown: return "unknown";
+    case UIInterfaceOrientationPortrait: return "portrait";
+    case UIInterfaceOrientationPortraitUpsideDown: return "portrait upside down";
+    case UIInterfaceOrientationLandscapeLeft: return "landscape left";
+    case UIInterfaceOrientationLandscapeRight: return "landscape right";
+    }
+    return "unknown";
+}
+
+static const char *SizeClassName(UIUserInterfaceSizeClass sizeClass) {
+    switch (sizeClass) {
+    case UIUserInterfaceSizeClassUnspecified: return "unspecified";
+    case UIUserInterfaceSizeClassCompact: return "compact";
+    case UIUserInterfaceSizeClassRegular: return "regular";
+    }
+    return "unspecified";
+}
+
+// The main thread's: nil with no terminal window in front
+static NSString *DeviceReport(void) {
+    UIWindow *window = currentTerminalViewController.view.window;
+    if (window == nil)
+        return nil;
+    char model[64];
+    size_t length = sizeof(model);
+    sysctlbyname("hw.machine", model, &length, NULL, 0);
+    UIDevice *device = UIDevice.currentDevice;
+    UITraitCollection *traits = window.traitCollection;
+    return [NSString stringWithFormat:@"model: %s\nsystem: %@ %@\nwindow: %.0fx%.0f pt @%.0f\norientation: %s\n"
+                                      "size classes: width %s, height %s\nappearance: %s\nexternal keyboard: %s\n",
+            model, device.systemName, device.systemVersion,
+            window.bounds.size.width, window.bounds.size.height, window.windowScene.screen.scale,
+            OrientationName(window.windowScene.effectiveGeometry.interfaceOrientation),
+            SizeClassName(traits.horizontalSizeClass), SizeClassName(traits.verticalSizeClass),
+            traits.userInterfaceStyle == UIUserInterfaceStyleDark ? "dark" : "light",
+            GCKeyboard.coalescedKeyboard != nil ? "yes" : "no"];
+}
+
+static lock_t device_lock = LOCK_INITIALIZER;
+static cond_t device_cond = COND_INITIALIZER;
+
+@interface DeviceReportRequest : NSObject
+// Under device_lock: whether the main thread has made it, and what (nil: no
+// terminal window was in front)
+@property (nonatomic) BOOL made;
+@property (nonatomic, nullable) NSString *report;
+@end
+
+@implementation DeviceReportRequest
+@end
+
+// On the reading program's thread: made on the main thread, which it waits
+// for (a signal ends the wait, as the read's error)
+int device_device_report(char **report) {
+    @autoreleasepool {
+        DeviceReportRequest *request = [DeviceReportRequest new];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            NSString *made = DeviceReport();
+            lock(&device_lock);
+            request.report = made;
+            request.made = YES;
+            notify(&device_cond);
+            unlock(&device_lock);
+        });
+        lock(&device_lock);
+        while (!request.made) {
+            int err = wait_for(&device_cond, &device_lock, NULL);
+            if (err < 0) {
+                unlock(&device_lock);
+                return err;
+            }
+        }
+        NSString *made = request.report;
+        unlock(&device_lock);
+        if (made == nil)
+            return _EAGAIN;
+        *report = strdup(made.UTF8String);
+        return 0;
+    }
 }
 
 static char *Copy(NSString *__strong *report) {
