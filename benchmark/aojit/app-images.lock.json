@@ -5,85 +5,85 @@
     "them in the app's build (base_url/set/<file>, objects xz-compressed) and checks",
     "each sha256. Written by publish_app_images.py; do not edit."
   ],
-  "abi": "5b03e16b",
+  "abi": "7edea394",
   "base_url": "https://hk.gzmtx.cn/ish-aot",
   "images": {
     "bash": {
       "module": "/bin/bash",
       "object": "aot_bash_ios.o",
-      "sha256": "302160934937865d4fe826af494a78032ba1c7d7f77d3760054b74b8b68ae844",
-      "size": 6760248,
-      "xz_size": 957328
+      "sha256": "920e49c18c0fa6173d7d4fed25a149816e8bbad0af7140e271828f69da196ce9",
+      "size": 6760264,
+      "xz_size": 968044
     },
     "busybox": {
       "module": "/bin/busybox",
       "object": "aot_busybox_ios.o",
-      "sha256": "bf7954683b816ed8b0b37c0fff05ff8ec2d01775d0eff82e29b4411d2c54e060",
-      "size": 4838440,
-      "xz_size": 714960
+      "sha256": "b6e994f955de2235bbf216ab9eaa4803c5a38625d597f8450db551c90e0344b0",
+      "size": 4837648,
+      "xz_size": 718060
     },
     "claude": {
       "module": "claude.exe",
       "object": "aot_claude_ios.o",
-      "sha256": "004a709817a7fd93ace8914cea7028b13136f70a790cece2f7c3724d37367c33",
-      "size": 182004536,
-      "xz_size": 21992504
+      "sha256": "d5fab9dd844935008174def7b1a0e3178fd01b3e58d29b2ad9390ca02ab75730",
+      "size": 181116008,
+      "xz_size": 22163176
     },
     "crypto": {
       "module": "libcrypto.so",
       "object": "aot_crypto_ios.o",
-      "sha256": "e52a5060ee094b4ba3c23dd832a048bb0e51adc5323d0bee287012bb9e0f2090",
-      "size": 18619008,
-      "xz_size": 2439096
+      "sha256": "6a43b5e3a5c98fd1c23f224d907442663cc83f5fe11ccebb356bbb8ca2fd4c35",
+      "size": 18587672,
+      "xz_size": 2449068
     },
     "gh": {
       "module": "/usr/bin/gh",
       "object": "aot_gh_ios.o",
-      "sha256": "c827e12e75d1dc643c30ba33a49a2ff81b8ce70cd2718588b448f00d78f25f2c",
-      "size": 74528688,
-      "xz_size": 8654744
+      "sha256": "52ddfd1da4c780436ab75c34a258be37b940f45dbed9e0eb11f5e7383f50ebc6",
+      "size": 74249656,
+      "xz_size": 8638940
     },
     "git": {
       "module": "/usr/bin/git",
       "object": "aot_git_ios.o",
-      "sha256": "7c44d9206f8c2254bce1d8c93ee88438f49b6a30a4eba265df9de562703dc606",
-      "size": 26882592,
-      "xz_size": 3630312
+      "sha256": "0795eafddfa381e97b581b8e52f8593fcd992263d85704644bc31ade15afe918",
+      "size": 26892104,
+      "xz_size": 3707368
     },
     "jvm": {
       "module": "libjvm.so",
       "object": "aot_jvm_ios.o",
-      "sha256": "4fc20c10d2f2ef6cb4ed9d6611ee112a4576efd43544834d789a169ed0f01b9a",
-      "size": 167597376,
-      "xz_size": 20693216
+      "sha256": "f7048057db1fa74f5d27ff2150bac9e8047389f6c367c4e5abe0362956a50956",
+      "size": 168140920,
+      "xz_size": 20545896
     },
     "musl": {
       "module": "ld-musl",
       "object": "aot_musl_ios.o",
-      "sha256": "f72b2fa1432c8320af2eb06fee74ec8008f77f038d8fe6119c6113d12fe1c507",
-      "size": 4812472,
-      "xz_size": 728012
+      "sha256": "0c75a44cb19927ad6d59cae1822176782c2bfb0b869bd8a6245c80c205ce7243",
+      "size": 4801976,
+      "xz_size": 725192
     },
     "node": {
       "module": "/usr/bin/node",
       "object": "aot_node_ios.o",
-      "sha256": "18ef34c85b33758d63608e66006c2c04a5e1b6659a5e2e54e563f62c51090f5b",
-      "size": 216754168,
-      "xz_size": 26031020
+      "sha256": "e3342fdd46c952c186d7b029f8b6c2c8d15b8b7eda4e6136cc7c7bcb91a067bc",
+      "size": 216788096,
+      "xz_size": 26800568
     },
     "python": {
       "module": "libpython3",
       "object": "aot_python_ios.o",
-      "sha256": "f39f62ddd4ee746f4f912435a68b57664ceedfb4dcf62bdcbbb9dfbcc7984651",
-      "size": 38070384,
-      "xz_size": 4885136
+      "sha256": "27a785453fa5a4ef498145ddb9053188c56659ffc50bebe081f9878fc0cf9fec",
+      "size": 38073664,
+      "xz_size": 4910956
     },
     "ssh": {
       "module": "/usr/bin/ssh",
       "object": "aot_ssh_ios.o",
-      "sha256": "8d194788637d6b2eb8ad0d2849117cd060cb15be26c65e4ae05c3f900a021fb1",
-      "size": 6299608,
-      "xz_size": 876348
+      "sha256": "006e31f9b5fda9f8ce72d4ea170df91561351b445f79b96859d571c8fc884e8a",
+      "size": 6296952,
+      "xz_size": 874376
     }
   },
   "recorded": {
@@ -111,5 +111,5 @@
     "sha256": "6d6ee01668af8c120ce44bd8ec3da1b42e6301a9eb090783fc7ed232da3aeded",
     "size": 30239249
   },
-  "set": "5b03e16b-20261126-52740629"
+  "set": "7edea394-20261127-060ca33e"
 }
