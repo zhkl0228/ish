@@ -92,8 +92,8 @@ extern const NSUInteger kMonitorHistoryLength;
 @property (readonly) NSArray<NSNumber *> *cpuHistory;
 
 // While set (the details shown, the keyboard down), the three processes
-// taking the most of the CPUs since the count before, of those shown with 1%
-// or more (fewer, or none, while the CPUs are idle), off the main thread
+// taking the most of the CPUs since the count before, at 0% too (three rows,
+// each with its end key, while the CPUs are idle), off the main thread
 // (fs/proc/ish.h's ish_processes): counted as it is set and a quarter of a
 // second after, so that they show at once, then with each reading; nil till
 // counted twice, each count told (MonitorSamplerDidCountProcessesNotification)
