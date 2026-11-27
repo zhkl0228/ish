@@ -15,6 +15,7 @@ that differ (musl, by build-id) then serve only what did not change.
 Python 3.9 (Xcode's), the standard library only.
 """
 
+import concurrent.futures
 import hashlib
 import json
 import lzma
@@ -35,6 +36,10 @@ def fail(message):
     sys.exit(1)
 
 
+class FetchError(Exception):
+    """A download that failed, or did not match the lock: raised in download's thread."""
+
+
 def sha256(path):
     h = hashlib.sha256()
     with open(path, 'rb') as f:
@@ -47,24 +52,27 @@ def download(url, path, sha, xz):
     """url into path (decompressed if xz), checked against sha before it takes path's place.
 
     By curl, which goes through a proxy as the shell's other tools do (an https:// one
-    too, which urllib cannot)."""
+    too, which urllib cannot). A transfer cut off is resumed where it stopped, whatever
+    cut it: through a proxy, two of eleven at once ended with HTTP/2's PROTOCOL_ERROR
+    (curl's 92), which --retry alone does not retry."""
     print('fetch-aot: %s' % url)
     tmp = path + '.part'
     fetched = tmp + '.xz' if xz else tmp
-    got = subprocess.run(['curl', '-fsSL', '--retry', '3', '-o', fetched, url], capture_output=True, text=True)
+    got = subprocess.run(['curl', '-fsSL', '--retry', '5', '--retry-all-errors', '-C', '-', '-o', fetched, url],
+                         capture_output=True, text=True)
     if got.returncode != 0:
-        fail('%s: curl exited %d: %s' % (url, got.returncode, got.stderr.strip()))
+        raise FetchError('%s: curl exited %d: %s' % (url, got.returncode, got.stderr.strip()))
     if xz:
         try:
             with lzma.open(fetched) as src, open(tmp, 'wb') as out:
                 shutil.copyfileobj(src, out, 1 << 20)
         except lzma.LZMAError as e:
-            fail('%s: %s' % (url, e))
+            raise FetchError('%s: %s' % (url, e))
         os.remove(fetched)
     got = sha256(tmp)
     if got != sha:
         os.remove(tmp)
-        fail('%s has sha256 %s, the lock says %s' % (url, got, sha))
+        raise FetchError('%s has sha256 %s, the lock says %s' % (url, got, sha))
     os.replace(tmp, path)
 
 
@@ -83,6 +91,14 @@ def main():
     os.makedirs(directory, exist_ok=True)
     stamp_path = os.path.join(directory, '.verified')
     stamp = json.load(open(stamp_path)) if os.path.exists(stamp_path) else {}
+
+    def verified(image):
+        st = os.stat(os.path.join(directory, image['object']))
+        stamp[image['object']] = [image['sha256'], st.st_size, st.st_mtime_ns]
+        with open(stamp_path, 'w') as f:
+            json.dump(stamp, f)
+
+    missing = []
     for name, image in sorted(lock['images'].items()):
         path = os.path.join(directory, image['object'])
         if os.path.exists(path):
@@ -91,12 +107,26 @@ def main():
                 continue
             if sha256(path) != image['sha256']:
                 os.remove(path)
-        if not os.path.exists(path):
-            download(base + image['object'] + '.xz', path, image['sha256'], xz=True)
-        st = os.stat(path)
-        stamp[image['object']] = [image['sha256'], st.st_size, st.st_mtime_ns]
-        with open(stamp_path, 'w') as f:
-            json.dump(stamp, f)
+        if os.path.exists(path):
+            verified(image)
+        else:
+            missing.append(image)
+    # The missing ones all at once, each over a connection of its own: one connection to the
+    # server ran at about 200 KB/s, and three at once at as much each (2026-11-27), which
+    # left a set's 91 MB, one after another, taking eight minutes
+    errors = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(len(missing), 1)) as pool:
+        downloads = {pool.submit(download, base + image['object'] + '.xz', os.path.join(directory, image['object']),
+                                 image['sha256'], True): image for image in missing}
+        for done in concurrent.futures.as_completed(downloads):
+            try:
+                done.result()
+            except FetchError as e:
+                errors.append(str(e))
+                continue
+            verified(downloads[done])
+    if errors:
+        fail('; '.join(errors))
     # sets of other locks, no longer linked
     for other in os.listdir(CACHE):
         if other != set_name:
@@ -105,7 +135,10 @@ def main():
     rootfs = lock['rootfs']
     if not os.path.exists(ROOTFS):
         os.makedirs(os.path.dirname(ROOTFS), exist_ok=True)
-        download(base + rootfs['file'], ROOTFS, rootfs['sha256'], xz=False)
+        try:
+            download(base + rootfs['file'], ROOTFS, rootfs['sha256'], xz=False)
+        except FetchError as e:
+            fail(str(e))
     elif os.path.getsize(ROOTFS) != rootfs['size'] or sha256(ROOTFS) != rootfs['sha256']:
         print('warning: fetch-aot: deps/rootfs/arm64-root.tar.gz is not the root the AOT images were '
               'recorded on (set %s): the images of its modules that differ serve only the blocks that '
