@@ -54,6 +54,8 @@ struct rowcol {
 @property CGFloat screenEdge;
 @property (nullable) NSLayoutConstraint *marginLeading;
 @property UITapGestureRecognizer *marginTap;
+// The long press that selects (selectByPress:)
+@property UILongPressGestureRecognizer *selectPress;
 
 // What an input method is putting together, drawn at the cursor (term.js's
 // setComposition)
@@ -116,6 +118,7 @@ struct rowcol {
     select.minimumPressDuration = 0.4;
     select.delegate = self;
     [self addGestureRecognizer:select];
+    self.selectPress = select;
     self.pressFeedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
 
     // Two fingers pinched or spread: the font smaller or bigger
@@ -638,9 +641,19 @@ static const int kMaxFontSize = 72;
 }
 
 // The page's click there (the keyboard brought up, a program's mouse) waits
-// for the margin view's tap to fail: a drag, a long press
+// for the margin view's tap to fail: a drag, a long press.
+// And the web view's taps, which click, wait for the long press that selects
+// to fail: one let go after the press had taken its word was a click as well,
+// which xterm.js took for a new selection, none, and term.js for a tap to
+// bring the keyboard up. The menu came up with the keyboard, its selection
+// gone before Copy was tapped. A tap let go of before the press is due ends
+// the press there and clicks at once.
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
-    return gestureRecognizer == self.marginTap && [otherGestureRecognizer.view isDescendantOfView:self.terminal.webView];
+    if (![otherGestureRecognizer.view isDescendantOfView:self.terminal.webView])
+        return NO;
+    if (gestureRecognizer == self.marginTap)
+        return YES;
+    return gestureRecognizer == self.selectPress && [otherGestureRecognizer isKindOfClass:UITapGestureRecognizer.class];
 }
 
 - (void)tappedMargin:(UITapGestureRecognizer *)tap {

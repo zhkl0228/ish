@@ -218,9 +218,15 @@ term.parser.registerEscHandler({final: 'c'}, () => {
 });
 
 // focus: the app's. A tap on the terminal gives it the keyboard; one while
-// there is a selection is the selection's.
+// there is a selection is the selection's. Whether there was one is taken as
+// the press goes down (capture), before xterm.js's own mousedown, on this
+// element too and added first, has made the press a new selection: none.
+let pressedOnSelection = false;
 term.element.addEventListener('mousedown', () => {
-    if (!term.hasSelection())
+    pressedOnSelection = term.hasSelection();
+}, {capture: true});
+term.element.addEventListener('mousedown', () => {
+    if (!pressedOnSelection)
         native.focus();
 });
 // Focused or not, as xterm.js takes it from its text field's events, which
