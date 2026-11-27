@@ -13,11 +13,11 @@
 //    keyboard show|hide   the keyboard, given to the terminal or taken
 //    clipboard show|hide  the clipboard's shelf
 //
-//  Done without animation; the write returns once the window shows it, the
-//  keyboard's moves (which iOS animates) made. EINVAL for any other action,
-//  EAGAIN while no terminal window is in front, EBUSY while an alert waits
-//  for the person's answer (a program's URL to open among them), which is
-//  theirs to give.
+//  Done without animation; the write returns once the window shows it: a
+//  page presented or dismissed once that has ended, the keyboard's moves
+//  (which iOS animates) made. EINVAL for any other action, EAGAIN while no
+//  terminal window is in front, EBUSY while an alert waits for the person's
+//  answer (a program's URL to open among them), which is theirs to give.
 //
 
 #import <UIKit/UIKit.h>
@@ -111,71 +111,90 @@ static void Finish(UIActionRequest *request, int result) {
 
 @end
 
-// The main thread's: the action the words name, done; 0, or the write's error
-static int Perform(NSArray<NSString *> *words, TerminalViewController *terminal) {
+// The main thread's: the action the words name, done, done called once it
+// is, with 0 or the write's error
+static void Perform(NSArray<NSString *> *words, TerminalViewController *terminal, void (^done)(int result)) {
     for (UIViewController *shown = terminal.presentedViewController; shown != nil; shown = shown.presentedViewController) {
-        if ([shown isKindOfClass:UIAlertController.class])
-            return _EBUSY;
+        if ([shown isKindOfClass:UIAlertController.class]) {
+            done(_EBUSY);
+            return;
+        }
     }
+    void (^doneWell)(void) = ^{
+        done(0);
+    };
     if ([words isEqualToArray:@[@"settings"]]) {
-        [terminal showSettingsPage:nil];
-        return 0;
+        [terminal showSettingsPage:nil completion:doneWell];
+        return;
     }
     if (words.count == 2 && [words[0] isEqualToString:@"settings"]) {
         NSString *page = words[1];
         UIStoryboard *about = [UIStoryboard storyboardWithName:@"About" bundle:nil];
         if ([page isEqualToString:@"appearance"])
-            [terminal showSettingsPage:[about instantiateViewControllerWithIdentifier:@"Appearance"]];
+            [terminal showSettingsPage:[about instantiateViewControllerWithIdentifier:@"Appearance"] completion:doneWell];
         else if ([page isEqualToString:@"keyboard"])
-            [terminal showSettingsPage:[about instantiateViewControllerWithIdentifier:@"ExternalKeyboard"]];
+            [terminal showSettingsPage:[about instantiateViewControllerWithIdentifier:@"ExternalKeyboard"] completion:doneWell];
         else if ([page isEqualToString:@"icon"])
-            [terminal showSettingsPage:[about instantiateViewControllerWithIdentifier:@"AppIcon"]];
+            [terminal showSettingsPage:[about instantiateViewControllerWithIdentifier:@"AppIcon"] completion:doneWell];
         else if ([page isEqualToString:@"jit"])
-            [terminal showSettingsPage:[BuiltinJITViewController new]];
+            [terminal showSettingsPage:[BuiltinJITViewController new] completion:doneWell];
         else if ([page isEqualToString:@"clipboard"])
-            [terminal showClipboardSettingsPage];
+            [terminal showClipboardSettingsPageWithCompletion:doneWell];
         else
-            return _EINVAL;
-        return 0;
+            done(_EINVAL);
+        return;
     }
     if ([words isEqualToArray:@[@"back"]]) {
         UIViewController *top = terminal.presentedViewController;
         while (top.presentedViewController != nil)
             top = top.presentedViewController;
-        if (![top isKindOfClass:UINavigationController.class] || ((UINavigationController *) top).viewControllers.count < 2)
-            return _EINVAL;
+        if (![top isKindOfClass:UINavigationController.class] || ((UINavigationController *) top).viewControllers.count < 2) {
+            done(_EINVAL);
+            return;
+        }
+        // Done as the transaction it is popped in is committed
+        [CATransaction begin];
+        [CATransaction setCompletionBlock:doneWell];
         [(UINavigationController *) top popViewControllerAnimated:NO];
-        return 0;
+        [CATransaction commit];
+        return;
     }
     if ([words isEqualToArray:@[@"close"]]) {
-        [terminal dismissViewControllerAnimated:NO completion:nil];
-        return 0;
+        [terminal closePresentedWithCompletion:doneWell];
+        return;
     }
     if (words.count == 2 && [words[0] isEqualToString:@"tab"]) {
         NSInteger n = words[1].integerValue;
         // the number as written, none other (integerValue reads "2x" as 2)
-        if (![@(n).stringValue isEqualToString:words[1]] || n < 1 || (NSUInteger) n > terminal.tabCount)
-            return _EINVAL;
+        if (![@(n).stringValue isEqualToString:words[1]] || n < 1 || (NSUInteger) n > terminal.tabCount) {
+            done(_EINVAL);
+            return;
+        }
         [terminal selectTabAtIndex:(NSUInteger) n - 1];
-        return 0;
+        done(0);
+        return;
     }
     if ([words isEqualToArray:@[@"keyboard", @"show"]]) {
         terminal.keyboardShown = YES;
-        return 0;
+        done(0);
+        return;
     }
     if ([words isEqualToArray:@[@"keyboard", @"hide"]]) {
         terminal.keyboardShown = NO;
-        return 0;
+        done(0);
+        return;
     }
     if ([words isEqualToArray:@[@"clipboard", @"show"]]) {
         [terminal showClipboard];
-        return 0;
+        done(0);
+        return;
     }
     if ([words isEqualToArray:@[@"clipboard", @"hide"]]) {
         [terminal hideClipboard];
-        return 0;
+        done(0);
+        return;
     }
-    return _EINVAL;
+    done(_EINVAL);
 }
 
 // On the writing program's thread: done on the main thread, which it waits
@@ -196,22 +215,22 @@ int do_app_ui_action(const char *bytes, size_t size) {
                 return;
             }
             KeyboardMoves *moves = [KeyboardMoves new];
-            __block int result;
             [UIView performWithoutAnimation:^{
-                result = Perform(words, terminal);
+                Perform(words, terminal, ^(int result) {
+                    if (result < 0) {
+                        [moves stop];
+                        Finish(request, result);
+                        return;
+                    }
+                    // A turn later, when the keyboard has said what it will do
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [moves whenSettled:^{
+                            [terminal.view.window layoutIfNeeded];
+                            Finish(request, 0);
+                        }];
+                    });
+                });
             }];
-            if (result < 0) {
-                [moves stop];
-                Finish(request, result);
-                return;
-            }
-            // A turn later, when the keyboard has said what it will do
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [moves whenSettled:^{
-                    [terminal.view.window layoutIfNeeded];
-                    Finish(request, 0);
-                }];
-            });
         });
         lock(&ui_lock);
         int result;

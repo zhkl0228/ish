@@ -29,7 +29,7 @@ bool (*set_user_default)(const char *name, char *buffer, size_t size);
 bool (*remove_user_default)(const char *name);
 char *(*get_documents_directory)(void);
 int (*open_url)(const char *url, size_t size);
-int (*take_screenshot)(void **png, size_t *size);
+int (*take_screenshot)(enum screenshot_method method, void **png, size_t *size);
 int (*do_ui_action)(const char *action, size_t size);
 int (*get_clipboard_image)(void **png, size_t *size);
 char *(*get_network_report)(void);
@@ -393,18 +393,41 @@ static ssize_t proc_ish_write_open_url(struct proc_entry *UNUSED(entry), struct 
     return err < 0 ? err : (ssize_t) data->size;
 }
 
+const char *const screenshot_method_names[] = {
+    [SCREENSHOT_VIEWS] = "views",
+    [SCREENSHOT_LAYERS] = "layers",
+};
+static _Atomic int screenshot_method = SCREENSHOT_VIEWS;
+
 // What the screen shows of the app, a PNG, drawn at each read from the start
 static int proc_ish_show_screenshot(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
     if (take_screenshot == NULL)
         return _ENODEV;
     void *png;
     size_t size;
-    int err = take_screenshot(&png, &size);
+    int err = take_screenshot(atomic_load(&screenshot_method), &png, &size);
     if (err < 0)
         return err;
     proc_buf_append(buf, png, size);
     free(png);
     return 0;
+}
+
+// The method of the screenshots read after it, its name written (echo's
+// newline taken off)
+static ssize_t proc_ish_write_screenshot(struct proc_entry *UNUSED(entry), struct proc_data *data,
+                                         off_t UNUSED(off)) {
+    size_t n = data->size;
+    if (n > 0 && data->data[n - 1] == '\n')
+        n--;
+    for (int method = SCREENSHOT_VIEWS; method <= SCREENSHOT_LAYERS; method++) {
+        const char *name = screenshot_method_names[method];
+        if (n == strlen(name) && memcmp(data->data, name, n) == 0) {
+            atomic_store(&screenshot_method, method);
+            return data->size;
+        }
+    }
+    return _EINVAL;
 }
 
 // An action in the app's window, one write for the whole of it; the write
@@ -464,7 +487,7 @@ struct proc_children proc_ish_children = PROC_CHILDREN({
     {"open_url", S_IFREG | 0222, .pwrite = proc_ish_write_open_url},
     {"poll_spin", .show = proc_ish_show_poll_spin, .pwrite = proc_ish_write_poll_spin},
     {"power", .show = proc_ish_show_power},
-    {"screenshot", .show = proc_ish_show_screenshot},
+    {"screenshot", S_IFREG | 0644, .show = proc_ish_show_screenshot, .pwrite = proc_ish_write_screenshot},
     {"thermal", .show = proc_ish_show_thermal},
     {"threads", .show = proc_ish_show_threads},
     {"translations", S_IFREG | 0644, .show = proc_ish_show_translations, .pwrite = proc_ish_write_translations},

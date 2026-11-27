@@ -1218,13 +1218,27 @@ static NSURL *SavedTabsDirectory(void) {
     [self.termView resignFirstResponder];
 }
 
-- (void)showSettingsPage:(UIViewController *)page {
-    [self dismissViewControllerAnimated:NO completion:nil];
+- (void)closePresentedWithCompletion:(void (^)(void))completion {
+    if (self.presentedViewController == nil)
+        completion();
+    else
+        [self dismissViewControllerAnimated:NO completion:completion];
+}
+
+- (void)presentReplacing:(UIViewController *)controller completion:(void (^)(void))completion {
+    [self closePresentedWithCompletion:^{
+        [self presentViewController:controller animated:NO completion:completion];
+    }];
+}
+
+- (void)showSettingsPage:(UIViewController *)page completion:(void (^)(void))completion {
     UINavigationController *navigationController = [[UIStoryboard storyboardWithName:@"About" bundle:nil] instantiateInitialViewController];
     if (page != nil)
         [navigationController pushViewController:page animated:NO];
-    [self presentViewController:navigationController animated:NO completion:nil];
-    [self.termView resignFirstResponder];
+    [self presentReplacing:navigationController completion:^{
+        [self.termView resignFirstResponder];
+        completion();
+    }];
 }
 
 - (NSUInteger)tabCount {
@@ -2790,9 +2804,8 @@ static NSString *ShellQuoted(NSString *string) {
     [presenter presentViewController:[self clipboardSettings] animated:YES completion:nil];
 }
 
-- (void)showClipboardSettingsPage {
-    [self dismissViewControllerAnimated:NO completion:nil];
-    [self presentViewController:[self clipboardSettings] animated:NO completion:nil];
+- (void)showClipboardSettingsPageWithCompletion:(void (^)(void))completion {
+    [self presentReplacing:[self clipboardSettings] completion:completion];
 }
 
 // The stack panel follows the store, so every window shows it while it is open.

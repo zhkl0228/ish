@@ -10,6 +10,7 @@
 #import <UIKit/UIKit.h>
 #import "Screenshot.h"
 #import "SceneDelegate.h"
+#import "TerminalViewController.h"
 #include "kernel/errno.h"
 #include "util/sync.h"
 
@@ -32,11 +33,15 @@ static cond_t screenshot_cond = COND_INITIALIZER;
 // app's part of the screen in Split View). nil with no terminal window in
 // front (currentTerminalViewController, which an inactive scene is not).
 //
-// Their layers rendered here: that gives all the screen shows, the terminal's
-// web view among it. drawViewHierarchyInRect gave a black PNG instead, with
-// or without the changes pending drawn, though it said it drew both windows
-// (the UIWindow and the UITextEffectsWindow over it: 840, on a phone, 2026-11-27).
-static UIImage *DrawScreen(void) {
+// By method (fs/proc/ish.h), views: the terminal's window as iOS drew it on
+// the screen (drawViewHierarchyInRect, once the changes pending are drawn),
+// the others' layers rendered here. The layers rendered here leave out what
+// iOS draws itself: the glass of the clipboard's shelf, and Settings' first
+// page altogether (842, on a phone, 2026-11-27, which showed it). Every
+// window drawn as iOS drew it gave a black PNG (840, the same day), which the
+// UITextEffectsWindow over the terminal's, opaque so drawn, would give: its
+// layers rendered here gave the keyboard's bar and nothing else.
+static UIImage *DrawScreen(enum screenshot_method method) {
     UIWindowScene *front = currentTerminalViewController.view.window.windowScene;
     if (front == nil)
         return nil;
@@ -71,10 +76,14 @@ static UIImage *DrawScreen(void) {
         [context fillRect:screen.bounds];
         for (UIWindow *window in windows) {
             CGRect frame = [window convertRect:window.bounds toCoordinateSpace:screen.coordinateSpace];
-            CGContextSaveGState(context.CGContext);
-            CGContextTranslateCTM(context.CGContext, frame.origin.x, frame.origin.y);
-            [window.layer renderInContext:context.CGContext];
-            CGContextRestoreGState(context.CGContext);
+            if (method == SCREENSHOT_VIEWS && [window.rootViewController isKindOfClass:TerminalViewController.class]) {
+                [window drawViewHierarchyInRect:frame afterScreenUpdates:YES];
+            } else {
+                CGContextSaveGState(context.CGContext);
+                CGContextTranslateCTM(context.CGContext, frame.origin.x, frame.origin.y);
+                [window.layer renderInContext:context.CGContext];
+                CGContextRestoreGState(context.CGContext);
+            }
         }
     }];
 }
@@ -82,11 +91,11 @@ static UIImage *DrawScreen(void) {
 // On the reading program's thread: drawn on the main thread, which it waits
 // for (a signal ends the wait, as the read's error), and made a PNG here, off
 // the main thread
-int take_app_screenshot(void **png, size_t *size) {
+int take_app_screenshot(enum screenshot_method method, void **png, size_t *size) {
     @autoreleasepool {
         ScreenshotRequest *request = [ScreenshotRequest new];
         dispatch_async(dispatch_get_main_queue(), ^{
-            UIImage *image = DrawScreen();
+            UIImage *image = DrawScreen(method);
             lock(&screenshot_lock);
             request.image = image;
             request.drawn = YES;

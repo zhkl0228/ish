@@ -32,12 +32,17 @@
 - (BOOL)showSessionWithUUID:(NSUUID *)uuid;
 @property UISceneSession *sceneSession;
 
-// What a program asks of the window (/proc/ish/ui, UIActions.m), each done at
-// once, without animation: Settings over the terminal at page, pushed over
-// its first page (that alone if nil), what was over the terminal gone first
-- (void)showSettingsPage:(UIViewController *)page;
+// What a program asks of the window (/proc/ish/ui, UIActions.m), without
+// animation. completion is called once it is done: a presentation and a
+// dismissal end after the call, and one made before another has ended is
+// refused (2026-11-27: Settings' page asked for right after Settings was not
+// shown). Settings over the terminal at page, pushed over its first page
+// (that alone if nil), what was over the terminal gone first
+- (void)showSettingsPage:(UIViewController *)page completion:(void (^)(void))completion;
 // Clipboard's settings over the terminal, what was over it gone first
-- (void)showClipboardSettingsPage;
+- (void)showClipboardSettingsPageWithCompletion:(void (^)(void))completion;
+// What is over the terminal gone, if anything is
+- (void)closePresentedWithCompletion:(void (^)(void))completion;
 @property (readonly) NSUInteger tabCount;
 - (void)selectTabAtIndex:(NSUInteger)index;
 // Whether the terminal has the keyboard, which setting it gives or takes
