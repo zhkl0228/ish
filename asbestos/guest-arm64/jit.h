@@ -20,7 +20,8 @@
 // environment turns the translator off at run time (the BLR code stream keeps
 // its JIT layout). Tuning / diagnostics: ISH_JIT_PIN=0, ISH_JIT_LINK=0,
 // ISH_JIT_LOOP=0, ISH_JIT_SIMD=0, ISH_JIT_STATS=1, ISH_JIT_DUMP=<file>,
-// ISH_JIT_MAP=<file> (native code -> guest module and file offset).
+// ISH_JIT_MAP=<file> (native code -> guest module and file offset),
+// ISH_JIT_REGION_MB=<MB> and ISH_JIT_ARENA_MB=<MB> (jit_set_region_mb()).
 //
 // ISH_JIT_PIC=1 emits position-independent code (jit.c, "PIC"): nothing in it
 // depends on where the guest module or its blocks live, and a registry reuses
@@ -200,6 +201,14 @@ bool jit_aot_serves(const char *path);
 // program writes at run time becomes native code too (exec.c: node then gets
 // V8's tiers, though an image serves its interpreter)
 bool jit_translates_with_room(void);
+
+// The size of the code region to make, in MB (the app's setting; 0: the
+// default, 120): it applies when the region is made, as iSH starts or by
+// jit_region_now(), and ISH_JIT_REGION_MB comes before it. Under TXM the
+// debugger makes it once, so a new size waits for iSH's next start. The
+// region is cut into arenas of 128 MB at most, each with its own stubs, as a
+// `b` reaches +-128MB (ISH_JIT_ARENA_MB: smaller ones, for a test).
+void jit_set_region_mb(unsigned mb);
 
 #endif
 #endif

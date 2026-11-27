@@ -376,6 +376,9 @@ static void mount_documents(void) {
 }
 
 - (BOOL)application:(UIApplication *)application willFinishLaunchingWithOptions:(NSDictionary<UIApplicationLaunchOptionsKey,id> *)launchOptions {
+    // Before anything starts the JIT (BuiltinJIT.shared does, the boot does):
+    // a debugger iSH is launched under makes the code region as it starts
+    [BuiltinJIT applyCodeRegionSize];
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
     if ([defaults boolForKey:@"hail mary"]) {
         [defaults removeObjectForKey:kPreferenceBootCommandKey];

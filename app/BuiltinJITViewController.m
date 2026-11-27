@@ -47,7 +47,7 @@ enum {
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     switch (section) {
-    case SectionStatus: return 3;
+    case SectionStatus: return 4;
     case SectionPairing: return OnDevicePairing.available ? 2 : 1;
     case SectionDiskImage: return 2;
     case SectionLog: return MAX(BuiltinJIT.shared.log.count, 1);
@@ -71,7 +71,11 @@ enum {
                 "run as native code. It needs Developer Mode, iSH signed with get-task-allow (a development profile) "
                 "and the Network Extensions capability, and Wi-Fi (or, without, airplane mode after the tunnel is "
                 "up). iSH's own loopback tunnel, a VPN, runs only while the JIT is enabled, unless one is up already "
-                "(LocalDevVPN): iOS turns off another VPN while it runs.";
+                "(LocalDevVPN): iOS turns off another VPN while it runs.\n\n"
+                "Code Region: the room for translated code. When it is full every program's code is translated "
+                "again, so a larger one means fewer of those, and takes that much more memory as the JIT is "
+                "enabled (the debugger writes in each of its pages). It is made once: a new size applies at iSH's "
+                "next start if the JIT translates now.";
     case SectionPairing:
         return OnDevicePairing.available
             ? @"The device's pairing file: made here, by pairing the device with iSH in Settings, or on a computer "
@@ -106,6 +110,19 @@ enum {
         } else if (indexPath.row == 1) {
             UITableViewCell *cell = [self cellWithText:@"Enable JIT Now" detail:nil];
             cell.textLabel.textColor = jit.busy || jit.translating ? UIColor.secondaryLabelColor : self.view.tintColor;
+            return cell;
+        } else if (indexPath.row == 3) {
+            NSUInteger mb = BuiltinJIT.codeRegionMB, now = jit.codeRegionMBNow;
+            NSString *detail = now == 0 || now == mb
+                ? [NSString stringWithFormat:@"%lu MB", (unsigned long) mb]
+                : [NSString stringWithFormat:@"%lu MB from iSH's next start (%lu MB now)", (unsigned long) mb,
+                                             (unsigned long) now];
+            UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1
+                                                           reuseIdentifier:nil];
+            cell.textLabel.text = @"Code Region";
+            cell.detailTextLabel.text = detail;
+            cell.detailTextLabel.numberOfLines = 0;
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
             return cell;
         } else {
             UITableViewCell *cell = [self cellWithText:@"Enable When iSH Starts" detail:nil];
@@ -146,6 +163,8 @@ enum {
     BuiltinJIT *jit = BuiltinJIT.shared;
     if (indexPath.section == SectionStatus && indexPath.row == 1 && !jit.busy && !jit.translating) {
         [jit enable];
+    } else if (indexPath.section == SectionStatus && indexPath.row == 3) {
+        [self chooseCodeRegion:[tableView cellForRowAtIndexPath:indexPath]];
     } else if (indexPath.section == SectionPairing && OnDevicePairing.available && indexPath.row == 0) {
         [self pair];
     } else if (indexPath.section == SectionPairing) {
@@ -225,6 +244,27 @@ enum {
         [self showPairingAlert:alert];
         [self.tableView reloadData];
     }];
+}
+
+- (void)chooseCodeRegion:(UITableViewCell *)cell {
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"Code Region"
+                                                                   message:@"The room for translated code, and the "
+                                                                            "memory it takes"
+                                                            preferredStyle:UIAlertControllerStyleActionSheet];
+    NSUInteger current = BuiltinJIT.codeRegionMB;
+    for (NSNumber *choice in BuiltinJIT.codeRegionChoices) {
+        NSUInteger mb = choice.unsignedIntegerValue;
+        NSString *title = [NSString stringWithFormat:@"%lu MB%@", (unsigned long) mb, mb == current ? @" ✓" : @""];
+        [sheet addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault
+                                                handler:^(UIAlertAction *_) {
+            BuiltinJIT.codeRegionMB = mb;
+            [self.tableView reloadData];
+        }]];
+    }
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    sheet.popoverPresentationController.sourceView = cell ?: self.tableView;
+    sheet.popoverPresentationController.sourceRect = cell ? cell.bounds : self.tableView.bounds;
+    [self presentViewController:sheet animated:YES completion:nil];
 }
 
 - (void)enabledAtStartChanged:(UISwitch *)toggle {

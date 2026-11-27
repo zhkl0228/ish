@@ -38,6 +38,18 @@ extern NSNotificationName const BuiltinJITChangedNotification;
 // Enabled as iSH starts (Settings)
 @property (nonatomic) BOOL enabledAtStart;
 
+// The size of the code region the JIT asks for, in MB (Settings), and the
+// sizes to choose from. It applies when the region is made: under TXM the
+// debugger makes it once, as the JIT is first enabled, so a new size waits
+// for iSH's next start once the JIT translates. Each MB of it is memory the
+// app takes as the region is made (the debugger writes in every page).
+@property (class, nonatomic) NSUInteger codeRegionMB;
+@property (class, readonly) NSArray<NSNumber *> *codeRegionChoices;
+// Gives the JIT the size set, before anything starts it (AppDelegate, first)
++ (void)applyCodeRegionSize;
+// The size of the region the JIT has now, in MB; 0 if it has none
+@property (readonly) NSUInteger codeRegionMBNow;
+
 // Documents/StikJIT/pairingFile.plist, which Finder's file sharing reaches too
 @property (readonly) NSURL *pairingFileURL;
 @property (readonly) BOOL hasPairingFile;

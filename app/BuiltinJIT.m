@@ -25,11 +25,15 @@
 NSNotificationName const BuiltinJITChangedNotification = @"BuiltinJITChangedNotification";
 
 static NSString *const kEnabledAtStartKey = @"Built-in JIT";
+static NSString *const kCodeRegionMBKey = @"Built-in JIT Code Region MB";
+static const NSUInteger kCodeRegionMBDefault = 120;
 
 // asbestos/guest-arm64/jit.h's (a header for builds with ISH_JIT, which libish
 // is for the app: GuestARM64.xcconfig's ISH_ENABLE_JIT)
 bool jit_region_now(bool from_debugger);
 size_t jit_describe(char *buf, size_t size);
+void jit_set_region_mb(unsigned mb);
+bool jit_region_usage(size_t *used, size_t *size);
 
 // <sys/codesign.h>'s, which the iOS SDK leaves out
 extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
@@ -177,6 +181,7 @@ static char *BuiltinJITReport(void) {
     NSMutableString *text = [NSMutableString new];
     [text appendFormat:@"  pairing file: %@ (Documents/StikJIT/pairingFile.plist)\n", jit.hasPairingFile ? @"yes" : @"no"];
     [text appendFormat:@"  enabled as iSH starts: %@\n", jit.enabledAtStart ? @"yes" : @"no"];
+    [text appendFormat:@"  code region asked for: %lu MB (Settings)\n", (unsigned long) BuiltinJIT.codeRegionMB];
     [text appendFormat:@"  translating: %@\n", jit.translating ? @"yes" : @"no"];
     [text appendFormat:@"  status: %@\n", jit.status];
     NSArray<NSString *> *log = jit.log;
@@ -243,6 +248,35 @@ static char *BuiltinJITReport(void) {
 - (void)setEnabledAtStart:(BOOL)enabledAtStart {
     [NSUserDefaults.standardUserDefaults setBool:enabledAtStart forKey:kEnabledAtStartKey];
     [self changed];
+}
+
+// Whole arenas of 128 MB (asbestos/guest-arm64/jit.c) past the first: the
+// native dispatch's window, 128 MB from each arena's start, ends where the
+// region does. 120, the size before there were arenas, leaves 8 MB past it,
+// which the JIT reserves when it can.
++ (NSArray<NSNumber *> *)codeRegionChoices {
+    return @[@120, @256, @512, @768, @1024, @1280];
+}
+
++ (NSUInteger)codeRegionMB {
+    NSInteger mb = [NSUserDefaults.standardUserDefaults integerForKey:kCodeRegionMBKey];
+    return mb > 0 ? (NSUInteger) mb : kCodeRegionMBDefault;
+}
+
++ (void)setCodeRegionMB:(NSUInteger)codeRegionMB {
+    [NSUserDefaults.standardUserDefaults setInteger:(NSInteger) codeRegionMB forKey:kCodeRegionMBKey];
+    // A region not made yet is made this size (jit_region_now())
+    jit_set_region_mb((unsigned) codeRegionMB);
+    [BuiltinJIT.shared changed];
+}
+
++ (void)applyCodeRegionSize {
+    jit_set_region_mb((unsigned) self.codeRegionMB);
+}
+
+- (NSUInteger)codeRegionMBNow {
+    size_t used, size;
+    return jit_region_usage(&used, &size) ? size >> 20 : 0;
 }
 
 - (NSURL *)pairingFileURL {

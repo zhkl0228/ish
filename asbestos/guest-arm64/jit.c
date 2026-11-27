@@ -10,6 +10,7 @@
 #include <mach/mach.h>
 #include <mach/mach_error.h>
 #if !TARGET_OS_OSX
+#include <os/proc.h>
 #include <sys/sysctl.h>
 #endif
 #else
@@ -32,6 +33,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/ucontext.h>
+#include <time.h>
 #include "asbestos/guest-arm64/jit.h"
 #include "asbestos/guest-arm64/aot.h"
 #include "asbestos/guest-arm64/fpcr.h"
@@ -118,34 +120,53 @@ static _Atomic uint64_t st_find_ticks;   // jit_ticks() spent in aot_lookup()
 
 // ---------------------------------------------------------------- code region
 //
-// One region, bump-allocated and never freed; branches between native code
-// and to the exit stub stay within +-128MB. Every write goes through
+// One region, bump-allocated and never freed. Every write goes through
 // install_code() / patch_insn(), so the code is only ever written through
 // `region + rw_delta`:
 // - MAP_JIT (macOS): rw_delta = 0 and the thread toggles the region between
 //   writable and executable (pthread_jit_write_protect_np).
 // - Dual mapping (iOS, or ISH_JIT_DUALMAP=1 on macOS): a second, writable
 //   view of the same pages; the executable view is never writable.
+//
+// Its size is set before it is made (jit_set_region_mb(), the app's setting;
+// ISH_JIT_REGION_MB): on iOS 26 with TXM the debugger allocates it once, as
+// iSH starts, and none comes after. A `b` reaches +-128MB, so the region is
+// cut into arenas of 128MB at most (ISH_JIT_ARENA_MB: smaller, for a test),
+// each beginning with its own copy of the shared stubs (arena_floor bytes):
+// code placed in an arena branches to its stubs only, and is placed whole in
+// one, never across two. The native dispatch's test of whether a code-stream
+// word is native code takes the arena's base (arena_base_of()), which the
+// code is given as it is placed; its window is 128MB from there.
 
-#define REGION_SIZE (120u << 20)
+#define REGION_MB_DEFAULT 120u
+#define REGION_MB_MAX 4096u
+#define ARENA_MB_MAX 128u
+#define ARENAS_MAX 64u
 static uint8_t *region;   // executable view
 static intptr_t rw_delta; // writable view - executable view
 static bool dual_map;
+static size_t region_size = (size_t) REGION_MB_DEFAULT << 20;   // set as it is made (region_config())
+static size_t arena_size = (size_t) ARENA_MB_MAX << 20;
+static unsigned n_arenas = 1;
+static size_t arena_floor;          // what the stubs take at the start of each arena
+static unsigned region_mb_wanted;   // jit_set_region_mb()'s: 0 for REGION_MB_DEFAULT
+// Where the next allocation goes, from the region's start: in the arena it is
+// in, or the next one's after its stubs
 static _Atomic size_t region_used;
 static _Atomic bool region_full;   // an allocation failed: what came after runs as gadgets
 // A full region is flushed (jit_flush_*: asbestos.c's asbestos_jit_flush) and
-// taken from its start again, what the shared stubs take (region_floor) kept:
-// every block is invalidated, translated again when it is hot again. It
-// filled for good before: compiling ish with clang (libLLVM's code, no image
-// of it) filled 120MB, and every block hot since ran as gadgets till the app
-// ended. region_limit: REGION_SIZE, or ISH_JIT_REGION_MB's (a test's flushes).
-static size_t region_floor, region_limit = REGION_SIZE;
+// taken from its start again, the stubs of every arena kept (region_floor:
+// where the first arena's stubs end): every block is invalidated, translated again
+// when it is hot again. It filled for good before: compiling ish with clang
+// (libLLVM's code, no image of it) filled 120MB, and every block hot since ran
+// as gadgets till the app ended.
+static size_t region_floor;
 static _Atomic bool flush_wanted;   // the region is full: a flush is asked for
 static _Atomic bool flushing;       // till the region is taken from its start: no translation made or reused
 static _Atomic uint64_t st_flushes;
 static const char *rec_file, *rec_mod;   // recording an AOT image (below)
 // Where the region came from, or why there is none: /proc/ish/jit says it
-static char region_how[320];
+static char region_how[512];
 
 static void region_none(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 static void region_none(const char *fmt, ...) {
@@ -157,6 +178,17 @@ static void region_none(const char *fmt, ...) {
 }
 
 #ifndef ISH_JIT_NO_EMIT   // AOT-only builds never map executable memory
+// The address space from the region's start that the native dispatch's test
+// takes for native code: 128MB from each arena's base (its lsr #27). Past the
+// region it is reserved where iSH maps the region, and asked for where the
+// debugger does (map_prepared()), so that nothing else is mapped there: a
+// code-stream word there, a gadget's above all, would be entered as native
+// code. A region of whole arenas of 128MB has none past it.
+static size_t region_window(void) {
+    size_t w = (size_t) (n_arenas - 1) * arena_size + ((size_t) ARENA_MB_MAX << 20);
+    return w > region_size ? w : region_size;
+}
+
 #if defined(__APPLE__) && !TARGET_OS_OSX
 // <sys/codesign.h>'s, which the iOS SDK leaves out
 extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
@@ -235,26 +267,26 @@ static uint64_t jit26(uint64_t command, uint64_t arg0, uint64_t arg1) {
 // writable view of it mapped here
 static bool map_prepared(uint64_t answer) {
     vm_address_t rx = (vm_address_t) answer;
-    vm_prot_t prot = rx != 0 && rx % vm_page_size == 0 ? range_protection(rx, REGION_SIZE) : VM_PROT_NONE;
+    vm_prot_t prot = rx != 0 && rx % vm_page_size == 0 ? range_protection(rx, region_size) : VM_PROT_NONE;
     if (!(prot & VM_PROT_EXECUTE)) {
         region_none("the debugger answered JIT26 PrepareRegion (%u MB) with %#llx: not an executable region "
-                    "(vm_region: %#x)", REGION_SIZE >> 20, (unsigned long long) answer, prot);
+                    "(vm_region: %#x)", (unsigned) (region_size >> 20), (unsigned long long) answer, prot);
         return false;
     }
     vm_address_t rw = 0;
     vm_prot_t cur, max;
-    kern_return_t kr = vm_remap(mach_task_self(), &rw, REGION_SIZE, 0, VM_FLAGS_ANYWHERE, mach_task_self(), rx,
+    kern_return_t kr = vm_remap(mach_task_self(), &rw, region_size, 0, VM_FLAGS_ANYWHERE, mach_task_self(), rx,
                                 false, &cur, &max, VM_INHERIT_NONE);
     if (kr != KERN_SUCCESS) {
-        vm_deallocate(mach_task_self(), rx, REGION_SIZE);
+        vm_deallocate(mach_task_self(), rx, region_size);
         region_none("vm_remap of the debugger's region at %#llx: %s", (unsigned long long) answer,
                     mach_error_string(kr));
         return false;
     }
-    kr = vm_protect(mach_task_self(), rw, REGION_SIZE, false, VM_PROT_READ | VM_PROT_WRITE);
+    kr = vm_protect(mach_task_self(), rw, region_size, false, VM_PROT_READ | VM_PROT_WRITE);
     if (kr != KERN_SUCCESS) {
-        vm_deallocate(mach_task_self(), rw, REGION_SIZE);
-        vm_deallocate(mach_task_self(), rx, REGION_SIZE);
+        vm_deallocate(mach_task_self(), rw, region_size);
+        vm_deallocate(mach_task_self(), rx, region_size);
         region_none("vm_protect read-write of a view of the debugger's region: %s (its most: %#x)",
                     mach_error_string(kr), max);
         return false;
@@ -264,6 +296,22 @@ static bool map_prepared(uint64_t answer) {
     dual_map = true;
     snprintf(region_how, sizeof(region_how), "allocated by the debugger iSH was launched under (JIT26), "
              "a writable view of it mapped by iSH");
+    // The rest of the dispatch's window (region_window()), reserved: nothing
+    // is mapped there after this. If something is already, as it may have
+    // been past every 120MB region before (8MB), it is said.
+    size_t tail = region_window() - region_size;
+    if (tail != 0) {
+        vm_address_t at = rx + region_size;
+        kr = vm_allocate(mach_task_self(), &at, tail, VM_FLAGS_FIXED);
+        if (kr == KERN_SUCCESS)
+            kr = vm_protect(mach_task_self(), at, tail, true, VM_PROT_NONE);
+        size_t len = strlen(region_how);
+        if (kr == KERN_SUCCESS)
+            snprintf(region_how + len, sizeof(region_how) - len, ", the %zu MB after it reserved", tail >> 20);
+        else
+            snprintf(region_how + len, sizeof(region_how) - len, ", the %zu MB after it not reserved: %s",
+                     tail >> 20, mach_error_string(kr));
+    }
     return true;
 }
 
@@ -273,9 +321,36 @@ static bool map_prepared(uint64_t answer) {
 // writes a byte in each of its 16 KB pages, which lets them run. Then it
 // detaches, success or not: the pages run for the life of the process, and
 // the host faults iSH takes are its own again, not the debugger's.
+//
+// A byte written in each page makes every page of it dirty: the app's
+// footprint, which jetsam and the kernel's memory governor go by
+// (AppDelegate's ish_set_memory_status feed), and the memory left to it are
+// read before and after, with the time the debugger took, for /proc/ish/jit.
+static uint64_t footprint_mb(void) {
+    task_vm_info_data_t info;
+    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+    if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t) &info, &count) != KERN_SUCCESS)
+        return 0;
+    return info.phys_footprint >> 20;
+}
+
 static bool map_from_debugger(void) {
-    bool mapped = map_prepared(jit26(JIT26_PREPARE_REGION, 0, REGION_SIZE));
+    uint64_t footprint_before = footprint_mb(), avail_before = os_proc_available_memory() >> 20;
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    uint64_t answer = jit26(JIT26_PREPARE_REGION, 0, region_size);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    bool mapped = map_prepared(answer);
     jit26(JIT26_DETACH, 0, 0);
+    if (mapped) {
+        double s = (double) (t1.tv_sec - t0.tv_sec) + (double) (t1.tv_nsec - t0.tv_nsec) * 1e-9;
+        size_t len = strlen(region_how);
+        snprintf(region_how + len, sizeof(region_how) - len,
+                 "; %zu MB asked for in %.1f s, the app's footprint %llu MB before and %llu MB after, "
+                 "the memory left to it %llu MB before and %llu MB after",
+                 region_size >> 20, s, (unsigned long long) footprint_before, (unsigned long long) footprint_mb(),
+                 (unsigned long long) avail_before, (unsigned long long) (os_proc_available_memory() >> 20));
+    }
     return mapped;
 }
 #endif
@@ -296,20 +371,29 @@ static bool map_dual(enum region_from from) {
         region_none("memfd_create: %s", strerror(errno));
         return false;
     }
-    if (ftruncate(fd, REGION_SIZE) < 0) {
+    if (ftruncate(fd, region_size) < 0) {
         region_none("ftruncate of the memfd: %s", strerror(errno));
         close(fd);
         return false;
     }
-    void *rw = mmap(NULL, REGION_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    void *rx = mmap(NULL, REGION_SIZE, PROT_READ | PROT_EXEC, MAP_SHARED, fd, 0);
+    // The executable view at the start of the dispatch's window, the rest of
+    // it reserved (region_window())
+    size_t window = region_window();
+    void *rw = mmap(NULL, region_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    void *rx = mmap(NULL, window, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    if (rx != MAP_FAILED && mmap(rx, region_size, PROT_READ | PROT_EXEC, MAP_SHARED | MAP_FIXED, fd, 0) == MAP_FAILED) {
+        int err = errno;
+        munmap(rx, window);
+        rx = MAP_FAILED;
+        errno = err;
+    }
     close(fd);
     if (rw == MAP_FAILED || rx == MAP_FAILED) {
         region_none("mmap of the memfd: %s", strerror(errno));
         if (rw != MAP_FAILED)
-            munmap(rw, REGION_SIZE);
+            munmap(rw, region_size);
         if (rx != MAP_FAILED)
-            munmap(rx, REGION_SIZE);
+            munmap(rx, window);
         return false;
     }
     region = rx;
@@ -339,34 +423,44 @@ static bool map_dual(enum region_from from) {
         return false;
     }
 #endif
-    void *rw = mmap(NULL, REGION_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    void *rw = mmap(NULL, region_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (rw == MAP_FAILED) {
         region_none("mmap: %s", strerror(errno));
         return false;
     }
-    vm_address_t rx = 0;
-    vm_prot_t cur, max;
-    kern_return_t kr = vm_remap(mach_task_self(), &rx, REGION_SIZE, 0, VM_FLAGS_ANYWHERE, mach_task_self(),
-                                (vm_address_t) rw, false, &cur, &max, VM_INHERIT_NONE);
-    if (kr != KERN_SUCCESS) {
-        region_none("vm_remap: %s", mach_error_string(kr));
-        munmap(rw, REGION_SIZE);
+    // The executable view at the start of the dispatch's window, the rest of
+    // it reserved (region_window())
+    size_t window = region_window();
+    void *reserved = mmap(NULL, window, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (reserved == MAP_FAILED) {
+        region_none("mmap of %zu MB reserved: %s", window >> 20, strerror(errno));
+        munmap(rw, region_size);
         return false;
     }
-    if (mprotect((void *) rx, REGION_SIZE, PROT_READ | PROT_EXEC) != 0) {
+    vm_address_t rx = (vm_address_t) reserved;
+    vm_prot_t cur, max;
+    kern_return_t kr = vm_remap(mach_task_self(), &rx, region_size, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE,
+                                mach_task_self(), (vm_address_t) rw, false, &cur, &max, VM_INHERIT_NONE);
+    if (kr != KERN_SUCCESS) {
+        region_none("vm_remap: %s", mach_error_string(kr));
+        munmap(reserved, window);
+        munmap(rw, region_size);
+        return false;
+    }
+    if (mprotect((void *) rx, region_size, PROT_READ | PROT_EXEC) != 0) {
         region_none("mprotect read-execute: %s", strerror(errno));
-        munmap((void *) rx, REGION_SIZE);
-        munmap(rw, REGION_SIZE);
+        munmap(reserved, window);
+        munmap(rw, region_size);
         return false;
     }
 #if !TARGET_OS_OSX
-    vm_prot_t prot = range_protection(rx, REGION_SIZE);
+    vm_prot_t prot = range_protection(rx, region_size);
     if (!(prot & VM_PROT_EXECUTE)) {
         region_none("iOS left the region iSH made executable without execute (vm_region: %#x), as TXM does "
                     "(iOS 26 and later, on A15 and M2 and later): there only a debugger that answers JIT26 as iSH "
                     "starts gives one (StikDebug, its universal.js)", prot);
-        munmap((void *) rx, REGION_SIZE);
-        munmap(rw, REGION_SIZE);
+        munmap(reserved, window);
+        munmap(rw, region_size);
         return false;
     }
 #endif
@@ -380,8 +474,10 @@ static bool map_dual(enum region_from from) {
 
 static bool map_jit(void) {
 #if TARGET_OS_OSX
-    // MAP_JIT memory is placed by the kernel (hints are ignored).
-    void *p = mmap(NULL, REGION_SIZE, PROT_READ | PROT_WRITE | PROT_EXEC,
+    // MAP_JIT memory is placed by the kernel (hints are ignored): the whole
+    // dispatch's window (region_window()) is mapped, the code region at its
+    // start, the rest never touched.
+    void *p = mmap(NULL, region_window(), PROT_READ | PROT_WRITE | PROT_EXEC,
                    MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
     if (p == MAP_FAILED) {
         region_none("mmap MAP_JIT: %s", strerror(errno));
@@ -396,16 +492,46 @@ static bool map_jit(void) {
 }
 #endif
 
+// The arena code at p (in the region) is placed in, and its base
+static unsigned arena_of(const void *p) {
+    return (unsigned) (((uintptr_t) p - (uintptr_t) region) / arena_size);
+}
+static uintptr_t arena_base_of(const void *p) {
+    return (uintptr_t) region + (uintptr_t) arena_of(p) * arena_size;
+}
+
+// The arena (from 1) the next allocation goes in, for /proc/ish/jit
+static unsigned arena_now(void) {
+    unsigned k = (unsigned) (atomic_load(&region_used) / arena_size) + 1;
+    return k < n_arenas ? k : n_arenas;
+}
+
+// Room for `bytes` in the arena region_used is in, or else after the stubs of
+// the next one: an allocation never straddles two arenas, so all of it
+// reaches its arena's stubs. NULL once the last arena has no room: the region
+// is full, and a flush is asked for.
 static uint8_t *region_alloc(size_t bytes) {
-    size_t off = atomic_fetch_add(&region_used, (bytes + 15) & ~(size_t) 15);
-    if (off + bytes > region_limit) {
-        region_full = true;
-        // a recording keeps what it has: a flush would lose it
-        if (!rec_file)
-            atomic_store(&flush_wanted, true);
-        return NULL;
+    size_t need = (bytes + 15) & ~(size_t) 15;
+    size_t off = atomic_load(&region_used);
+    for (;;) {
+        size_t start = off / arena_size * arena_size;
+        size_t at = off < start + arena_floor ? start + arena_floor : off;
+        size_t end = start + arena_size < region_size ? start + arena_size : region_size;
+        if (at + need > end) {
+            start += arena_size;
+            at = start + arena_floor;
+            end = start + arena_size < region_size ? start + arena_size : region_size;
+            if (start >= region_size || at + need > end) {
+                region_full = true;
+                // a recording keeps what it has: a flush would lose it
+                if (!rec_file)
+                    atomic_store(&flush_wanted, true);
+                return NULL;
+            }
+        }
+        if (atomic_compare_exchange_weak(&region_used, &off, at + need))
+            return region + at;
     }
-    return region + off;
 }
 
 // MAP_JIT W^X is per thread and only this thread's fiber runs its native
@@ -499,6 +625,11 @@ enum {
     STUB_UNCH,      // x9 = an unchained slot, w10 = idx << 2 | jump_ip slot (2: none)
     NSTUBS
 };
+// Each arena has its own copies, at its start; code branches to those of the
+// arena it is placed in. stubs[] are the first arena's: whether there are
+// any (emit_chain_ex()), and what a recording's header has (it uses that
+// arena alone).
+static uintptr_t arena_stubs[ARENAS_MAX][NSTUBS];
 static uintptr_t stubs[NSTUBS];
 static struct rec_seg *stub_rec[NSTUBS];
 #define exit_stub stubs[STUB_EXIT]
@@ -544,7 +675,7 @@ struct em {
     uint32_t locked;       // host registers used by the instruction being emitted
     uint8_t victim;        // round-robin eviction cursor
     // bailout / exit sites: branch at buf[at] must go to the stub for stream position spos
-    struct { unsigned at; unsigned spos; uint8_t kind, stub; uintptr_t abs; } fix[1024];
+    struct { unsigned at; unsigned spos; uint8_t kind, stub; } fix[1024];
     unsigned nfix;
     bool fail;
     bool hflags;   // host NZCV currently equals the guest flags
@@ -672,6 +803,31 @@ static void mov_host_ptr(struct em *e, int rd, const void *p) {
     put(e, 0xD2800000u | (uint32_t) (v & 0xffff) << 5 | (uint32_t) rd);
     for (int hw = 1; hw < 4; hw++)
         put(e, 0xF2800000u | (uint32_t) hw << 21 | (uint32_t) ((v >> (16 * hw)) & 0xffff) << 5 | (uint32_t) rd);
+}
+
+static void put_mov64_at(uint32_t *w, int rd, uint64_t v) {
+    w[0] = 0xD2800000u | (uint32_t) (v & 0xffff) << 5 | (uint32_t) rd;
+    for (int hw = 1; hw < 4; hw++)
+        w[hw] = 0xF2800000u | (uint32_t) hw << 21 | (uint32_t) ((v >> (16 * hw)) & 0xffff) << 5 | (uint32_t) rd;
+}
+
+// x<rd> = the base of the arena the code is placed in: movz and three movk of
+// the region's start with a REL_SYM of it, as mov_host_ptr() emits a host
+// address in PIC code (a recording's "@region", which an image takes for its
+// own text start), and so without PIC too: the relocation marks the words
+// that place_arena_base() gives the arena's base once the code is placed.
+static void mov_arena_base(struct em *e, int rd) {
+    add_rel(e, REL_SYM, (uintptr_t) region);
+    if (e->n + 4 > sizeof(e->buf) / 4) { e->fail = true; return; }
+    put_mov64_at(&e->buf[e->n], rd, (uint64_t) (uintptr_t) region);
+    e->n += 4;
+}
+
+// Every mov_arena_base() of the code in e->buf, placed at dst: its arena's base
+static void place_arena_base(struct em *e, const uint8_t *dst) {
+    for (unsigned j = 0; j < e->nrel; j++)
+        if (e->rel[j].kind == REL_SYM && e->rel[j].val == (uintptr_t) region)
+            put_mov64_at(&e->buf[e->rel[j].at], (int) (e->buf[e->rel[j].at] & 31), arena_base_of(dst));
 }
 
 // ---- PIC (ISH_JIT_PIC=1)
@@ -834,8 +990,9 @@ static void enter_native(struct em *e) {
     put(e, 0xD61F0100u);                                                     // 1: br x8
 }
 
-// Shared exit stub: store the pinned guest registers, then br x8.
-static void make_exit_stub(void) {
+// Arena k's shared exit stub, at its start (make_arena_stubs()): store the
+// pinned guest registers, then br x8.
+static void make_exit_stub(unsigned k) {
     uint32_t stub[40];
     unsigned n = 0;
     for (int i = 0; i < n_pinned; i++)
@@ -845,16 +1002,21 @@ static void make_exit_stub(void) {
     stub[n++] = 0xD61F0100u;   // br x8
     uint8_t *dst = region_alloc(n * 4);
     install_code(dst, stub, n);
-    exit_stub = (uintptr_t) dst;
-    exit_stub_words = n;
+    arena_stubs[k][STUB_EXIT] = (uintptr_t) dst;
+    if (k == 0) {
+        exit_stub = (uintptr_t) dst;
+        exit_stub_words = n;
+    }
 }
 
 // Leave native code for `target` (gadget, fiber_ret, ...): x8 = target, then
-// the shared exit stub stores the pinned registers and branches to x8.
+// the shared exit stub stores the pinned registers and branches to x8. The
+// branch goes to the stub of the arena the code is placed in, which is known
+// only then (finish_native(), install_stub()).
 static void emit_to_stub(struct em *e, int id) {
     if (e->nfix == 1024) { e->fail = true; return; }
     e->fix[e->nfix].at = e->n; e->fix[e->nfix].spos = 0; e->fix[e->nfix].kind = 4;
-    e->fix[e->nfix].stub = (uint8_t) id; e->fix[e->nfix].abs = stubs[id];
+    e->fix[e->nfix].stub = (uint8_t) id;
     e->nfix++;
     put(e, 0x14000000u);                                           // b stub (patched)
 }
@@ -1937,10 +2099,12 @@ static uint8_t *finish_native(struct em *e, struct fiber_block *b, uintptr_t ori
     uint8_t *dst = e->fail ? NULL : region_alloc(e->n * 4);
     if (!dst)
         return NULL;
+    place_arena_base(e, dst);
     for (unsigned i = 0; i < e->nfix; i++) {
-        if (e->fix[i].kind == 4) {   // absolute target (a shared stub)
-            int64_t d = (int64_t) e->fix[i].abs - (int64_t) ((uintptr_t) dst + 4 * e->fix[i].at);
-            if (!fits(d >> 2, 26)) return NULL;
+        if (e->fix[i].kind == 4) {   // a shared stub, its arena's
+            uintptr_t stub = arena_stubs[arena_of(dst)][e->fix[i].stub];
+            int64_t d = (int64_t) stub - (int64_t) ((uintptr_t) dst + 4 * e->fix[i].at);
+            if (!stub || !fits(d >> 2, 26)) return NULL;
             e->buf[e->fix[i].at] = ENC_B(d);
             if (e->record) {
                 unsigned n = e->n;
@@ -2020,7 +2184,7 @@ bool jit_chain_ok(struct fiber_block *from, int i, struct fiber_block *to) {
     if (!pic_on || !from->native_link[i])
         return true;
     uint32_t *site = from->native_link[i];
-    bool writable = (uintptr_t) site >= (uintptr_t) region && (uintptr_t) site < (uintptr_t) region + REGION_SIZE;
+    bool writable = (uintptr_t) site >= (uintptr_t) region && (uintptr_t) site < (uintptr_t) region + region_size;
     uint64_t lit = __atomic_load_n((uint64_t *) (site + 1), __ATOMIC_ACQUIRE);
     if (lit == LINK_UNSET && (!writable || link_off))
         return true;   // never linked (read-only AOT code, or links off): the branch falls through
@@ -2064,7 +2228,7 @@ void jit_link(struct fiber_block *from, int i, struct fiber_block *to) {
         if (to != from)
             return;
         target = (uintptr_t) from->native_loop;
-    } else if (entry < (uintptr_t) region || entry >= (uintptr_t) region + REGION_SIZE) {
+    } else if (entry < (uintptr_t) region || entry >= (uintptr_t) region + region_size) {
         return;   // successor starts in the gadget world
     }
     int64_t d = (int64_t) target - (int64_t) (uintptr_t) from->native_link[i];
@@ -2125,9 +2289,9 @@ static void emit_native_dispatch_ex(struct em *e, bool block_start) {
         put(e, 0xD61F0100u);                                     // br x8
         return;
     }
-    mov_host_ptr(e, 10, region);
+    mov_arena_base(e, 10);
     put(e, 0xCB0A010Au);                                         // sub x10, x8, x10
-    put(e, 0xD35BFD4Au);                                         // lsr x10, x10, #27  (region < 128MB)
+    put(e, 0xD35BFD4Au);                                         // lsr x10, x10, #27  (an arena: 128MB at most)
     unsigned cold = e->n; put(e, 0xB500000Au);                   // cbnz x10, cold
     if (pic_on && block_start) {
         put(e, 0x91000108u | ((uint32_t) (4 * (prologue_words - 1)) << 10));   // add x8, x8, #cross-module entry
@@ -2156,15 +2320,18 @@ static void emit_native_dispatch_ex(struct em *e, bool block_start) {
 // swaps them back first.
 static void emit_refused_edge(struct em *e, unsigned generic, int link);
 
-// Install the stub in e as stubs[id] (its branches to other stubs resolved)
-// and keep its words and relocations for the recording's header.
-static void install_stub(struct em *e, int id) {
+// Install the stub in e as arena k's stubs[id] (its branches to the arena's
+// other stubs resolved), and for the first arena keep its words and
+// relocations for the recording's header.
+static void install_stub(struct em *e, int id, unsigned k) {
     uint8_t *dst = e->fail ? NULL : region_alloc(e->n * 4);
     if (!dst)
         return;
+    place_arena_base(e, dst);
     for (unsigned i = 0; i < e->nfix; i++) {
-        int64_t d = (int64_t) e->fix[i].abs - (int64_t) ((uintptr_t) dst + 4 * e->fix[i].at);
-        if (e->fix[i].kind != 4 || !e->fix[i].abs || !fits(d >> 2, 26))
+        uintptr_t stub = e->fix[i].kind == 4 ? arena_stubs[k][e->fix[i].stub] : 0;
+        int64_t d = (int64_t) stub - (int64_t) ((uintptr_t) dst + 4 * e->fix[i].at);
+        if (!stub || !fits(d >> 2, 26))
             return;
         e->buf[e->fix[i].at] = ENC_B(d);
         unsigned n = e->n;
@@ -2175,13 +2342,16 @@ static void install_stub(struct em *e, int id) {
     if (e->fail)
         return;
     install_code(dst, e->buf, e->n);
-    stub_rec[id] = record_segment(e);
-    stubs[id] = (uintptr_t) dst;
+    arena_stubs[k][id] = (uintptr_t) dst;
+    if (k == 0) {
+        stub_rec[id] = record_segment(e);
+        stubs[id] = (uintptr_t) dst;
+    }
 }
 
 // PIC with pinned registers: the slow paths of a block end (see
-// emit_chain_outlined()), as emit_chain_ex() has them inline.
-static void make_stubs(void) {
+// emit_chain_outlined()), as emit_chain_ex() has them inline. Arena k's.
+static void make_stubs(unsigned k) {
     struct em *e = calloc(1, sizeof(*e));
     if (!e)
         return;
@@ -2232,8 +2402,8 @@ static void make_stubs(void) {
             put(e, 0xAA0903FCu);                                                         // mov x28, x9
             emit_exit(e, (uintptr_t) jit_fiber_ret_chain);
         }
-        install_stub(e, id);
-        if (!stubs[id])
+        install_stub(e, id, k);
+        if (!arena_stubs[k][id])
             break;   // block ends stay inline (emit_chain_ex() checks stubs[STUB_UNCH])
     }
     free(e);
@@ -3874,9 +4044,9 @@ enum jit_fault jit_native_fault(void *ucontext, uintptr_t addr, bool as_unknown,
     uintptr_t pc = UC_PC(uc);
     const struct aot_module *img = NULL;
     uintptr_t lo, hi;
-    if (region != NULL && pc >= (uintptr_t) region && pc < (uintptr_t) region + REGION_SIZE) {
+    if (region != NULL && pc >= (uintptr_t) region && pc < (uintptr_t) region + region_size) {
         lo = (uintptr_t) region;
-        hi = lo + REGION_SIZE;
+        hi = lo + region_size;
     } else if (in_aot_text(pc, &img)) {
         lo = (uintptr_t) img->text_start;
         hi = (uintptr_t) img->text_end;
@@ -4322,7 +4492,7 @@ static void rec_write(const char *path) {
     fprintf(f, "{\"header\": {\"abi\": %u, \"prologue_words\": %d, \"entry_off\": %lu, \"n_pinned\": %d, "
             "\"region_full\": %s, \"region_used\": %zu, \"exit_stub\": [",
             jit_abi(), prologue_words, (unsigned long) entry_off(), n_pinned, region_full ? "true" : "false",
-            region_full ? (size_t) REGION_SIZE : (size_t) region_used);
+            region_full ? region_size : (size_t) region_used);
     for (unsigned i = 0; i < exit_stub_words; i++)
         fprintf(f, "%s%u", i ? ", " : "", ((uint32_t *) exit_stub)[i]);
     fprintf(f, "], \"stubs\": [");
@@ -4500,10 +4670,12 @@ size_t jit_describe(char *buf, size_t size) {
                        pic_on ? "JIT, position-independent" : "JIT";
     OUT("mode: %s\n", mode);
     if (on && !images_only)
-        OUT("code region: %.1f of %zu MB used%s, flushed %llu times (when full: every block translated again once "
-            "hot); %s\n",
-            (region_full ? region_limit : (size_t) region_used) / 1048576.0, region_limit >> 20,
+        OUT("code region: %.1f of %zu MB used%s, in arena %u of %u (%zu MB each, its own stubs at its start), "
+            "flushed %llu times (when full: every block translated again once hot); %s\n",
+            (region_full ? region_size : (size_t) region_used) / 1048576.0, region_size >> 20,
             region_full ? (flushing ? " (full: being flushed)" : " (full: a flush asked for)") : "",
+            region_full ? n_arenas : arena_now(), n_arenas,
+            arena_size >> 20,
             (unsigned long long) st_flushes, region_how);
     else if (region == NULL && region_how[0] != '\0')
         OUT("code region: none: %s\n", region_how);
@@ -4626,8 +4798,8 @@ void jit_report(void) {
     if (rec_file) {
         rec_write(rec_file);
         if (region_full)
-            fprintf(stderr, "❌ JIT: the %u MB code region filled up: %s misses what ran after that\n",
-                    REGION_SIZE >> 20, rec_file);
+            fprintf(stderr, "❌ JIT: the %zu MB code region filled up: %s misses what ran after that\n",
+                    region_size >> 20, rec_file);
     }
     if (!getenv("ISH_JIT_STATS"))
         return;
@@ -4649,6 +4821,74 @@ static pthread_once_t init_once = PTHREAD_ONCE_INIT;
 // may come after the start only then
 static bool jit_configured;
 
+// An MB count from the environment, from 1 to max; 0 (said) if it is none
+static unsigned env_mb(const char *name, unsigned max) {
+    const char *v = getenv(name);
+    if (v == NULL)
+        return 0;
+    char *end;
+    unsigned long mb = strtoul(v, &end, 10);
+    if (*v != '\0' && *end == '\0' && mb >= 1 && mb <= max)
+        return (unsigned) mb;
+    fprintf(stderr, "⚠️  JIT: %s=%s is no size from 1 to %u MB\n", name, v, max);
+    return 0;
+}
+
+// The region's size, and its arenas', as it is about to be made: from
+// ISH_JIT_REGION_MB, else jit_set_region_mb()'s (the app's setting), else
+// REGION_MB_DEFAULT; arenas of ARENA_MB_MAX, or ISH_JIT_ARENA_MB's (a test's,
+// for many arenas in a small region). A recording takes one arena: an image
+// has one copy of the stubs, and its code one base.
+static void region_config(void) {
+    unsigned mb = env_mb("ISH_JIT_REGION_MB", REGION_MB_MAX);
+    if (mb == 0)
+        mb = __atomic_load_n(&region_mb_wanted, __ATOMIC_RELAXED);
+    if (mb > REGION_MB_MAX) {
+        fprintf(stderr, "⚠️  JIT: a code region of %u MB asked for, more than %u MB\n", mb, REGION_MB_MAX);
+        mb = 0;
+    }
+    if (mb == 0)
+        mb = REGION_MB_DEFAULT;
+    unsigned amb = env_mb("ISH_JIT_ARENA_MB", ARENA_MB_MAX);
+    if (amb == 0)
+        amb = ARENA_MB_MAX;
+    region_size = (size_t) mb << 20;
+    arena_size = (size_t) amb << 20;
+    if (getenv("ISH_JIT_RECORD") != NULL && region_size > arena_size)
+        region_size = arena_size;
+    if (region_size > (size_t) ARENAS_MAX * arena_size) {
+        fprintf(stderr, "⚠️  JIT: a %u MB region is more than %u arenas of %u MB: %u MB\n", mb, ARENAS_MAX, amb,
+                ARENAS_MAX * amb);
+        region_size = (size_t) ARENAS_MAX * arena_size;
+    }
+    n_arenas = (unsigned) ((region_size + arena_size - 1) / arena_size);
+}
+
+// The stubs of every arena, each at its start, and region_used after the
+// first's: the same code at each base (place_arena_base()), they take the
+// same room in each, arena_floor.
+static void make_arena_stubs(void) {
+    bool outlined = pic_on && n_pinned && !env_off("ISH_JIT_STUBS");
+    arena_floor = 0;
+    size_t floor = 0;
+    for (unsigned k = 0; k < n_arenas; k++) {
+        atomic_store(&region_used, (size_t) k * arena_size);
+        make_exit_stub(k);
+        if (outlined)
+            make_stubs(k);
+        size_t taken = atomic_load(&region_used) - (size_t) k * arena_size;
+        if (taken > floor)
+            floor = taken;
+    }
+    arena_floor = floor;
+    region_floor = floor;
+    atomic_store(&region_used, floor);
+}
+
+void jit_set_region_mb(unsigned mb) {
+    __atomic_store_n(&region_mb_wanted, mb, __ATOMIC_RELAXED);
+}
+
 static void jit_init(void) {
     if (env_off("ISH_JIT"))
         return;
@@ -4658,6 +4898,7 @@ static void jit_init(void) {
     // here, as iOS without a debugger has none: to try that on Linux and macOS.
     bool have_region = false;
     bool dual = !TARGET_OS_OSX || getenv("ISH_JIT_DUALMAP") != NULL;
+    region_config();
 #ifndef ISH_JIT_NO_EMIT
     const char *late = getenv("ISH_JIT_REGION_LATE");
     if (late && late[0] == '1')
@@ -4690,22 +4931,9 @@ static void jit_init(void) {
         else
             fprintf(stderr, "⚠️  JIT: ISH_JIT_HOT=%s is no count of runs: %u\n", hot, jit_hot_runs);
     }
-    const char *limit = getenv("ISH_JIT_REGION_MB");
-    if (limit != NULL) {
-        char *end;
-        unsigned long mb = strtoul(limit, &end, 10);
-        if (*limit != '\0' && *end == '\0' && mb >= 1 && mb <= REGION_SIZE >> 20)
-            region_limit = (size_t) mb << 20;
-        else
-            fprintf(stderr, "⚠️  JIT: ISH_JIT_REGION_MB=%s is no size from 1 to %u: %u\n", limit, REGION_SIZE >> 20,
-                    REGION_SIZE >> 20);
-    }
     rec_mod = getenv("ISH_JIT_RECORD_MOD") ? getenv("ISH_JIT_RECORD_MOD") : "ld-musl";
     if (have_region) {
-        make_exit_stub();
-        if (pic_on && n_pinned && !env_off("ISH_JIT_STUBS"))
-            make_stubs();
-        region_floor = atomic_load(&region_used);
+        make_arena_stubs();
         jit_exec_ready();
     }
     if (pic_on)
@@ -4747,11 +4975,9 @@ bool jit_region_now(bool from_debugger) {
 #ifndef ISH_JIT_NO_EMIT
         bool dual = !TARGET_OS_OSX || getenv("ISH_JIT_DUALMAP") != NULL;
         enum region_from from = from_debugger ? REGION_FROM_DEBUGGER : REGION_MAPPED_HERE;
+        region_config();   // the app's setting as it is now
         if (dual ? map_dual(from) : !from_debugger && map_jit()) {
-            make_exit_stub();
-            if (pic_on && n_pinned && !env_off("ISH_JIT_STUBS"))
-                make_stubs();
-            region_floor = atomic_load(&region_used);
+            make_arena_stubs();
             jit_exec_ready();
             // The region and its stubs first: a thread that reads either flag
             // set finds them
@@ -4962,8 +5188,8 @@ bool jit_region_usage(size_t *used, size_t *size) {
         *used = *size = 0;
         return false;
     }
-    *size = region_limit;
-    *used = atomic_load(&region_full) ? region_limit : atomic_load(&region_used);
+    *size = region_size;
+    *used = atomic_load(&region_full) ? region_size : atomic_load(&region_used);
     return true;
 }
 
