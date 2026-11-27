@@ -476,7 +476,8 @@ static UIImage *_Nullable arrowKeyImage(NSInteger tag, CGFloat base) {
     [self applyShowMeters];
 
     self.terminal = self.terminal;
-    [self.termView becomeFirstResponder];
+    // Not made first responder: the app opens with the keyboard down, and a
+    // tap on the terminal brings it up.
 
     NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
     [center addObserver:self
