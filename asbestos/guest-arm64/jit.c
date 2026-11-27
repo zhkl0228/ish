@@ -912,11 +912,47 @@ enum { F_NONE, F_ZR, F_SP };
 
 // Remap the rd/rn/rm/ra fields of an instruction. rd_write: rd is written.
 // rd_read: rd is also read (movk, bfm). Returns the host encoding.
+//
+// An instruction of more guest registers than the pool has room for (a
+// multiply-add's four, none pinned, with the lazy pool's three: it failed
+// to translate) reads the sources beyond it into scratch registers, x11 and
+// x12, for itself only: they are no pool's (tlb_lookup's, which no
+// remapped instruction comes with). One in the pool is copied, and its
+// register left unlocked for the destination (the pool is written
+// through: cpu_state has its value).
 static uint32_t remap(struct em *e, uint32_t x, int kd, int kn, int km, int ka, bool rd_read, int *wrote) {
     static const int shift[4] = {0, 5, 16, 10};
     const int kinds[4] = {kd, kn, km, ka};
     *wrote = -1;
     uint32_t out = x;
+    int distinct[4], ndistinct = 0;
+    for (int f = 0; f < 4; f++) {
+        int r = (x >> shift[f]) & 31;
+        if (kinds[f] == F_NONE || (r == 31 && kinds[f] == F_ZR))
+            continue;
+        int g = r == 31 ? G_SP : r;
+        if (e->pin[g] >= 0)
+            continue;
+        bool seen = false;
+        for (int i = 0; i < ndistinct; i++)
+            seen |= distinct[i] == g;
+        if (!seen)
+            distinct[ndistinct++] = g;
+    }
+    unsigned npool = n_pinned ? sizeof(lazy_pool) : sizeof(pool_nopin);
+    int spare = ndistinct - (int) npool;   // sources to read into scratch
+    int scratch_g[2] = {-1, -1}, nscratch = 0;
+    int rd_g = (x & 31) == 31 ? (kd == F_SP ? G_SP : -1) : (int) (x & 31);
+    for (int f = 3; f >= 1 && nscratch < spare; f--) {
+        int r = (x >> shift[f]) & 31;
+        if (kinds[f] == F_NONE || (r == 31 && kinds[f] == F_ZR))
+            continue;
+        int g = r == 31 ? G_SP : r;
+        if (e->pin[g] >= 0 || g == scratch_g[0] || (rd_read && g == rd_g))
+            continue;
+        scratch_g[nscratch++] = g;
+    }
+    bool scratch_loaded[2] = {false, false};
     for (int f = 3; f >= 0; f--) {   // sources first, destination last
         if (kinds[f] == F_NONE)
             continue;
@@ -928,6 +964,20 @@ static uint32_t remap(struct em *e, uint32_t x, int kd, int kn, int km, int ka, 
             g = G_SP;
         } else {
             g = r;
+        }
+        if (f != 0 && (g == scratch_g[0] || g == scratch_g[1])) {
+            int s = g == scratch_g[0] ? 0 : 1;
+            int hs = s == 0 ? T_E : T_Q;
+            if (!scratch_loaded[s]) {
+                scratch_loaded[s] = true;
+                if (e->uses[g] < 0xffff) e->uses[g]++;
+                if (e->host[g] >= 0)
+                    put(e, 0xAA0003E0u | ((uint32_t) e->host[g] << 16) | (uint32_t) hs);   // mov xS, xh
+                else
+                    put(e, 0xF9400000u | ((greg_off(g) / 8) << 10) | (1u << 5) | (uint32_t) hs);   // ldr xS, [x1, #off]
+            }
+            out = (out & ~(31u << shift[f])) | ((uint32_t) hs << shift[f]);
+            continue;
         }
         if (f != 0 || rd_read)
             (void) hreg(e, g);
@@ -1077,6 +1127,52 @@ static bool emit_simd(struct em *e, uint32_t x) {
     return true;
 }
 
+// More of AdvSIMD, as the programs' hot blocks had it (claude.exe, node,
+// sqlite, gzip): the host's own instruction on v16..v18, as emit_simd.
+// Returns false for anything not handled.
+static bool emit_simd_more(struct em *e, uint32_t x) {
+    int rd = x & 31, rn = (x >> 5) & 31, rm = (x >> 16) & 31;
+    uint32_t imm5 = (x >> 16) & 31;
+    bool m = false, d_in = false;
+    if ((x & 0xFFFFFC00u) == 0x5EF1B800u) {                                   // addp dd, vn.2d
+    } else if ((x & 0x9F20FC00u) == 0x0E201000u && ((x >> 22) & 3) != 3) {   // saddw/uaddw(2)
+        m = true;
+    } else if ((x & 0xBFE0FC00u) == 0x0E000400u) {                            // dup vd.t, vn.t[i]
+        if (!(imm5 & 15) || ((imm5 & 15) == 8 && !(x & 0x40000000u))) return false;
+    } else if ((x & 0xFFE0FC00u) == 0x5E000400u) {                            // dup (mov) scalar, vn.t[i]
+        if (!(imm5 & 15)) return false;
+    } else if ((x & 0xDF800400u) == 0x5F000400u) {                            // scalar shift by immediate
+        unsigned op = (x >> 11) & 31, U = (x >> 29) & 1, immh = (x >> 19) & 15;
+        // sshr, ushr, ssra, usra (accumulating: Dd read), shl: of d
+        if (!(immh & 8) || !(op == 0 || op == 2 || (op == 0x0A && !U))) return false;
+        d_in = op == 2;
+    } else if ((x & 0xFFE0FC00u) == 0x5EE08400u) {                            // add dd, dn, dm
+        m = true;
+    } else if ((x & 0xDF20FC00u) == 0x5E200C00u || (x & 0xDF20FC00u) == 0x5E202C00u) {   // sqadd/uqadd/sqsub/uqsub (scalar)
+        m = true;
+    } else if ((x & 0xFFFFFC00u) == 0x4E284800u) {                            // aese
+        d_in = true;
+    } else if ((x & 0xFFFFFC00u) == 0x4E286800u) {                            // aesmc
+    } else if ((x & 0xBFE0FC00u) == 0x0E002C00u) {                            // smov
+        bool ok = (imm5 & 1) || (imm5 & 3) == 2 || ((x & 0x40000000u) && (imm5 & 7) == 4);
+        if (!ok) return false;
+        vload(e, V_N, rn);
+        if (rd == 31) return true;
+        int hd = hreg(e, rd);
+        put(e, (x & ~0x3FFu) | (V_N << 5) | (uint32_t) hd);
+        writeback(e, rd);
+        return true;
+    } else {
+        return false;
+    }
+    vload(e, V_N, rn);
+    if (m) vload(e, V_M, rm);
+    if (d_in) vload(e, V_D, rd);
+    put(e, (x & ~(m ? 0x001F03FFu : 0x3FFu)) | (m ? (uint32_t) V_M << 16 : 0) | (V_N << 5) | V_D);
+    vstore(e, V_D, rd);
+    return true;
+}
+
 // ---- Scalar floating point, single and double precision. The guest's FPCR
 // is the host's while guest code runs (fiber_enter) and its FPSR collects in
 // the host's (cpu_step_to_interrupt), as for the gadgets, which run the
@@ -1126,6 +1222,24 @@ static bool emit_fp(struct em *e, uint32_t x) {
         put(e, (x & ~0x3FFu) | (V_N << 5) | V_D);
         vstore(e, V_D, rd);
         return true;
+    }
+    if ((x & 0x7F200000u) == 0x1E000000u && type <= 1) {                     // fixed-point to and from integer
+        unsigned rmode = (x >> 19) & 3, op = (x >> 16) & 7, scale = (x >> 10) & 63;
+        if (!(x & 0x80000000u) && scale < 32) return false;                   // a 32-bit one's fbits: 1..32
+        if (rmode == 3 && op <= 1) {                                          // fcvtzs / fcvtzu: to a register
+            vload(e, V_N, rn);
+            int hd = rd == 31 ? 31 : hreg(e, rd);
+            put(e, (x & ~0x3FFu) | (V_N << 5) | (uint32_t) hd);
+            if (rd != 31) writeback(e, rd);
+            return true;
+        }
+        if (rmode == 0 && (op == 2 || op == 3)) {                             // scvtf / ucvtf: from a register
+            int hn = rn == 31 ? 31 : hreg(e, rn);
+            put(e, (x & ~0x3FFu) | ((uint32_t) hn << 5) | V_D);
+            vstore(e, V_D, rd);
+            return true;
+        }
+        return false;
     }
     if ((x & 0x5F000000u) != 0x1E000000u || (x & 0x20000000u) || type > 1)    // M = S = 0, single or double
         return false;
@@ -1203,8 +1317,16 @@ static void ldst_wb(struct em *e, int gn, int hn, int64_t imm) {
     writeback(e, gn);
 }
 
-// SIMD & FP loads and stores (b/h/s/d/q, single and pair, no register offset)
+static bool emit_ldst_multi(struct em *e, uint32_t x, unsigned spos);
+static bool emit_ldst_rep(struct em *e, uint32_t x, unsigned spos);
+
+// SIMD & FP loads and stores (b/h/s/d/q: single, register offset and pair;
+// AdvSIMD's multiple structures and replicate)
 static bool emit_ldst_fp(struct em *e, uint32_t x, unsigned spos) {
+    if ((x & 0xBFBF0000u) == 0x0C000000u || (x & 0xBFA00000u) == 0x0C800000u)   // multiple structures
+        return emit_ldst_multi(e, x, spos);
+    if ((x & 0xBF9F0000u) == 0x0D000000u || (x & 0xBF800000u) == 0x0D800000u)   // single structure
+        return emit_ldst_rep(e, x, spos);
     if ((x & 0x3A000000u) == 0x28000000u) {                                   // pair
         unsigned opc = x >> 30, L = (x >> 22) & 1, idx = (x >> 23) & 3;
         if (opc == 3 || idx == 0) return false;                               // no-allocate pair: rare
@@ -1226,21 +1348,30 @@ static bool emit_ldst_fp(struct em *e, uint32_t x, unsigned spos) {
     bool q = opc >= 2;
     if (q && size) return false;
     unsigned scale = q ? 4 : size;
-    int64_t imm;
+    int64_t imm = 0;
     int wbmode = 0;
+    bool load = opc & 1;
+    int gn = rn == 31 ? G_SP : rn;
+    int hn;
     if ((x & 0x3B000000u) == 0x39000000u) {                                   // unsigned offset
         imm = (int64_t) ((x >> 10) & 0xfff) << scale;
+        hn = ldst_addr(e, gn, imm, false);
     } else if ((x & 0x3B200000u) == 0x38000000u) {                            // imm9 forms
         unsigned k = (x >> 10) & 3;
         if (k == 2) return false;
         imm = sext((x >> 12) & 0x1ff, 9);
         wbmode = k == 1 ? 1 : k == 3 ? 2 : 0;
+        hn = ldst_addr(e, gn, imm, wbmode == 1);
+    } else if ((x & 0x3B200C00u) == 0x38200800u) {                            // register offset
+        unsigned option = (x >> 13) & 7, S = (x >> 12) & 1;
+        if (!(option & 2)) return false;                                      // 32-bit index with option<2 undefined
+        int rm = (x >> 16) & 31;
+        int hm = rm == 31 ? 31 : hreg(e, rm);
+        hn = hreg(e, gn);
+        put(e, 0x8B200000u | ((uint32_t) hm << 16) | (option << 13) | ((S ? scale : 0) << 10) | ((uint32_t) hn << 5) | T_A);
     } else {
         return false;
     }
-    bool load = opc & 1;
-    int gn = rn == 31 ? G_SP : rn;
-    int hn = ldst_addr(e, gn, imm, wbmode == 1);
     tlb_lookup(e, 1u << scale, !load, spos);
     if (!load) vload(e, V_N, rt);
     put(e, (x & 0xC0C00000u) | 0x3D000000u | (T_A << 5) | V_N);              // ldr/str vN, [x9]
@@ -1249,9 +1380,171 @@ static bool emit_ldst_fp(struct em *e, uint32_t x, unsigned spos) {
     return true;
 }
 
+// AdvSIMD load/store multiple structures (ld1-ld4, st1-st4; no offset or
+// post-indexed): the host's own instruction, on v16.. as the guest's
+// registers Vt.. (modulo 32) are, at the address the TLB gives
+static bool emit_ldst_multi(struct em *e, uint32_t x, unsigned spos) {
+    static const int8_t regs[16] = {4, -1, 4, -1, 3, -1, 3, 1, 2, -1, 2, -1, -1, -1, -1, -1};
+    unsigned opcode = (x >> 12) & 15, size = (x >> 10) & 3, Q = (x >> 30) & 1, L = (x >> 22) & 1;
+    int n = regs[opcode];
+    if (n < 0) return false;
+    if ((opcode == 0 || opcode == 4 || opcode == 8) && size == 3 && !Q) return false;   // ld2-4/st2-4 .1d: reserved
+    unsigned bytes = (unsigned) n * (Q ? 16 : 8);
+    int rt = x & 31, rn = (x >> 5) & 31, rm = (x >> 16) & 31;
+    bool post = (x >> 23) & 1;
+    int gn = rn == 31 ? G_SP : rn;
+    int hn = hreg(e, gn);
+    int hm = post && rm != 31 ? hreg(e, rm) : -1;
+    if (!L)
+        for (int i = 0; i < n; i++) vload(e, V_N + i, (rt + i) & 31);
+    put(e, 0xAA0003E0u | ((uint32_t) hn << 16) | T_A);                       // mov x9, xn
+    tlb_lookup(e, bytes, !L, spos);
+    put(e, 0x0C000000u | (x & 0x40400000u) | (x & 0xFC00u) | (T_A << 5) | V_N);   // ldN/stN {v16..}, [x9]
+    if (L)
+        for (int i = 0; i < n; i++) vstore(e, V_N + i, (rt + i) & 31);
+    if (post) {
+        if (rm == 31) put(e, 0x91000000u | (bytes << 10) | ((uint32_t) hn << 5) | (uint32_t) hn);   // add xn, xn, #bytes
+        else put(e, 0x8B000000u | ((uint32_t) hm << 16) | ((uint32_t) hn << 5) | (uint32_t) hn);     // add xn, xn, xm
+        writeback(e, gn);
+    }
+    return true;
+}
+
+// AdvSIMD load single structure: replicate (ld1r-ld4r), and ld1's lane
+// (its register's other lanes kept: loaded first); no offset or
+// post-indexed, as emit_ldst_multi
+static bool emit_ldst_rep(struct em *e, uint32_t x, unsigned spos) {
+    unsigned L = (x >> 22) & 1, R = (x >> 21) & 1, opc = (x >> 13) & 7, S = (x >> 12) & 1, size = (x >> 10) & 3;
+    if (!L) return false;
+    int n;
+    unsigned bytes;
+    bool lane = (opc >> 1) != 3;
+    if (!lane) {
+        if (S) return false;
+        n = (int) (((opc & 1) << 1 | R) + 1);
+        bytes = (unsigned) n << size;
+    } else {
+        // ld1 {vt.b/h/s/d}[i]: opcode 000 b, 010 h (size<0> 0), 100 s (size 00) or d (size 01, S 0)
+        if (R || (opc & 1)) return false;
+        if (opc == 0) bytes = 1;
+        else if (opc == 2 && !(size & 1)) bytes = 2;
+        else if (opc == 4 && size == 0) bytes = 4;
+        else if (opc == 4 && size == 1 && !S) bytes = 8;
+        else return false;
+        n = 1;
+        vload(e, V_N, x & 31);
+    }
+    int rt = x & 31, rn = (x >> 5) & 31, rm = (x >> 16) & 31;
+    bool post = (x >> 23) & 1;
+    int gn = rn == 31 ? G_SP : rn;
+    int hn = hreg(e, gn);
+    int hm = post && rm != 31 ? hreg(e, rm) : -1;
+    put(e, 0xAA0003E0u | ((uint32_t) hn << 16) | T_A);                       // mov x9, xn
+    tlb_lookup(e, bytes, false, spos);
+    put(e, 0x0D000000u | (x & 0x4060FC00u) | (T_A << 5) | V_N);              // ldNr {v16..}, [x9] / ld1 {v16.t}[i], [x9]
+    for (int i = 0; i < n; i++) vstore(e, V_N + i, (rt + i) & 31);
+    if (post) {
+        if (rm == 31) put(e, 0x91000000u | (bytes << 10) | ((uint32_t) hn << 5) | (uint32_t) hn);
+        else put(e, 0x8B000000u | ((uint32_t) hm << 16) | ((uint32_t) hn << 5) | (uint32_t) hn);
+        writeback(e, gn);
+    }
+    return true;
+}
+
+// Exclusives, load-acquire and store-release, compare and swap: as the
+// gadgets do them (gen.c), with their exclusive monitor, cpu->excl_addr and
+// cpu->excl_val. The registers are read before the TLB lookup, so that the
+// access follows its add (access_exit()).
+static bool emit_excl(struct em *e, uint32_t x, unsigned spos) {
+    unsigned size = x >> 30;
+    int rt = x & 31, rn = (x >> 5) & 31, rs = (x >> 16) & 31;
+    int gn = rn == 31 ? G_SP : rn;
+    unsigned excl_addr = (unsigned) offsetof(struct cpu_state, excl_addr);
+    unsigned excl_val = (unsigned) offsetof(struct cpu_state, excl_val);
+    if ((x & 0x3FBFFC00u) == 0x089FFC00u) {                                   // ldar / stlr (b, h, w, x)
+        bool load = (x >> 22) & 1;
+        int ht = rt == 31 ? 31 : hreg(e, rt);
+        put(e, 0xAA0003E0u | ((uint32_t) hreg(e, gn) << 16) | T_A);         // mov x9, xn
+        tlb_lookup(e, 1u << size, !load, spos);
+        put(e, (x & ~0x3FFu) | (T_A << 5) | (uint32_t) ht);                // ldar/stlr wt, [x9]
+        if (load && rt != 31) writeback(e, rt);
+        return true;
+    }
+    if ((x & 0x3FFF7C00u) == 0x085F7C00u) {                                   // ldxr / ldaxr (b, h, w, x)
+        bool acquire = (x >> 15) & 1;
+        int ht = rt == 31 ? 31 : hreg(e, rt);
+        put(e, 0xAA0003E0u | ((uint32_t) hreg(e, gn) << 16) | T_A);         // mov x9, xn
+        put(e, 0xF9000000u | ((excl_addr / 8) << 10) | (1u << 5) | T_A);     // str x9, [x1, #excl_addr]
+        tlb_lookup(e, 1u << size, false, spos);
+        // ldar (ldaxr's acquire) or ldr, of its size, into x8
+        put(e, (acquire ? 0x08DFFC00u : 0x39400000u) | size << 30 | (T_A << 5) | T_P);
+        put(e, 0xF9000000u | ((excl_val / 8) << 10) | (1u << 5) | T_P);      // str x8, [x1, #excl_val]
+        if (rt != 31) {
+            put(e, 0xAA0003E0u | (T_P << 16) | (uint32_t) ht);                // mov xt, x8
+            writeback(e, rt);
+        }
+        return true;
+    }
+    if ((x & 0x3FE07C00u) == 0x08007C00u) {                                   // stxr / stlxr (b, h, w, x)
+        if (rs == rt || rs == rn) return false;                               // constrained unpredictable: the gadget's
+        int ht = rt == 31 ? 31 : hreg(e, rt);
+        int hs = rs == 31 ? 31 : hreg(e, rs);
+        put(e, 0xAA0003E0u | ((uint32_t) hreg(e, gn) << 16) | T_A);         // mov x9, xn
+        // the monitor's address this one, else failed
+        put(e, 0xF9400000u | ((excl_addr / 8) << 10) | (1u << 5) | T_P);     // ldr x8, [x1, #excl_addr]
+        put(e, 0xEB00001Fu | (T_A << 16) | (T_P << 5));                      // cmp x8, x9
+        e->hflags = false;
+        unsigned bne = e->n;
+        put(e, 0);                                                            // b.ne failed
+        tlb_lookup(e, 1u << size, true, spos);
+        // stored if memory still holds what ldxr loaded, at its size (the
+        // gadget's c_stxr_cas, a compare and swap): casal's old value in x8
+        put(e, 0xF9400000u | ((excl_val / 8) << 10) | (1u << 5) | T_P);      // ldr x8, [x1, #excl_val]
+        put(e, 0xF9400000u | ((excl_val / 8) << 10) | (1u << 5) | T_Q);      // ldr x12, [x1, #excl_val]
+        put(e, 0x08E0FC00u | size << 30 | (T_P << 16) | (T_A << 5) | (uint32_t) ht);   // casal w8, wt, [x9]
+        put(e, (size == 3 ? 0xEB20001Fu : 0x6B20001Fu) | (T_Q << 16) | (size << 13) | (T_P << 5));   // cmp w8, w12, uxt?
+        if (rs != 31) put(e, 0x1A9F07E0u | (uint32_t) hs);                  // cset ws, ne: 0 stored, 1 not
+        unsigned b = e->n;
+        put(e, 0);                                                            // b done
+        if (e->fail)
+            return true;   // the buffer full: nothing to patch, the translation goes
+        e->buf[bne] = 0x54000001u | ((uint32_t) (e->n - bne) & 0x7ffff) << 5;
+        if (rs != 31) put(e, 0x52800020u | (uint32_t) hs);                  // failed: mov ws, #1
+        e->buf[b] = 0x14000000u | ((e->n - b) & 0x3ffffff);
+        put(e, 0x92800000u | T_P);                                           // done: movn x8, #0
+        put(e, 0xF9000000u | ((excl_addr / 8) << 10) | (1u << 5) | T_P);     // str x8, [x1, #excl_addr]: cleared
+        if (rs != 31) writeback(e, rs);
+        return true;
+    }
+    if ((x & 0x3FA07C00u) == 0x08A07C00u) {                                   // cas, casa, casl, casal (b, h, w, x)
+        int ht = rt == 31 ? 31 : hreg(e, rt);
+        int hs = rs == 31 ? 31 : hreg(e, rs);
+        put(e, 0xAA0003E0u | ((uint32_t) hreg(e, gn) << 16) | T_A);         // mov x9, xn
+        tlb_lookup(e, 1u << size, true, spos);
+        put(e, (x & ~0x001F03FFu) | ((uint32_t) hs << 16) | (T_A << 5) | (uint32_t) ht);   // cas ws, wt, [x9]
+        if (rs != 31) writeback(e, rs);
+        return true;
+    }
+    return false;
+}
+
 static bool emit_ldst(struct em *e, uint32_t x, unsigned spos) {
     if (x & (1u << 26))
         return simd_on && emit_ldst_fp(e, x, spos);
+    if ((x & 0x3F200C00u) == 0x38200000u) {                     // LSE atomics (b, h, w, x; acquire, release)
+        // ldadd, ldclr, ldeor, ldset, swp: those claude.exe's hot blocks had
+        unsigned op = (x >> 12) & 15;
+        if (!(op <= 3 || op == 8)) return false;
+        unsigned size = x >> 30;
+        int rt = x & 31, rn = (x >> 5) & 31, rs = (x >> 16) & 31;
+        int ht = rt == 31 ? 31 : hreg(e, rt);
+        int hs = rs == 31 ? 31 : hreg(e, rs);
+        put(e, 0xAA0003E0u | ((uint32_t) hreg(e, rn == 31 ? G_SP : rn) << 16) | T_A);   // mov x9, xn
+        tlb_lookup(e, 1u << size, true, spos);
+        put(e, (x & ~0x001F03FFu) | ((uint32_t) hs << 16) | (T_A << 5) | (uint32_t) ht);   // ldadd ws, wt, [x9]
+        if (rt != 31) writeback(e, rt);
+        return true;
+    }
     // --- load/store pair ---
     if ((x & 0x3A000000u) == 0x28000000u) {
         unsigned opc = x >> 30, L = (x >> 22) & 1, idx = (x >> 23) & 3;
@@ -1363,6 +1656,24 @@ static bool emit_insn(struct em *e, uint32_t x, uint64_t pc, unsigned spos, bool
         return true;
     }
     if (simd_on && emit_fp(e, x)) return !e->fail;                         // scalar FP
+    if (simd_on && emit_simd_more(e, x)) return !e->fail;
+    if ((x & 0xFFFFFFE0u) == 0xD53B00E0u) {                // mrs dczid_el0: the gadgets' 4 (64-byte blocks)
+        int rt = x & 31;
+        if (rt == 31) return true;
+        int h = hreg(e, rt);
+        put(e, 0xD2800080u | (uint32_t) h);                // movz xt, #4
+        writeback(e, rt);
+        return true;
+    }
+    if ((x & 0xFFFFFFE0u) == 0xD50B7420u && (x & 31) != 31 && simd_on) {   // dc zva: the gadget's 64 zeroes
+        *has_mem = true;
+        for (int v = 0; v < 4; v++)
+            put(e, 0x6F00E400u | (uint32_t) (V_N + v));    // movi v16+v.2d, #0
+        put(e, 0x927AE400u | ((uint32_t) hreg(e, x & 31) << 5) | T_A);   // and x9, xt, #~63
+        tlb_lookup(e, 64, true, spos);
+        put(e, 0x4C002000u | (T_A << 5) | V_N);            // st1 {v16.16b-v19.16b}, [x9]: one access
+        return true;
+    }
     if ((x & 0x0E000000u) == 0x0E000000u && (x & 0x1F000000u) != 0x1F000000u && simd_on) {   // SIMD data processing
         if (emit_simd(e, x)) return !e->fail;
     }
@@ -1449,8 +1760,9 @@ static bool emit_insn(struct em *e, uint32_t x, uint64_t pc, unsigned spos, bool
     } else if ((x & 0x1F000000u) == 0x1B000000u) {         // data-processing 3 source
         out = remap(e, x, F_ZR, F_ZR, F_ZR, F_ZR, false, &wrote);
     } else if ((x & 0x0A000000u) == 0x08000000u) {         // loads and stores
-        if ((x & 0x3F000000u) == 0x08000000u) return false;   // exclusives / atomics
         *has_mem = true;
+        if ((x & 0x3F000000u) == 0x08000000u)                 // exclusives, acquire/release, compare and swap
+            return emit_excl(e, x, spos);
         return emit_ldst(e, x, spos);
     } else {
         return false;
@@ -2701,7 +3013,7 @@ void ish_aot_register(const struct aot_module *m) {
 
 // Bump whenever the code emitted for some guest instruction, stub or exit
 // changes: images made before would still pass every other check.
-#define JIT_CODE_VERSION 11
+#define JIT_CODE_VERSION 12
 
 // Everything the emitted code bakes in besides the gadgets it names: the
 // conventions, the struct layouts it loads from and the TLB / block cache
@@ -2715,6 +3027,7 @@ uint32_t jit_abi(void) {
         offsetof(struct fiber_block, jit_ctx),
         CPU_pc, CPU_cycle, CPU_poked_ptr, CPU_tls_ptr, offsetof(struct cpu_state, sp),
         offsetof(struct cpu_state, regs), offsetof(struct cpu_state, nzcv), offsetof(struct cpu_state, fp),
+        offsetof(struct cpu_state, excl_addr), offsetof(struct cpu_state, excl_val),
         LOCAL_last_block, LOCAL_ret_cache,
         sizeof(struct tlb_entry), offsetof(struct tlb_entry, page), offsetof(struct tlb_entry, page_if_writable),
         offsetof(struct tlb_entry, gen), offsetof(struct tlb_entry, data_minus_addr), TLB_BITS, PAGE_BITS,

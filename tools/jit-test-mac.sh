@@ -19,6 +19,8 @@
 #     over and over as processes start and end, every result right;
 #   - regress_jit_fp: scalar floating point, each instruction's results and
 #     flags the gadgets' (ISH_JIT_PIC=1, as on iOS);
+#   - regress_jit_insns: atomics, SIMD loads and stores, dc zva, SIMD
+#     arithmetic, multiply-adds of unpinned registers, likewise;
 #   - regression tests the JIT can break: instructions compared against
 #     hardware, faults, signals, memory.
 # Needs meson, ninja and timeout. Exits 1 if any test failed.
@@ -46,6 +48,7 @@ if [ "${1:-}" = --prepare ]; then
     build jit_fault -O0 tests/regress/regress_jit_fault.c
     build jit_flush -O0 tests/regress/regress_jit_flush.c
     build jit_fp -O0 tests/regress/regress_jit_fp.c
+    build jit_insns -O0 tests/regress/regress_jit_insns.c
     build mmap_spin -O1 tests/regress/regress_mmap_spin.c
     build stack_extent -O0 tests/regress/regress_stack_extent.c
     build force_signal -O0 tests/regress/regress_force_signal.c
@@ -119,6 +122,10 @@ echo "== regress_jit_fp"
 out=$(ISH_JIT_PIC=1 timeout 300 "$ISH" -r "$ROOT" /tmp/regress_jit_fp 2>&1)
 echo "$out" | grep -v '^PASS' | tail -20
 echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || fail "regress_jit_fp"
+echo "== regress_jit_insns"
+out=$(ISH_JIT_PIC=1 timeout 300 "$ISH" -r "$ROOT" /tmp/regress_jit_insns 2>&1)
+echo "$out" | grep -v '^PASS' | tail -20
+echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || fail "regress_jit_insns"
 
 for t in $TESTS; do
     echo "== regress_$t"
