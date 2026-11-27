@@ -120,9 +120,11 @@ jobs:
           app/idevice/build.sh
       - name: Build
         run: |
-          xcodebuild -project iSH.xcodeproj -scheme iSH-ARM64 -arch arm64 -sdk iphoneos \
+          # ARCHS, not -arch: xcodebuild refuses -arch with a destination
+          # ("destination implies architecture")
+          xcodebuild -project iSH.xcodeproj -scheme iSH-ARM64 -sdk iphoneos \
               -destination 'generic/platform=iOS' \
-              -archivePath "$RUNNER_TEMP/iSH-ARM64.xcarchive" CODE_SIGNING_ALLOWED=NO archive
+              -archivePath "$RUNNER_TEMP/iSH-ARM64.xcarchive" ARCHS=arm64 CODE_SIGNING_ALLOWED=NO archive
       - name: Package
         id: package
         run: python3 app/package-ipa.py "$RUNNER_TEMP/iSH-ARM64.xcarchive" "$RUNNER_TEMP/ipa"
