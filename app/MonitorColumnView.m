@@ -5,6 +5,8 @@
 
 #import "MonitorColumnView.h"
 
+static const CGFloat kSparkLine = 1.5;
+
 @implementation MonitorSparkView {
     CAShapeLayer *_line;
     CAShapeLayer *_area;
@@ -16,8 +18,10 @@
         _leastTop = 1;
         _area = [CAShapeLayer layer];
         _line = [CAShapeLayer layer];
+        // Round at its ends and bends, as the gauges' rings under it are
         _line.fillColor = NULL;
-        _line.lineWidth = 1;
+        _line.lineWidth = kSparkLine;
+        _line.lineCap = kCALineCapRound;
         _line.lineJoin = kCALineJoinRound;
         [self.layer addSublayer:_area];
         [self.layer addSublayer:_line];
@@ -61,7 +65,7 @@
         for (NSUInteger i = 0; i < count; i++) {
             // half the line's width clear of the top and the bottom
             CGPoint point = CGPointMake(width - (count - 1 - i) * step,
-                                        0.5 + (height - 1) * (1 - self.values[i].doubleValue / top));
+                                        kSparkLine / 2 + (height - kSparkLine) * (1 - self.values[i].doubleValue / top));
             if (i == 0)
                 [line moveToPoint:point];
             else
