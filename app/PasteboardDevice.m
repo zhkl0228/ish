@@ -47,7 +47,10 @@ static const char *get_data(clip_fd *fd, size_t *len) {
     }
 
     NSString __autoreleasing *contents = UIPasteboard.generalPasteboard.string;
-    *len = contents.length;
+    // The UTF-8 bytes' length, not the string's (UTF-16 units), which fell
+    // short of them for all but ASCII: four CJK characters and "abc", 15
+    // bytes, were read as 7
+    *len = [contents lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
     return contents.UTF8String;
 }
 
