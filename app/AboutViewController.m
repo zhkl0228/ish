@@ -24,6 +24,8 @@
 @property (weak, nonatomic) IBOutlet UISwitch *disableDimmingSwitch;
 @property (weak, nonatomic) IBOutlet UITextField *launchCommandField;
 @property (weak, nonatomic) IBOutlet UITextField *bootCommandField;
+@property (weak, nonatomic) IBOutlet UISegmentedControl *claudeProxyModeControl;
+@property (weak, nonatomic) IBOutlet UITableViewCell *claudeProxyCell;
 @property (weak, nonatomic) IBOutlet UITextField *claudeProxyField;
 @property (weak, nonatomic) IBOutlet UITableViewCell *claudeMemoryCell;
 @property (weak, nonatomic) IBOutlet UITableViewCell *removeClaudeMemoryCell;
@@ -50,6 +52,18 @@
 
 @end
 
+// The segments of Claude's Proxy, as About.storyboard orders them
+static const NSInteger kClaudeProxyNone = 0;
+static const NSInteger kClaudeProxyHTTPS = 1;
+
+// Claude's Proxy as chosen (UserPreferences' claudeNoProxy), or no segment
+static NSInteger ClaudeProxyMode(void) {
+    NSNumber *noProxy = UserPreferences.shared.claudeNoProxy;
+    if (noProxy == nil)
+        return UserPreferences.shared.claudeProxy != nil ? kClaudeProxyHTTPS : UISegmentedControlNoSegment;
+    return noProxy.boolValue ? kClaudeProxyNone : kClaudeProxyHTTPS;
+}
+
 @implementation AboutViewController
 
 - (void)viewDidLoad {
@@ -72,7 +86,7 @@
                           [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"],
                           [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleVersion"]];
 
-    [UserPreferences.shared observe:@[@"capsLockMapping", @"fontSize", @"launchCommand", @"bootCommand", @"claudeProxy", @"claudeMemory"]
+    [UserPreferences.shared observe:@[@"capsLockMapping", @"fontSize", @"launchCommand", @"bootCommand", @"claudeProxy", @"claudeNoProxy", @"claudeMemory"]
                             options:0 owner:self usingBlock:^(typeof(self) self) {
         dispatch_async(dispatch_get_main_queue(), ^{
             [self _updateUI];
@@ -110,6 +124,8 @@
     self.disableDimmingSwitch.on = UserPreferences.shared.shouldDisableDimming;
     self.launchCommandField.text = [UserPreferences.shared.launchCommand componentsJoinedByString:@" "];
     self.bootCommandField.text = [UserPreferences.shared.bootCommand componentsJoinedByString:@" "];
+    self.claudeProxyModeControl.selectedSegmentIndex = ClaudeProxyMode();
+    self.claudeProxyCell.hidden = ClaudeProxyMode() != kClaudeProxyHTTPS;
     self.claudeProxyField.text = UserPreferences.shared.claudeProxy;
     self.claudeMemoryCell.detailTextLabel.text = UserPreferences.shared.claudeMemory[@"name"] ?: @"Not imported";
     self.removeClaudeMemoryCell.hidden = UserPreferences.shared.claudeMemory == nil;
@@ -162,6 +178,8 @@
     if (cell == self.upgradeApkCell && !FsIsManaged())
         return 0;
     if (cell == self.removeClaudeMemoryCell && UserPreferences.shared.claudeMemory == nil)
+        return 0;
+    if (cell == self.claudeProxyCell && ClaudeProxyMode() != kClaudeProxyHTTPS)
         return 0;
     return [super tableView:tableView heightForRowAtIndexPath:indexPath];
 }
@@ -244,6 +262,18 @@ static const NSInteger kFilesystemsSection = 2;
 
 - (IBAction)claudeProxyChanged:(id)sender {
     UserPreferences.shared.claudeProxy = self.claudeProxyField.text;
+}
+
+// None, or HTTPS through the URL of the row it shows, which is kept when None
+// is chosen: an URL being typed is set first. HTTPS without an URL yet is
+// given the keyboard to type one.
+- (IBAction)claudeProxyModeChanged:(id)sender {
+    [self.view endEditing:YES];
+    BOOL none = self.claudeProxyModeControl.selectedSegmentIndex == kClaudeProxyNone;
+    UserPreferences.shared.claudeNoProxy = @(none);
+    [self _updateUI];
+    if (!none && UserPreferences.shared.claudeProxy == nil)
+        [self.claudeProxyField becomeFirstResponder];
 }
 
 // A CLAUDE.md is text, of a few KB: the import is stored base64 in the

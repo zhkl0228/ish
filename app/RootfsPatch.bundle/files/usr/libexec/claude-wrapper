@@ -1,7 +1,8 @@
 #!/bin/sh
 # Installed by the iSH app, which rewrites this file when it updates the root.
-# Claude Code, which ish-install puts in /opt/claude-code, through the HTTPS
-# proxy of iSH's Settings and only with that proxy's exit in California.
+# Claude Code, which ish-install puts in /opt/claude-code, with the Proxy chosen
+# in iSH's Settings: none, or an HTTPS one, and then only with its exit in
+# California.
 # --version and --help reach no server: they run as they are.
 
 claude=/opt/claude-code/bin/claude
@@ -33,42 +34,69 @@ if [ -e "$config" ]; then
     esac
 fi
 
-# The setting, a JSON string, there once it is set
-setting=/proc/ish/defaults/claude_proxy
-if [ ! -e "$setting" ]; then
-    echo 'claude: configure Claude HTTPS Proxy in iSH Settings first — aborting' >&2
+# Claude's Proxy in iSH's Settings: None is claude_no_proxy true; HTTPS is
+# false, or no claude_no_proxy with a claude_proxy (set before there was a
+# choice), its URL a JSON string
+no_proxy_setting=/proc/ish/defaults/claude_no_proxy
+proxy_setting=/proc/ish/defaults/claude_proxy
+choose='claude: choose Proxy under Claude in iSH Settings first: None, or HTTPS and its URL — aborting'
+if [ -e "$no_proxy_setting" ]; then
+    none=$(jq . "$no_proxy_setting") || exit 1
+elif [ -e "$proxy_setting" ]; then
+    none=false
+else
+    echo "$choose" >&2
     exit 1
 fi
-proxy=$(jq -r . "$setting") || exit 1
-case $proxy in
-    https://*) ;;
+case $none in
+    true)
+        # None: Claude Code goes out on the device's own network (iOS's VPN, if
+        # one is on), whatever proxy the shell's variables name; its exit is
+        # not checked
+        unset HTTPS_PROXY HTTP_PROXY https_proxy http_proxy
+        ;;
+    false)
+        if [ ! -e "$proxy_setting" ]; then
+            echo "$choose" >&2
+            exit 1
+        fi
+        proxy=$(jq -r . "$proxy_setting") || exit 1
+        case $proxy in
+            https://*) ;;
+            *)
+                echo "claude: Claude's HTTPS proxy must be an https:// URL, not $proxy — aborting" >&2
+                exit 1
+                ;;
+        esac
+
+        # The exit as ipinfo.io sees it: {"ip", "city", "region", "country", "org", ...}
+        if ! info=$(curl -sS --fail --connect-timeout 5 --max-time 15 -x "$proxy" https://ipinfo.io); then
+            echo "claude: ipinfo.io through $proxy failed — aborting" >&2
+            exit 1
+        fi
+        if ! exit_line=$(printf '%s' "$info" | jq -r '"\(.ip)  ·  \(.city), \(.region), \(.country)  ·  \(.org)"'); then
+            echo "claude: ipinfo.io answered: $info — aborting" >&2
+            exit 1
+        fi
+        echo "Claude exit: $exit_line" >&2
+        region=$(printf '%s' "$info" | jq -r .region)
+        if [ "$region" != California ]; then
+            echo "claude: the exit is in $region, not California — aborting" >&2
+            exit 1
+        fi
+
+        export HTTPS_PROXY="$proxy" HTTP_PROXY="$proxy" https_proxy="$proxy" http_proxy="$proxy"
+        # Not through the proxy: this device, and the mirrors ish-install --cn sets
+        # (Claude Code updating itself from npmmirror by way of California is slow)
+        export NO_PROXY="localhost,127.0.0.1,mirrors.aliyun.com,npmmirror.com"
+        export no_proxy="$NO_PROXY"
+        ;;
     *)
-        echo "claude: Claude HTTPS Proxy must be an https:// URL, not $proxy — aborting" >&2
+        echo "claude: $no_proxy_setting is $none, not true or false — aborting" >&2
         exit 1
         ;;
 esac
 
-# The exit as ipinfo.io sees it: {"ip", "city", "region", "country", "org", ...}
-if ! info=$(curl -sS --fail --connect-timeout 5 --max-time 15 -x "$proxy" https://ipinfo.io); then
-    echo "claude: ipinfo.io through $proxy failed — aborting" >&2
-    exit 1
-fi
-if ! exit_line=$(printf '%s' "$info" | jq -r '"\(.ip)  ·  \(.city), \(.region), \(.country)  ·  \(.org)"'); then
-    echo "claude: ipinfo.io answered: $info — aborting" >&2
-    exit 1
-fi
-echo "Claude exit: $exit_line" >&2
-region=$(printf '%s' "$info" | jq -r .region)
-if [ "$region" != California ]; then
-    echo "claude: the exit is in $region, not California — aborting" >&2
-    exit 1
-fi
-
-export HTTPS_PROXY="$proxy" HTTP_PROXY="$proxy" https_proxy="$proxy" http_proxy="$proxy"
-# Not through the proxy: this device, and the mirrors ish-install --cn sets
-# (Claude Code updating itself from npmmirror by way of California is slow)
-export NO_PROXY="localhost,127.0.0.1,mirrors.aliyun.com,npmmirror.com"
-export no_proxy="$NO_PROXY"
 # Claude Code updates itself with `npm install -g`, into npm's global prefix
 # (/usr/local): its updates go where ish-install put it instead
 export NPM_CONFIG_PREFIX=/opt/claude-code

@@ -33,6 +33,7 @@ static NSString *const kPreferenceColorSchemeKey = @"Color Scheme";
 // CLI argument.
 NSString *const kHostnameOverrideKey = @"hostnameOverride";
 static NSString *const kPreferenceClaudeProxyKey = @"Claude HTTPS Proxy";
+static NSString *const kPreferenceClaudeNoProxyKey = @"Claude No Proxy";
 static NSString *const kPreferenceClaudeMemoryKey = @"Claude Global Memory";
 
 NSDictionary<NSString *, NSString *> *friendlyPreferenceMapping;
@@ -201,6 +202,7 @@ bool remove_user_default_impl(const char *name) {
             @"theme": kPreferenceThemeKey,
             @"hostname_override": kHostnameOverrideKey,
             @"claude_proxy": kPreferenceClaudeProxyKey,
+            @"claude_no_proxy": kPreferenceClaudeNoProxyKey,
             @"claude_memory": kPreferenceClaudeMemoryKey,
         };
         NSMutableDictionary <NSString *, NSString *> *reverseMapping = [NSMutableDictionary new];
@@ -228,6 +230,7 @@ bool remove_user_default_impl(const char *name) {
             kPreferenceColumnKeysFollowProgramKey: property(columnKeysFollowProgram),
             kPreferenceColorSchemeKey: property(colorScheme),
             kPreferenceClaudeProxyKey: property(claudeProxy),
+            kPreferenceClaudeNoProxyKey: property(claudeNoProxy),
             kPreferenceClaudeMemoryKey: property(claudeMemory),
             // This one is a little bit special, so it needs extra handling.
             // The backing property for this is intentionally underscored.
@@ -585,6 +588,20 @@ bool remove_user_default_impl(const char *name) {
 
 - (BOOL)validateClaudeProxy:(id *)value error:(NSError **)error {
     return [*value isKindOfClass:NSString.class];
+}
+
+// MARK: claudeNoProxy
+- (NSNumber *)claudeNoProxy {
+    return [_defaults objectForKey:kPreferenceClaudeNoProxyKey];
+}
+
+- (void)setClaudeNoProxy:(NSNumber *)claudeNoProxy {
+    [_defaults setValue:claudeNoProxy forKey:kPreferenceClaudeNoProxyKey];
+}
+
+// A JSON true or false, as claude-wrapper reads it
+- (BOOL)validateClaudeNoProxy:(id *)value error:(NSError **)error {
+    return *value == (id)kCFBooleanTrue || *value == (id)kCFBooleanFalse;
 }
 
 // MARK: claudeMemory

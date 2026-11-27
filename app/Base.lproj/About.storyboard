@@ -318,23 +318,55 @@
                                     </tableViewCell>
                                 </cells>
                             </tableViewSection>
-                            <tableViewSection headerTitle="Claude" footerTitle="Claude requires this HTTPS CONNECT proxy and a California exit. An imported Global Memory becomes ~/.claude/CLAUDE.md when a shell starts; a CLAUDE.md changed there (by Claude&apos;s # or /memory) is kept instead, until it is deleted." id="cLd-Se-ct1">
+                            <tableViewSection headerTitle="Claude" footerTitle="Claude starts once its Proxy is chosen: None, or an HTTPS CONNECT proxy whose exit is in California. An imported Global Memory becomes ~/.claude/CLAUDE.md when a shell starts; a CLAUDE.md changed there (by Claude&apos;s # or /memory) is kept instead, until it is deleted." id="cLd-Se-ct1">
                                 <cells>
-                                    <tableViewCell clipsSubviews="YES" contentMode="scaleToFill" preservesSuperviewLayoutMargins="YES" selectionStyle="none" indentationWidth="10" id="cLd-Pr-xy1" userLabel="Claude HTTPS Proxy">
+                                    <tableViewCell clipsSubviews="YES" contentMode="scaleToFill" preservesSuperviewLayoutMargins="YES" selectionStyle="none" indentationWidth="10" id="cLd-Pm-de1" userLabel="Claude Proxy Mode">
                                         <rect key="frame" x="0.0" y="620.5" width="320" height="43.5"/>
+                                        <autoresizingMask key="autoresizingMask"/>
+                                        <tableViewCellContentView key="contentView" opaque="NO" clipsSubviews="YES" multipleTouchEnabled="YES" contentMode="center" preservesSuperviewLayoutMargins="YES" insetsLayoutMarginsFromSafeArea="NO" tableViewCell="cLd-Pm-de1" id="cLd-Pm-de2">
+                                            <rect key="frame" x="0.0" y="0.0" width="320" height="43.5"/>
+                                            <autoresizingMask key="autoresizingMask"/>
+                                            <subviews>
+                                                <label opaque="NO" multipleTouchEnabled="YES" contentMode="left" horizontalHuggingPriority="1000" insetsLayoutMarginsFromSafeArea="NO" text="Proxy" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="cLd-Pm-de3">
+                                                    <rect key="frame" x="16" y="11.5" width="44" height="21"/>
+                                                    <fontDescription key="fontDescription" type="system" pointSize="17"/>
+                                                    <nil key="textColor"/>
+                                                    <nil key="highlightedColor"/>
+                                                </label>
+                                                <segmentedControl opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="left" contentVerticalAlignment="top" segmentControlStyle="plain" translatesAutoresizingMaskIntoConstraints="NO" id="cLd-Pm-de4">
+                                                    <rect key="frame" x="172" y="6" width="132" height="32"/>
+                                                    <segments>
+                                                        <segment title="None"/>
+                                                        <segment title="HTTPS"/>
+                                                    </segments>
+                                                    <connections>
+                                                        <action selector="claudeProxyModeChanged:" destination="yJz-O7-jlW" eventType="valueChanged" id="cLd-Pm-de5"/>
+                                                    </connections>
+                                                </segmentedControl>
+                                            </subviews>
+                                            <constraints>
+                                                <constraint firstAttribute="trailingMargin" secondItem="cLd-Pm-de4" secondAttribute="trailing" id="cLd-Pm-de6"/>
+                                                <constraint firstItem="cLd-Pm-de4" firstAttribute="centerY" secondItem="cLd-Pm-de2" secondAttribute="centerY" id="cLd-Pm-de7"/>
+                                                <constraint firstItem="cLd-Pm-de3" firstAttribute="leading" secondItem="cLd-Pm-de2" secondAttribute="leadingMargin" id="cLd-Pm-de8"/>
+                                                <constraint firstItem="cLd-Pm-de3" firstAttribute="centerY" secondItem="cLd-Pm-de2" secondAttribute="centerY" id="cLd-Pm-de9"/>
+                                            </constraints>
+                                        </tableViewCellContentView>
+                                    </tableViewCell>
+                                    <tableViewCell clipsSubviews="YES" contentMode="scaleToFill" preservesSuperviewLayoutMargins="YES" selectionStyle="none" indentationWidth="10" id="cLd-Pr-xy1" userLabel="Claude HTTPS Proxy">
+                                        <rect key="frame" x="0.0" y="664" width="320" height="43.5"/>
                                         <autoresizingMask key="autoresizingMask"/>
                                         <tableViewCellContentView key="contentView" opaque="NO" clipsSubviews="YES" multipleTouchEnabled="YES" contentMode="center" preservesSuperviewLayoutMargins="YES" insetsLayoutMarginsFromSafeArea="NO" tableViewCell="cLd-Pr-xy1" id="cLd-Pc-xy2">
                                             <rect key="frame" x="0.0" y="0.0" width="320" height="43.5"/>
                                             <autoresizingMask key="autoresizingMask"/>
                                             <subviews>
-                                                <label opaque="NO" multipleTouchEnabled="YES" contentMode="left" horizontalHuggingPriority="1000" insetsLayoutMarginsFromSafeArea="NO" text="HTTPS Proxy" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="cLd-Pl-xy3">
-                                                    <rect key="frame" x="16" y="11.5" width="104" height="21"/>
+                                                <label opaque="NO" multipleTouchEnabled="YES" contentMode="left" horizontalHuggingPriority="1000" insetsLayoutMarginsFromSafeArea="NO" text="URL" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="cLd-Pl-xy3">
+                                                    <rect key="frame" x="16" y="11.5" width="34" height="21"/>
                                                     <fontDescription key="fontDescription" type="system" pointSize="17"/>
                                                     <nil key="textColor"/>
                                                     <nil key="highlightedColor"/>
                                                 </label>
                                                 <textField opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="left" contentVerticalAlignment="center" placeholder="https://user:password@host:port" adjustsFontSizeToFit="NO" minimumFontSize="10" translatesAutoresizingMaskIntoConstraints="NO" id="cLd-Pf-xy4">
-                                                    <rect key="frame" x="132" y="13" width="172" height="18"/>
+                                                    <rect key="frame" x="62" y="13" width="242" height="18"/>
                                                     <fontDescription key="fontDescription" name="Menlo-Regular" family="Menlo" pointSize="12"/>
                                                     <textInputTraits key="textInputTraits" autocorrectionType="no" spellCheckingType="no" keyboardType="URL" returnKeyType="done" smartDashesType="no" smartInsertDeleteType="no" smartQuotesType="no"/>
                                                     <connections>
@@ -353,7 +385,7 @@
                                         </tableViewCellContentView>
                                     </tableViewCell>
                                     <tableViewCell clipsSubviews="YES" contentMode="scaleToFill" preservesSuperviewLayoutMargins="YES" selectionStyle="default" accessoryType="disclosureIndicator" indentationWidth="10" textLabel="cLd-Mt-x12" detailTextLabel="cLd-Md-x13" style="IBUITableViewCellStyleSubtitle" id="cLd-Mm-xy2" userLabel="Claude Global Memory">
-                                        <rect key="frame" x="0.0" y="664" width="320" height="43.5"/>
+                                        <rect key="frame" x="0.0" y="707.5" width="320" height="43.5"/>
                                         <autoresizingMask key="autoresizingMask"/>
                                         <tableViewCellContentView key="contentView" opaque="NO" clipsSubviews="YES" multipleTouchEnabled="YES" contentMode="center" preservesSuperviewLayoutMargins="YES" insetsLayoutMarginsFromSafeArea="NO" tableViewCell="cLd-Mm-xy2" id="cLd-Mc-x14">
                                             <rect key="frame" x="0.0" y="0.0" width="286" height="43.5"/>
@@ -377,7 +409,7 @@
                                         </tableViewCellContentView>
                                     </tableViewCell>
                                     <tableViewCell clipsSubviews="YES" contentMode="scaleToFill" preservesSuperviewLayoutMargins="YES" selectionStyle="default" indentationWidth="10" textLabel="cLd-Rt-x15" style="IBUITableViewCellStyleDefault" id="cLd-Rm-xy3" userLabel="Remove Claude Global Memory">
-                                        <rect key="frame" x="0.0" y="707.5" width="320" height="43.5"/>
+                                        <rect key="frame" x="0.0" y="751" width="320" height="43.5"/>
                                         <autoresizingMask key="autoresizingMask"/>
                                         <tableViewCellContentView key="contentView" opaque="NO" clipsSubviews="YES" multipleTouchEnabled="YES" contentMode="center" preservesSuperviewLayoutMargins="YES" insetsLayoutMarginsFromSafeArea="NO" tableViewCell="cLd-Rm-xy3" id="cLd-Rc-x16">
                                             <rect key="frame" x="0.0" y="0.0" width="320" height="43.5"/>
@@ -516,6 +548,8 @@
                         <outlet property="claudeMemoryCell" destination="cLd-Mm-xy2" id="cLd-Mo-x17"/>
                         <outlet property="jitCell" destination="jIt-Cl-xy1" id="jIt-Co-x04"/>
                         <outlet property="claudeProxyField" destination="cLd-Pf-xy4" id="cLd-Po-x18"/>
+                        <outlet property="claudeProxyCell" destination="cLd-Pr-xy1" id="cLd-Pm-d10"/>
+                        <outlet property="claudeProxyModeControl" destination="cLd-Pm-de4" id="cLd-Pm-d11"/>
                         <outlet property="removeClaudeMemoryCell" destination="cLd-Rm-xy3" id="cLd-Ro-x19"/>
                         <outlet property="disableDimmingSwitch" destination="cPj-sQ-qsh" id="Kjp-xA-A0Y"/>
                         <outlet property="exportContainerCell" destination="OIE-9g-Btx" id="qxo-l5-0Mq"/>
