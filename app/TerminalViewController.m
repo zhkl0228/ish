@@ -183,8 +183,9 @@ typedef NS_ENUM(NSInteger, ColumnKeyProfile) {
 // keys in it without a key's color of their own, until pressed, a hairline
 // between each two (ColumnKeysView). Hidden with none of its keys shown.
 @property UIVisualEffectView *columnKeysGlass;
-// With the keyboard down: esc and return, the profile's middle keys
-// (columnProfileKeys) and two more by the profile (columnKeysAlways): the
+// With the keyboard down: esc and return whatever runs
+// (columnKeysEveryProfile), the profile's two keys (columnProfileKeys) and two
+// more by the profile (columnKeysAlways): the
 // arrows' pad and Ctrl-C, or for an AI agent the up and down arrows, the up
 // one Ctrl-C held: there the prompt's history and a menu's choices go up and
 // down more often than what runs is interrupted, and the pad's up and down
@@ -193,7 +194,7 @@ typedef NS_ENUM(NSInteger, ColumnKeyProfile) {
 // ctrl for Ctrl-C, which the column's two then were again, and its own esc
 // and tab are at its left end, away from the right hand, where Claude Code's
 // menus and vi want esc, and Claude Code's modes shift-tab (tab held).
-@property NSArray<UIView *> *columnKeysEdge;
+@property NSArray<UIView *> *columnKeysEveryProfile;
 @property NSDictionary<NSNumber *, NSArray<UIView *> *> *columnProfileKeys;
 @property NSDictionary<NSNumber *, NSArray<UIView *> *> *columnKeysAlways;
 @property NSArray<UIView *> *columnKeysUp;
@@ -1378,12 +1379,14 @@ static const CGFloat kColumnKeysSpacing = 4;
 static const CGFloat kColumnKeysBottom = 24;
 
 // One over another right under the column's meters, on their middle, in a
-// capsule of glass: esc; two keys for what runs
-// (columnProfileKeys, updateColumnProfile): tab and / for a shell, an AI
-// agent and most programs, : and / for vi, space and q for a pager; the
-// arrows' pad (arrowPadKey) and Ctrl-C, sent only held (a tap would end what
-// runs), or for an AI agent the up arrow, Ctrl-C held, and the down arrow;
-// return. Held, esc is backspace, tab shift-tab, / Ctrl-U (clearing the
+// capsule of glass: esc; two keys for what runs (columnProfileKeys,
+// updateColumnProfile), tab and / for a shell, an AI agent and most programs,
+// : and / for vi, space and q for a pager, with return between tab and / (or
+// under esc, what runs taking no tab): toward the column's middle, where the
+// thumb of the hand holding the phone reaches it more easily than at the
+// capsule's end, where it was; the arrows' pad (arrowPadKey) and Ctrl-C, sent
+// only held (a tap would end what runs), or for an AI agent the up arrow,
+// Ctrl-C held, and the down arrow. Held, esc is backspace, tab shift-tab, / Ctrl-U (clearing the
 // line) and space b (a pager's page up), each said in a callout before it is
 // let go (columnKeyHeld:) and marked in its key's corner (badgeKey:with:). Esc and /
 // are named as on the bar; the bar's / keeps its held symbols, whose popup
@@ -1431,8 +1434,8 @@ static const CGFloat kColumnKeysBottom = 24;
     BarButton *enter = [self columnKey:@"return" name:NSLocalizedString(@"Return", @"The column's return key, read aloud")];
     [enter addTarget:self action:@selector(pressReturn:) forControlEvents:UIControlEventTouchUpInside];
 
-    ColumnKeysView *keys = [[ColumnKeysView alloc] initWithArrangedSubviews:@[escape, tab, colon, space, slash, quit, pad,
-                                                                              interrupt, previous, next, enter]];
+    ColumnKeysView *keys = [[ColumnKeysView alloc] initWithArrangedSubviews:@[escape, tab, enter, colon, space, slash, quit,
+                                                                              pad, interrupt, previous, next]];
     keys.axis = UILayoutConstraintAxisVertical;
     keys.spacing = kColumnKeysSpacing;
     keys.translatesAutoresizingMaskIntoConstraints = NO;
@@ -1444,7 +1447,7 @@ static const CGFloat kColumnKeysBottom = 24;
     [self.view addSubview:glass];
     self.columnKeys = keys;
     self.columnKeysGlass = glass;
-    self.columnKeysEdge = @[escape, enter];
+    self.columnKeysEveryProfile = @[escape, enter];
     self.columnProfileKeys = @{
         @(ColumnKeyProfileDefault): @[tab, slash],
         @(ColumnKeyProfileEditor): @[colon, slash],
@@ -1849,7 +1852,7 @@ static NSString *ArrowGlyph(char direction) {
     BOOL anyKey = NO;
     for (UIView *key in self.columnKeys.arrangedSubviews) {
         BOOL wanted = up ? upKeysFit && [upKeys containsObject:key]
-                         : [alwaysKeys containsObject:key] || [self.columnKeysEdge containsObject:key] ||
+                         : [alwaysKeys containsObject:key] || [self.columnKeysEveryProfile containsObject:key] ||
                                [middle containsObject:key];
         if (key.hidden != !wanted)
             key.hidden = !wanted;
