@@ -20,10 +20,15 @@
 // images' npm install for 2.2.1 (817)), computed wrong results or hung, and
 // iSH itself crashed in the run loop with a block pointer read from code.
 //
+// A region of more than one arena (ISH_JIT_REGION_MB=4 ISH_JIT_ARENA_MB=1)
+// has its oldest arena evicted instead, as the one in use nears its end: the
+// blocks with native code there invalidated, its translations taken from the
+// registry, the direct links into it of the others undone.
+//
 // Checked: 8 workers each start an awk that sums, and a shell pipeline (ls
 // -R, sort, wc), 40 times over; every sum and every count is right, no
-// process is killed by a signal, and the region was flushed meanwhile. On a
-// Mac, an iSH without the fixes failed every run.
+// process is killed by a signal, and the region was flushed, or an arena
+// evicted, meanwhile. On a Mac, an iSH without the fixes failed every run.
 //
 // Build: aarch64-linux-musl-gcc -static -O0 -o regress_jit_flush regress_jit_flush.c
 
@@ -50,18 +55,21 @@ static void check(const char *name, int ok, const char *detail) {
     fflush(stdout);
 }
 
-// The region's flushes so far (/proc/ish/jit's "code region: ..., flushed N
-// times"); -1 without a code region
+// The times the region's code was given to other code so far: its flushes
+// and its arenas evicted (/proc/ish/jit's "code region: ..., arenas evicted
+// N (...), flushed N times"); -1 without a code region
 static long flushes(void) {
     FILE *f = fopen("/proc/ish/jit", "r");
     if (f == NULL)
         return -1;
-    char line[512];
+    char line[1024];
     long n = -1;
     while (fgets(line, sizeof(line), f) != NULL) {
-        char *at = strstr(line, ", flushed ");
-        if (strncmp(line, "code region: ", 13) == 0 && at != NULL)
-            n = strtol(at + strlen(", flushed "), NULL, 10);
+        char *flushed = strstr(line, ", flushed ");
+        char *evicted = strstr(line, ", arenas evicted ");
+        if (strncmp(line, "code region: ", 13) == 0 && flushed != NULL && evicted != NULL)
+            n = strtol(flushed + strlen(", flushed "), NULL, 10) +
+                strtol(evicted + strlen(", arenas evicted "), NULL, 10);
     }
     fclose(f);
     return n;
@@ -165,8 +173,9 @@ int main(void) {
     check("every pipeline's count right", reports == WORKERS && sum.counts_wrong == 0, detail);
     snprintf(detail, sizeof(detail), "%d commands and %d workers", sum.killed, workers_killed);
     check("no process killed by a signal", sum.killed == 0 && workers_killed == 0, detail);
-    snprintf(detail, sizeof(detail), "flushed %ld times before, %ld after (ISH_JIT_REGION_MB=1?)", before, after);
-    check("the code region flushed meanwhile", after > before, detail);
+    snprintf(detail, sizeof(detail), "flushed or an arena evicted %ld times before, %ld after (ISH_JIT_REGION_MB=1?)",
+             before, after);
+    check("the code region flushed, or an arena evicted, meanwhile", after > before, detail);
 
     printf("%d passed, %d failed\n", passed, failed);
     return failed != 0;

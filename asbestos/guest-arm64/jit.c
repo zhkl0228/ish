@@ -137,11 +137,19 @@ static _Atomic uint64_t st_find_ticks;   // jit_ticks() spent in aot_lookup()
 // one, never across two. The native dispatch's test of whether a code-stream
 // word is native code takes the arena's base (arena_base_of()), which the
 // code is given as it is placed; its window is 128MB from there.
+//
+// The arenas are used in turn, as a ring. With more than one, the oldest is
+// evicted as the one in use nears its end (EVICT_AHEAD of it left), so that
+// the next is empty when it is reached: only the blocks with native code in
+// it are invalidated (fiber_block's jit_arenas), and only the translations in
+// it leave the registry (jit_flush_end()). Should it not be evicted by then,
+// the region is flushed whole, as with one arena.
 
 #define REGION_MB_DEFAULT 120u
 #define REGION_MB_MAX 4096u
 #define ARENA_MB_MAX 128u
-#define ARENAS_MAX 64u
+#define ARENAS_MAX 32u   // fiber_block's jit_arenas has a bit for each
+#define EVICT_AHEAD(arena) ((arena) / 8)
 static uint8_t *region;   // executable view
 static intptr_t rw_delta; // writable view - executable view
 static bool dual_map;
@@ -151,9 +159,21 @@ static unsigned n_arenas = 1;
 static size_t arena_floor;          // what the stubs take at the start of each arena
 static unsigned region_mb_wanted;   // jit_set_region_mb()'s: 0 for REGION_MB_DEFAULT
 // Where the next allocation goes, from the region's start: in the arena it is
-// in, or the next one's after its stubs
+// in, the one at region_used - 1 (an allocation can end at an arena's end),
+// or the next one's after its stubs
 static _Atomic size_t region_used;
 static _Atomic bool region_full;   // an allocation failed: what came after runs as gadgets
+// Whether an arena may have code: it was allocated in since it was last
+// evicted, or since the region was flushed (the first one then)
+static _Atomic bool arena_held[ARENAS_MAX];
+// The arena to evict, -1 none: the one after the arena in use, asked for by
+// region_alloc() as that one nears its end, done by asbestos_jit_flush()
+static _Atomic int evict_wanted = -1;
+static _Atomic uint64_t st_evictions;
+// make_arena_stubs(): allocations in the arena stub_arena (-1: none) from its
+// start, at stub_used
+static int stub_arena = -1;
+static size_t stub_used;
 // A full region is flushed (jit_flush_*: asbestos.c's asbestos_jit_flush) and
 // taken from its start again, the stubs of every arena kept (region_floor:
 // where the first arena's stubs end): every block is invalidated, translated again
@@ -500,38 +520,83 @@ static uintptr_t arena_base_of(const void *p) {
     return (uintptr_t) region + (uintptr_t) arena_of(p) * arena_size;
 }
 
-// The arena (from 1) the next allocation goes in, for /proc/ish/jit
-static unsigned arena_now(void) {
-    unsigned k = (unsigned) (atomic_load(&region_used) / arena_size) + 1;
-    return k < n_arenas ? k : n_arenas;
+// The arena (from 0) region_used is in: its allocations end at it
+static unsigned arena_at(size_t used) {
+    return (unsigned) ((used - 1) / arena_size);
 }
 
-// Room for `bytes` in the arena region_used is in, or else after the stubs of
-// the next one: an allocation never straddles two arenas, so all of it
-// reaches its arena's stubs. NULL once the last arena has no room: the region
-// is full, and a flush is asked for.
+static size_t arena_end(unsigned k) {
+    size_t end = ((size_t) k + 1) * arena_size;
+    return end < region_size ? end : region_size;
+}
+
+// Room for `bytes` in the arena in use, or else after the stubs of the next
+// one, the first after the last: an allocation never straddles two arenas, so
+// all of it reaches its arena's stubs. The next arena is used only once it is
+// empty (evicted). An allocation that leaves less than EVICT_AHEAD of its
+// arena asks for the next one's eviction. NULL when there is no room: the
+// next arena not evicted yet, or the only arena full: the region is flushed
+// whole then (flush_wanted).
 static uint8_t *region_alloc(size_t bytes) {
     size_t need = (bytes + 15) & ~(size_t) 15;
+    if (stub_arena >= 0) {
+        uint8_t *p = region + (size_t) stub_arena * arena_size + stub_used;
+        stub_used += need;
+        return p;
+    }
     size_t off = atomic_load(&region_used);
     for (;;) {
-        size_t start = off / arena_size * arena_size;
-        size_t at = off < start + arena_floor ? start + arena_floor : off;
-        size_t end = start + arena_size < region_size ? start + arena_size : region_size;
-        if (at + need > end) {
-            start += arena_size;
-            at = start + arena_floor;
-            end = start + arena_size < region_size ? start + arena_size : region_size;
-            if (start >= region_size || at + need > end) {
+        unsigned k = arena_at(off);
+        size_t at = off;
+        bool moved = false;
+        if (at + need > arena_end(k)) {
+            k = (k + 1) % n_arenas;
+            if (n_arenas == 1 || atomic_load(&arena_held[k])) {
                 region_full = true;
                 // a recording keeps what it has: a flush would lose it
                 if (!rec_file)
                     atomic_store(&flush_wanted, true);
                 return NULL;
             }
+            at = (size_t) k * arena_size + arena_floor;
+            if (at + need > arena_end(k))
+                return NULL;   // more than an arena holds
+            moved = true;
         }
-        if (atomic_compare_exchange_weak(&region_used, &off, at + need))
-            return region + at;
+        if (!atomic_compare_exchange_weak(&region_used, &off, at + need))
+            continue;
+        if (moved)
+            atomic_store(&arena_held[k], true);
+        unsigned next = (k + 1) % n_arenas;
+        if (n_arenas > 1 && arena_end(k) - (at + need) < EVICT_AHEAD(arena_size) && atomic_load(&arena_held[next])) {
+            int none = -1;
+            atomic_compare_exchange_strong(&evict_wanted, &none, (int) next);
+        }
+        return region + at;
     }
+}
+
+// The arena (from 1) the next allocation goes in, for /proc/ish/jit
+static unsigned arena_now(void) {
+    return arena_at(atomic_load(&region_used)) + 1;
+}
+
+// Arenas that may have code, for /proc/ish/jit and the meters
+static unsigned arenas_held(void) {
+    unsigned n = 0;
+    for (unsigned k = 0; k < n_arenas; k++)
+        n += atomic_load(&arena_held[k]);
+    return n;
+}
+
+// The region's code: the arenas in use before the one in use now (each of
+// them filled to near its end), and of that one what is allocated
+static size_t region_taken(void) {
+    if (atomic_load(&region_full))
+        return region_size;
+    size_t used = atomic_load(&region_used);
+    unsigned held = arenas_held();
+    return (size_t) (held ? held - 1 : 0) * arena_size + used - (size_t) arena_at(used) * arena_size;
 }
 
 // MAP_JIT W^X is per thread and only this thread's fiber runs its native
@@ -2100,6 +2165,7 @@ static uint8_t *finish_native(struct em *e, struct fiber_block *b, uintptr_t ori
     if (!dst)
         return NULL;
     place_arena_base(e, dst);
+    b->jit_arenas |= 1u << arena_of(dst);
     for (unsigned i = 0; i < e->nfix; i++) {
         if (e->fix[i].kind == 4) {   // a shared stub, its arena's
             uintptr_t stub = arena_stubs[arena_of(dst)][e->fix[i].stub];
@@ -3040,6 +3106,7 @@ struct reg_entry {
     uint64_t hash;
     unsigned nkey, nseg, idx;
     uint32_t *link[2];
+    uint32_t link_orig[2];   // what a link replaces at link[i]: an evicted target's is undone (evict_arena())
     struct { unsigned pos; uint8_t *code; struct rec_seg *rec; } *seg;
     uint32_t key[];
 };
@@ -3255,6 +3322,7 @@ static bool reg_install(struct fiber_block *b, struct jit_ctx *ctx, const struct
     b->native_link[0] = r->link[0];
     b->native_link[1] = r->link[1];
     for (unsigned i = 0; i < r->nseg; i++) {
+        b->jit_arenas |= 1u << arena_of(r->seg[i].code);
         b->code[r->seg[i].pos] = (unsigned long) r->seg[i].code;
         if (r->seg[i].pos == 0 && n_pinned)
             __atomic_store_n(&b->native_entry, (uintptr_t) r->seg[i].code + entry_off(), __ATOMIC_RELEASE);
@@ -3276,6 +3344,9 @@ static uint64_t *mod_same, *mod_family;   // per module: bit i = aot_images[i] i
 static uint64_t *mod_blocks, *mod_hits, *mod_moved;   // per module: blocks translated or looked up, AOT installs,
                                                      // of which from an image of another version
 static unsigned mod_next_cap;
+// per module: indices whose translations an evicted arena had (reg_lock)
+struct idx_list { unsigned *v; unsigned n, cap; };
+static struct idx_list *mod_free;
 
 // ---- AOT images (asbestos/guest-arm64/aot.h)
 //
@@ -3382,8 +3453,11 @@ static bool mod_tables_fit(int mod) {   // reg_lock held
     if (same) mod_same = same;
     uint64_t *family = realloc(mod_family, cap * sizeof(*family));
     if (family) mod_family = family;
-    if (!idx || !img || !known || !blocks || !hits || !moved || !same || !family)
+    struct idx_list *freed = realloc(mod_free, cap * sizeof(*freed));
+    if (freed) mod_free = freed;
+    if (!idx || !img || !known || !blocks || !hits || !moved || !same || !family || !freed)
         return false;
+    memset(mod_free + mod_next_cap, 0, (cap - mod_next_cap) * sizeof(*freed));
     memset(mod_next_idx + mod_next_cap, 0, (cap - mod_next_cap) * sizeof(*idx));
     memset(mod_aot + mod_next_cap, 0, (cap - mod_next_cap) * sizeof(*img));
     memset(mod_aot_known + mod_next_cap, 0, cap - mod_next_cap);
@@ -3394,6 +3468,34 @@ static bool mod_tables_fit(int mod) {   // reg_lock held
     memset(mod_family + mod_next_cap, 0, (cap - mod_next_cap) * sizeof(*family));
     mod_next_cap = cap;
     return true;
+}
+
+// A translation index for module mod (reg_lock held, mod_tables_fit(mod)):
+// a new one while there are, then one an evicted arena's translation had
+// (idx_free()). A new one is no block's slot in any context yet, where one
+// freed may be an invalidated block's still, till it is freed: a block that
+// would reuse its translation keeps its gadgets till then (slot_claim()).
+// CTX_MAX when there is none.
+static unsigned idx_take(int mod) {
+    if (mod_next_idx[mod] < CTX_MAX)
+        return mod_next_idx[mod]++;
+    struct idx_list *l = &mod_free[mod];
+    return l->n != 0 ? l->v[--l->n] : CTX_MAX;
+}
+
+static void idx_free(int mod, unsigned idx) {
+    if ((unsigned) mod >= mod_next_cap || idx >= CTX_MAX)
+        return;
+    struct idx_list *l = &mod_free[mod];
+    if (l->n == l->cap) {
+        unsigned cap = l->cap ? 2 * l->cap : 256;
+        unsigned *v = realloc(l->v, cap * sizeof(*v));
+        if (v == NULL)
+            return;   // not reused: a module has CTX_MAX
+        l->v = v;
+        l->cap = cap;
+    }
+    l->v[l->n++] = idx;
 }
 
 // The first image of a module (reg_lock held), NULL if none.
@@ -3901,7 +4003,7 @@ static enum jit_outcome jit_translate(struct fiber_block *b, const struct jit_un
     }
     unsigned idx = 0;
     if (!r && reg_table)
-        idx = mod_tables_fit(mod) ? mod_next_idx[mod]++ : CTX_MAX;
+        idx = mod_tables_fit(mod) ? idx_take(mod) : CTX_MAX;
     pthread_mutex_unlock(&reg_lock);
     if (r) {
         bool native = reg_install(b, ctx, r);
@@ -3934,6 +4036,8 @@ static enum jit_outcome jit_translate(struct fiber_block *b, const struct jit_un
     r->idx = idx;
     r->link[0] = b->native_link[0];
     r->link[1] = b->native_link[1];
+    r->link_orig[0] = b->native_link_orig[0];
+    r->link_orig[1] = b->native_link_orig[1];
     r->nseg = e->ninst;
     memcpy(r->key, key, nkey * 4);
     for (unsigned i = 0; i < e->ninst; i++) {
@@ -4671,11 +4775,11 @@ size_t jit_describe(char *buf, size_t size) {
     OUT("mode: %s\n", mode);
     if (on && !images_only)
         OUT("code region: %.1f of %zu MB used%s, in arena %u of %u (%zu MB each, its own stubs at its start), "
-            "flushed %llu times (when full: every block translated again once hot); %s\n",
-            (region_full ? region_size : (size_t) region_used) / 1048576.0, region_size >> 20,
+            "arenas evicted %llu (the oldest as the one in use nears its end: its blocks translated again once "
+            "hot), flushed %llu times (when full: every block translated again once hot); %s\n",
+            region_taken() / 1048576.0, region_size >> 20,
             region_full ? (flushing ? " (full: being flushed)" : " (full: a flush asked for)") : "",
-            region_full ? n_arenas : arena_now(), n_arenas,
-            arena_size >> 20,
+            arena_now(), n_arenas, arena_size >> 20, (unsigned long long) st_evictions,
             (unsigned long long) st_flushes, region_how);
     else if (region == NULL && region_how[0] != '\0')
         OUT("code region: none: %s\n", region_how);
@@ -4869,20 +4973,21 @@ static void region_config(void) {
 // same room in each, arena_floor.
 static void make_arena_stubs(void) {
     bool outlined = pic_on && n_pinned && !env_off("ISH_JIT_STUBS");
-    arena_floor = 0;
     size_t floor = 0;
     for (unsigned k = 0; k < n_arenas; k++) {
-        atomic_store(&region_used, (size_t) k * arena_size);
+        stub_arena = (int) k;
+        stub_used = 0;
         make_exit_stub(k);
         if (outlined)
             make_stubs(k);
-        size_t taken = atomic_load(&region_used) - (size_t) k * arena_size;
-        if (taken > floor)
-            floor = taken;
+        if (stub_used > floor)
+            floor = stub_used;
     }
+    stub_arena = -1;
     arena_floor = floor;
     region_floor = floor;
     atomic_store(&region_used, floor);
+    atomic_store(&arena_held[0], true);
 }
 
 void jit_set_region_mb(unsigned mb) {
@@ -5075,6 +5180,7 @@ void jit_block_init(struct fiber_block *b) {
     b->native_entry = 0;
     b->jit_ctx = NULL;
     b->jit_idx = 0;
+    b->jit_arenas = 0;
     b->jit_runs = 0;
     b->jit_first = 0;
 }
@@ -5128,58 +5234,128 @@ bool jit_region_is_full(void) {
     return atomic_load(&region_full);
 }
 
-bool jit_flush_wanted(void) {
-    return atomic_load_explicit(&flush_wanted, memory_order_relaxed);
+bool jit_paused(void) {
+    return atomic_load_explicit(&flushing, memory_order_relaxed);
 }
 
-bool jit_flush_claim(void) {
-    // One flush at a time. A translation begun before the claim finds the
-    // region full till it ends, and asks for a flush again: claimed by
-    // another thread then, a second flush took the region from its start as
-    // the first let translations go on, and gave code that was running, or
+bool jit_flush_wanted(void) {
+    return atomic_load_explicit(&flush_wanted, memory_order_relaxed) ||
+           atomic_load_explicit(&evict_wanted, memory_order_relaxed) >= 0;
+}
+
+int jit_flush_claim(void) {
+    // One flush or eviction at a time. A translation begun before the claim
+    // finds the region full till it ends, and asks for a flush again: claimed
+    // by another thread then, a second flush took the region from its start
+    // as the first let translations go on, and gave code that was running, or
     // was to be linked to, to other code.
     bool busy = false;
     if (!atomic_compare_exchange_strong(&flushing, &busy, true))
-        return false;
+        return JIT_FLUSH_NONE;
     bool wanted = true;
     if (atomic_compare_exchange_strong(&flush_wanted, &wanted, false))
-        return true;
+        return JIT_FLUSH_ALL;
+    // evict_wanted stays till the end: region_alloc() asks for no other
+    int k = atomic_load(&evict_wanted);
+    if (k >= 0)
+        return k;
     atomic_store(&flushing, false);
-    return false;
+    return JIT_FLUSH_NONE;
 }
 
-void jit_flush_end(void) {
-    pthread_mutex_lock(&reg_lock);
+// The translations in arena k leave the registry, their indices free for
+// others (idx_free()); those that stay have their direct links into it
+// undone, the branch back to the fall-through and the literal LINK_UNSET:
+// the arena is other code's from now. No thread runs any of its code, or a
+// block chained to one that did: asbestos_jit_flush() invalidated them
+// (jit_arenas) and waited. A link site's own translation goes on running:
+// its block's slot is unchained, so the branch is not taken as it is
+// patched, and jit_chain_ok() claims it again from LINK_UNSET. reg_lock held.
+static void evict_arena(unsigned k) {
+    uintptr_t lo = (uintptr_t) region + (uintptr_t) k * arena_size, hi = (uintptr_t) region + arena_end(k);
     for (unsigned bucket = 0; reg_table != NULL && bucket < REG_BUCKETS; bucket++) {
-        struct reg_entry *r = reg_table[bucket];
-        while (r != NULL) {
-            struct reg_entry *next = r->next;
-            free(r->seg);
-            free(r);
-            r = next;
+        struct reg_entry **p = &reg_table[bucket];
+        while (*p != NULL) {
+            struct reg_entry *r = *p;
+            bool in = false;
+            for (unsigned i = 0; i < r->nseg; i++)
+                in |= (uintptr_t) r->seg[i].code >= lo && (uintptr_t) r->seg[i].code < hi;
+            if (in) {
+                *p = r->next;
+                idx_free((int) r->key[0], r->idx);
+                free(r->seg);
+                free(r);
+                continue;
+            }
+            for (int i = 0; i < 2; i++) {
+                uint32_t *site = r->link[i];
+                if (site == NULL)
+                    continue;
+                uint64_t lit = __atomic_load_n((uint64_t *) (site + 1), __ATOMIC_ACQUIRE);
+                uintptr_t target = (uintptr_t) site + (uintptr_t) (int64_t) lit;
+                if (lit == LINK_UNSET || target < lo || target >= hi)
+                    continue;
+                patch_insn(site, r->link_orig[i]);
+                claim_u64((uint64_t *) (site + 1), lit, LINK_UNSET);
+            }
+            p = &r->next;
         }
-        reg_table[bucket] = NULL;
     }
-    // a module's indices from 0 again: a slot an invalidated block still
-    // holds is taken over (slot_set), and its jit_block_free leaves it be
-    if (mod_next_idx != NULL)
-        memset(mod_next_idx, 0, mod_next_cap * sizeof(*mod_next_idx));
-    // the loop blocks' ranges are other code's now: one of them would give a
-    // fault there the wrong registers to sync (sync_pinned())
+    // the loop blocks' ranges in it are other code's now: one of them would
+    // give a fault there the wrong registers to sync (sync_pinned())
     pthread_mutex_lock(&loopmap_lock);
-    nloopmaps = 0;
+    unsigned kept = 0;
+    for (unsigned i = 0; i < nloopmaps; i++)
+        if (loopmaps[i].lo < lo || loopmaps[i].lo >= hi)
+            loopmaps[kept++] = loopmaps[i];
+    nloopmaps = kept;
     pthread_mutex_unlock(&loopmap_lock);
-    atomic_store(&region_used, region_floor);
-    atomic_store(&region_full, false);
-    atomic_fetch_add(&st_flushes, 1);
-    // what was asked meanwhile was of the region full before
-    atomic_store(&flush_wanted, false);
+}
+
+void jit_flush_end(int what) {
+    pthread_mutex_lock(&reg_lock);
+    if (what == JIT_FLUSH_ALL) {
+        for (unsigned bucket = 0; reg_table != NULL && bucket < REG_BUCKETS; bucket++) {
+            struct reg_entry *r = reg_table[bucket];
+            while (r != NULL) {
+                struct reg_entry *next = r->next;
+                free(r->seg);
+                free(r);
+                r = next;
+            }
+            reg_table[bucket] = NULL;
+        }
+        // a module's indices from 0 again: a slot an invalidated block still
+        // holds is taken over (slot_set), and its jit_block_free leaves it be
+        if (mod_next_idx != NULL)
+            memset(mod_next_idx, 0, mod_next_cap * sizeof(*mod_next_idx));
+        for (unsigned mod = 0; mod_free != NULL && mod < mod_next_cap; mod++)
+            mod_free[mod].n = 0;
+        // the loop blocks' ranges are other code's now: one of them would give a
+        // fault there the wrong registers to sync (sync_pinned())
+        pthread_mutex_lock(&loopmap_lock);
+        nloopmaps = 0;
+        pthread_mutex_unlock(&loopmap_lock);
+        for (unsigned k = 1; k < n_arenas; k++)
+            atomic_store(&arena_held[k], false);
+        atomic_store(&region_used, region_floor);
+        atomic_store(&region_full, false);
+        atomic_fetch_add(&st_flushes, 1);
+        // what was asked meanwhile was of the region full before
+        atomic_store(&flush_wanted, false);
+    } else {
+        evict_arena((unsigned) what);
+        atomic_store(&arena_held[what], false);
+        atomic_fetch_add(&st_evictions, 1);
+    }
+    atomic_store(&evict_wanted, -1);
     atomic_store(&flushing, false);
     pthread_mutex_unlock(&reg_lock);
 }
 
 uint64_t jit_flushes(void) {
-    return atomic_load_explicit(&st_flushes, memory_order_acquire);
+    return atomic_load_explicit(&st_flushes, memory_order_acquire) +
+           atomic_load_explicit(&st_evictions, memory_order_acquire);
 }
 
 bool jit_region_usage(size_t *used, size_t *size) {
@@ -5189,7 +5365,7 @@ bool jit_region_usage(size_t *used, size_t *size) {
         return false;
     }
     *size = region_size;
-    *used = atomic_load(&region_full) ? region_size : atomic_load(&region_used);
+    *used = region_taken();
     return true;
 }
 

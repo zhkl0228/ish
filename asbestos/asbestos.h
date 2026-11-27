@@ -138,6 +138,10 @@ struct fiber_block {
     uintptr_t native_entry;     // hot entry of the native code at code[0], 0 if none
     void *jit_ctx;              // PIC: module context the native code runs with (x29)
     unsigned jit_idx;           // PIC: its translation's slot in that context
+    // The arenas of the code region its native code is in, a bit each: an
+    // arena evicted invalidates the blocks of its bit. In what padding there
+    // was before code[], whose offset the AOT images' abi has.
+    uint32_t jit_arenas;
 #endif
 
     unsigned long code[];

@@ -750,8 +750,9 @@ EOF
         out=$(ISH_JIT_REGION_MB=1 timeout 300 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_jit_flush 2>&1)
         echo "$out"
         echo "$out" | grep -q '^SKIP' || echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
-        # four arenas of 1 MB, each with its own stubs (not PIC: PIC translations
-        # are shared across processes, and this test's do not fill 4 MB)
+        # four arenas of 1 MB, each with its own stubs, the oldest evicted as the
+        # one in use nears its end (not PIC: PIC translations are shared across
+        # processes, and this test's do not fill 4 MB)
         out=$(ISH_JIT_REGION_MB=4 ISH_JIT_ARENA_MB=1 timeout 300 "$ISH" "$MOUNT_FLAG" "$ROOTFS" \
               /tmp/regress_jit_flush 2>&1)
         echo "$out"

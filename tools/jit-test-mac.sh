@@ -18,7 +18,8 @@
 #   - regress_jit_flush: a 1 MB code region (ISH_JIT_REGION_MB=1), flushed
 #     over and over as processes start and end, every result right; and a
 #     4 MB one in arenas of 1 MB (ISH_JIT_ARENA_MB=1), its code placed in one
-#     arena after another, each with its own stubs;
+#     arena after another, each with its own stubs, the oldest evicted as the
+#     one in use nears its end;
 #   - regress_jit_fp: scalar floating point, each instruction's results and
 #     flags the gadgets' (ISH_JIT_PIC=1, as on iOS);
 #   - regress_jit_insns: atomics, SIMD loads and stores, literal loads, dc
@@ -119,8 +120,9 @@ out=$(ISH_JIT_REGION_MB=1 timeout 300 "$ISH" -r "$ROOT" /tmp/regress_jit_flush 2
 echo "$out" | grep -v '^PASS' | tail -20
 echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || fail "regress_jit_flush"
 # the same in four arenas of 1 MB: code placed in one arena after another,
-# each branching to its own stubs, and flushed when all are full (not PIC: PIC
-# translations are shared across processes, and this test's do not fill 4 MB)
+# each branching to its own stubs, the oldest evicted as the one in use nears
+# its end (not PIC: PIC translations are shared across processes, and this
+# test's do not fill 4 MB)
 echo "== regress_jit_flush, 4 arenas"
 out=$(ISH_JIT_REGION_MB=4 ISH_JIT_ARENA_MB=1 timeout 300 "$ISH" -r "$ROOT" /tmp/regress_jit_flush 2>&1)
 echo "$out" | grep -v '^PASS' | tail -20

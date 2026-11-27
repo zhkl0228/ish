@@ -167,18 +167,26 @@ bool jit_region_is_full(void);
 // the region its code takes, all of it once full, and its size: the meters'
 // details show it (app/MonitorDetailViewController.m)
 bool jit_region_usage(size_t *used, size_t *size);
-// The flush of a full code region (asbestos.c's asbestos_jit_flush drives it).
-// Wanted: the region filled (not while recording an image). Claim: one caller
-// gets it, none while a flush runs, and from then no translation is made or
-// reused (blocks run as gadgets till hot). End: once every block was
-// invalidated and no thread can be running what was in the region, the
-// region is taken from its start (its shared stubs kept), the registry of
-// translations emptied, and translating goes on. jit_flushes: how many
-// ended; a thread that sees it change runs an isb before native code, whose
-// addresses held other code.
+// The flush of a full code region, or the eviction of its oldest arena
+// (asbestos.c's asbestos_jit_flush drives them). Wanted: the region filled
+// (not while recording an image), or the arena in use nears its end with the
+// next one holding code. Claim: one caller gets one, none while one runs, and
+// from then no translation is made or reused (blocks run as gadgets till
+// hot); JIT_FLUSH_ALL, the arena to evict, or JIT_FLUSH_NONE. End: once every
+// block with code there was invalidated (all, or those with the arena's bit
+// in jit_arenas) and no thread can be running it, the region is taken from
+// its start (its shared stubs kept) and the registry of translations emptied,
+// or the arena is emptied, its translations taken from the registry and the
+// direct links into it undone; and translating goes on. jit_flushes: how
+// many ended, of both; a thread that sees it change runs an isb before
+// native code, whose addresses held other code.
+#define JIT_FLUSH_NONE (-2)
+#define JIT_FLUSH_ALL (-1)
+// Whether one is claimed and not ended: nothing is translated meanwhile
+bool jit_paused(void);
 bool jit_flush_wanted(void);
-bool jit_flush_claim(void);
-void jit_flush_end(void);
+int jit_flush_claim(void);
+void jit_flush_end(int what);
 uint64_t jit_flushes(void);
 // Writes to /proc/ish/jit: "off" / "on" stop / resume installing AOT images
 // in blocks compiled afterwards (for A/B timing on a device); "region" maps
@@ -207,7 +215,9 @@ bool jit_translates_with_room(void);
 // jit_region_now(), and ISH_JIT_REGION_MB comes before it. Under TXM the
 // debugger makes it once, so a new size waits for iSH's next start. The
 // region is cut into arenas of 128 MB at most, each with its own stubs, as a
-// `b` reaches +-128MB (ISH_JIT_ARENA_MB: smaller ones, for a test).
+// `b` reaches +-128MB (ISH_JIT_ARENA_MB: smaller ones, for a test); with more
+// than one, the oldest is evicted as the one in use nears its end, rather
+// than the whole region flushed when it is full.
 void jit_set_region_mb(unsigned mb);
 
 #endif

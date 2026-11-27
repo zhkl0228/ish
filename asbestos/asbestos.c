@@ -424,19 +424,52 @@ static void pass_grace(void) {
         nanosleep(&ms, NULL);
 }
 
+// The blocks with native code in arena k of the code region (jit_arenas):
+// as asbestos_invalidate_all() does all
+static void asbestos_invalidate_arena(struct asbestos *asbestos, unsigned k) {
+    lock(&asbestos->lock);
+    bool did_invalidate = false;
+    struct fiber_block *block, *tmp;
+    for (size_t bucket = 0; bucket < FIBER_PAGE_HASH_SIZE; bucket++) {
+        for (int i = 0; i <= 1; i++) {
+            struct list *blocks = &asbestos->page_hash[bucket].blocks[i];
+            if (list_null(blocks))
+                continue;
+            list_for_each_entry_safe(blocks, block, tmp, page[i]) {
+                if (!(block->jit_arenas & (1u << k)))
+                    continue;
+                fiber_block_disconnect(asbestos, block);
+                block->is_jetsam = true;
+                list_add(&asbestos->jetsam, &block->jetsam);
+                did_invalidate = true;
+            }
+        }
+    }
+    if (did_invalidate)
+        asbestos->invalidate_gen = asbestos_next_gen();
+    unlock(&asbestos->lock);
+}
+
 void asbestos_jit_flush(void) {
-    if (!jit_flush_wanted() || !jit_flush_claim())
+    if (!jit_flush_wanted())
+        return;
+    int what = jit_flush_claim();
+    if (what == JIT_FLUSH_NONE)
         return;
     // the translations begun before the claim are done: none is made from now
     pass_grace();
     lock(&all_lock);
     struct asbestos *asbestos;
-    list_for_each_entry(&all_asbestos, asbestos, jit_all)
-        asbestos_invalidate_all(asbestos);
+    list_for_each_entry(&all_asbestos, asbestos, jit_all) {
+        if (what == JIT_FLUSH_ALL)
+            asbestos_invalidate_all(asbestos);
+        else
+            asbestos_invalidate_arena(asbestos, (unsigned) what);
+    }
     unlock(&all_lock);
     // no pass runs a block it came by before the invalidation
     pass_grace();
-    jit_flush_end();
+    jit_flush_end(what);
 }
 #endif
 
@@ -967,6 +1000,13 @@ static void fiber_block_hot(struct asbestos *asbestos, struct tlb *tlb, addr_t i
     struct fiber_block *block = fiber_lookup(asbestos, ip);
     if (block == NULL || block->is_jetsam || block->code[0] != (unsigned long) gadget_jit_count)
         return;  // translated by another thread's run, or gone
+    // A flush or an arena's eviction going on, nothing is translated: it
+    // counts its runs again (gadget_jit_count's b.eq), not gadgets for good.
+    // An eviction comes each time an arena nears its end.
+    if (jit_paused()) {
+        block->jit_runs = 0;
+        return;
+    }
     __atomic_store_n(&block->code[0], block->jit_first, __ATOMIC_RELEASE);
     struct jit_units *units = NULL;
     struct fiber_block *again = fiber_block_compile_units(ip, tlb, &units);
