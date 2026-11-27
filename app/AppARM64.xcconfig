@@ -36,6 +36,12 @@ OTHER_LDFLAGS = $(inherited) $(MESON_BUILD_DIR)/libish.a $(MESON_BUILD_DIR)/libi
 #include "AOTImages.xcconfig"
 #include? "AOTImages.local.xcconfig"
 
+// Swift (app/LiveActivity's AgentActivity): its interface for the
+// Objective-C sources under one name, iSH-Swift.h, which the ffmpeg
+// variant's module (of another product name) has too
+SWIFT_VERSION = 5.0
+SWIFT_OBJC_INTERFACE_HEADER_NAME = iSH-Swift.h
+
 // Header search paths needed for sources compiled directly in this target
 // (previously compiled in libiSHApp, which used AppLib.xcconfig)
 HEADER_SEARCH_PATHS = $(inherited) $(SRCROOT) $(SRCROOT)/deps/libarchive/libarchive $(SRCROOT)/build/idevice

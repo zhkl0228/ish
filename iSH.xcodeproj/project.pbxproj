@@ -251,6 +251,12 @@
 		5C2EE4A0D1B7C35F0E8A9309 /* AppGroup.m in Sources */ = {isa = PBXBuildFile; fileRef = BB9C7B84240A240E00F5D4F0 /* AppGroup.m */; };
 		5C2EE4A0D1B7C35F0E8A930A /* iSHShare ARM64.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 5C2EE4A0D1B7C35F0E8A9305 /* iSHShare ARM64.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		5C2EE4A0D1B7C35F0E8A930B /* ShareInbox.m in Sources */ = {isa = PBXBuildFile; fileRef = 5C2EE4A0D1B7C35F0E8A9307 /* ShareInbox.m */; };
+		5C2EE4A0D1B7C35F0E8A9409 /* AgentActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C2EE4A0D1B7C35F0E8A9401 /* AgentActivityAttributes.swift */; };
+		5C2EE4A0D1B7C35F0E8A940A /* AgentLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C2EE4A0D1B7C35F0E8A9403 /* AgentLiveActivity.swift */; };
+		5C2EE4A0D1B7C35F0E8A940B /* AgentActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C2EE4A0D1B7C35F0E8A9401 /* AgentActivityAttributes.swift */; };
+		5C2EE4A0D1B7C35F0E8A940C /* AgentActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C2EE4A0D1B7C35F0E8A9402 /* AgentActivity.swift */; };
+		5C2EE4A0D1B7C35F0E8A940D /* AgentActivityTracker.m in Sources */ = {isa = PBXBuildFile; fileRef = 5C2EE4A0D1B7C35F0E8A9408 /* AgentActivityTracker.m */; };
+		5C2EE4A0D1B7C35F0E8A940E /* iSHLiveActivity ARM64.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 5C2EE4A0D1B7C35F0E8A9406 /* iSHLiveActivity ARM64.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXBuildRule section */
@@ -360,6 +366,13 @@
 			remoteGlobalIDString = 5C2EE4A0D1B7C35F0E8A9310;
 			remoteInfo = "iSHShare-ARM64";
 		};
+		5C2EE4A0D1B7C35F0E8A9417 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = BB792B461F96D8E000FFB7A4 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 5C2EE4A0D1B7C35F0E8A9413;
+			remoteInfo = "iSHLiveActivity-ARM64";
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -382,6 +395,7 @@
 				AAF20050AF96D90D00FFB7A4 /* iSHFileProvider ARM64.appex in Embed Foundation Extensions */,
 				56E5FA57740186FA3C7A0901 /* iSHJITHelper ARM64.appex in Embed Foundation Extensions */,
 				5C2EE4A0D1B7C35F0E8A930A /* iSHShare ARM64.appex in Embed Foundation Extensions */,
+				5C2EE4A0D1B7C35F0E8A940E /* iSHLiveActivity ARM64.appex in Embed Foundation Extensions */,
 				C8BF293A5E1AAEDD6FA0CD21 /* iSHLoopbackTunnel ARM64.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
@@ -729,6 +743,14 @@
 		5C2EE4A0D1B7C35F0E8A9305 /* iSHShare ARM64.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = "iSHShare ARM64.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
 		5C2EE4A0D1B7C35F0E8A9306 /* ShareInbox.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ShareInbox.h; sourceTree = "<group>"; };
 		5C2EE4A0D1B7C35F0E8A9307 /* ShareInbox.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = ShareInbox.m; sourceTree = "<group>"; };
+		5C2EE4A0D1B7C35F0E8A9401 /* AgentActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentActivityAttributes.swift; sourceTree = "<group>"; };
+		5C2EE4A0D1B7C35F0E8A9402 /* AgentActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentActivity.swift; sourceTree = "<group>"; };
+		5C2EE4A0D1B7C35F0E8A9403 /* AgentLiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentLiveActivity.swift; sourceTree = "<group>"; };
+		5C2EE4A0D1B7C35F0E8A9404 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		5C2EE4A0D1B7C35F0E8A9405 /* LiveActivityARM64.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = LiveActivityARM64.xcconfig; sourceTree = "<group>"; };
+		5C2EE4A0D1B7C35F0E8A9406 /* iSHLiveActivity ARM64.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = "iSHLiveActivity ARM64.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
+		5C2EE4A0D1B7C35F0E8A9407 /* AgentActivityTracker.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AgentActivityTracker.h; sourceTree = "<group>"; };
+		5C2EE4A0D1B7C35F0E8A9408 /* AgentActivityTracker.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = AgentActivityTracker.m; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -769,6 +791,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		5C2EE4A0D1B7C35F0E8A9411 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -802,6 +831,7 @@
 				BB0B859C2586F19000208600 /* XcodeRelease.xcconfig */,
 				859E2D36EE8146A2CE1DE45D /* JITHelperARM64.xcconfig */,
 				5C2EE4A0D1B7C35F0E8A9304 /* ShareARM64.xcconfig */,
+				5C2EE4A0D1B7C35F0E8A9405 /* LiveActivityARM64.xcconfig */,
 				A1399BE30725580CC53DF76C /* LoopbackTunnelARM64.xcconfig */,
 			);
 			name = Configs;
@@ -879,6 +909,8 @@
 				5C2EE4A0D1B7C35F0E8A9103 /* Screenshot.m */,
 				5C2EE4A0D1B7C35F0E8A9306 /* ShareInbox.h */,
 				5C2EE4A0D1B7C35F0E8A9307 /* ShareInbox.m */,
+				5C2EE4A0D1B7C35F0E8A9407 /* AgentActivityTracker.h */,
+				5C2EE4A0D1B7C35F0E8A9408 /* AgentActivityTracker.m */,
 				5C2EE4A0D1B7C35F0E8A9202 /* UIActions.h */,
 				5C2EE4A0D1B7C35F0E8A9203 /* UIActions.m */,
 				5C2EE4A0D1B7C35F0E8A9212 /* DeviceStatus.h */,
@@ -955,6 +987,7 @@
 				AA9C2BB72F44A3DD00F41633 /* iSH ARM64 ffmpeg.app */,
 				7784D4470E41B6E21AFA053B /* iSHJITHelper ARM64.appex */,
 				5C2EE4A0D1B7C35F0E8A9305 /* iSHShare ARM64.appex */,
+				5C2EE4A0D1B7C35F0E8A9406 /* iSHLiveActivity ARM64.appex */,
 				378263D49E2685E2E7005F65 /* iSHLoopbackTunnel ARM64.appex */,
 			);
 			name = Products;
@@ -1029,6 +1062,7 @@
 				14F250A88670631024F6C9C9 /* Built-in JIT */,
 				727351C6915144CC008E4E83 /* JITHelper */,
 				5C2EE4A0D1B7C35F0E8A930C /* Share */,
+				5C2EE4A0D1B7C35F0E8A940F /* LiveActivity */,
 				71C448D61854E3D4573A74FD /* LoopbackTunnel */,
 			);
 			path = app;
@@ -1315,6 +1349,17 @@
 			path = Share;
 			sourceTree = "<group>";
 		};
+		5C2EE4A0D1B7C35F0E8A940F /* LiveActivity */ = {
+			isa = PBXGroup;
+			children = (
+				5C2EE4A0D1B7C35F0E8A9402 /* AgentActivity.swift */,
+				5C2EE4A0D1B7C35F0E8A9401 /* AgentActivityAttributes.swift */,
+				5C2EE4A0D1B7C35F0E8A9403 /* AgentLiveActivity.swift */,
+				5C2EE4A0D1B7C35F0E8A9404 /* Info.plist */,
+			);
+			path = LiveActivity;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXLegacyTarget section */
@@ -1411,6 +1456,7 @@
 				311BE065BEA6046E602B0918 /* PBXTargetDependency */,
 				8A8207AFB71DF59F301CF267 /* PBXTargetDependency */,
 				5C2EE4A0D1B7C35F0E8A9315 /* PBXTargetDependency */,
+				5C2EE4A0D1B7C35F0E8A9418 /* PBXTargetDependency */,
 			);
 			name = "iSH-ARM64";
 			productName = "iSH ARM64";
@@ -1551,6 +1597,23 @@
 			productReference = 5C2EE4A0D1B7C35F0E8A9305 /* iSHShare ARM64.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		5C2EE4A0D1B7C35F0E8A9413 /* iSHLiveActivity-ARM64 */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 5C2EE4A0D1B7C35F0E8A9414 /* Build configuration list for PBXNativeTarget "iSHLiveActivity-ARM64" */;
+			buildPhases = (
+				5C2EE4A0D1B7C35F0E8A9410 /* Sources */,
+				5C2EE4A0D1B7C35F0E8A9411 /* Frameworks */,
+				5C2EE4A0D1B7C35F0E8A9412 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "iSHLiveActivity-ARM64";
+			productName = "iSHLiveActivity ARM64";
+			productReference = 5C2EE4A0D1B7C35F0E8A9406 /* iSHLiveActivity ARM64.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -1626,6 +1689,7 @@
 				74B674687BE68C2FE768F439 /* iSH-ARM64-ffmpeg */,
 				B3731B17CA3FA382C2E3F908 /* iSHJITHelper-ARM64 */,
 				5C2EE4A0D1B7C35F0E8A9310 /* iSHShare-ARM64 */,
+				5C2EE4A0D1B7C35F0E8A9413 /* iSHLiveActivity-ARM64 */,
 				25AD929F0213D8255CB3601A /* iSHLoopbackTunnel-ARM64 */,
 			);
 		};
@@ -1725,6 +1789,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		5C2EE4A0D1B7C35F0E8A930F /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		5C2EE4A0D1B7C35F0E8A9412 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -1960,6 +2031,9 @@
 				AA000023AF96D90D00FFB7A4 /* PasteboardDevice.m in Sources */,
 				5C2EE4A0D1B7C35F0E8A9101 /* Screenshot.m in Sources */,
 				5C2EE4A0D1B7C35F0E8A930B /* ShareInbox.m in Sources */,
+				5C2EE4A0D1B7C35F0E8A940B /* AgentActivityAttributes.swift in Sources */,
+				5C2EE4A0D1B7C35F0E8A940C /* AgentActivity.swift in Sources */,
+				5C2EE4A0D1B7C35F0E8A940D /* AgentActivityTracker.m in Sources */,
 				5C2EE4A0D1B7C35F0E8A9201 /* UIActions.m in Sources */,
 				5C2EE4A0D1B7C35F0E8A9211 /* DeviceStatus.m in Sources */,
 				AA000100AF96D90D00FFB7A4 /* AboutAppearanceViewController.m in Sources */,
@@ -2095,6 +2169,15 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		5C2EE4A0D1B7C35F0E8A9410 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5C2EE4A0D1B7C35F0E8A9409 /* AgentActivityAttributes.swift in Sources */,
+				5C2EE4A0D1B7C35F0E8A940A /* AgentLiveActivity.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -2149,6 +2232,12 @@
 			name = "iSHShare-ARM64";
 			target = 5C2EE4A0D1B7C35F0E8A9310 /* iSHShare-ARM64 */;
 			targetProxy = 5C2EE4A0D1B7C35F0E8A9314 /* PBXContainerItemProxy */;
+		};
+		5C2EE4A0D1B7C35F0E8A9418 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = "iSHLiveActivity-ARM64";
+			target = 5C2EE4A0D1B7C35F0E8A9413 /* iSHLiveActivity-ARM64 */;
+			targetProxy = 5C2EE4A0D1B7C35F0E8A9417 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -2404,6 +2493,22 @@
 			};
 			name = Release;
 		};
+		5C2EE4A0D1B7C35F0E8A9415 /* Debug-ApplePleaseFixFB19282108 */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 5C2EE4A0D1B7C35F0E8A9405 /* LiveActivityARM64.xcconfig */;
+			buildSettings = {
+				DEVELOPMENT_TEAM = K8Q74NT2BG;
+			};
+			name = "Debug-ApplePleaseFixFB19282108";
+		};
+		5C2EE4A0D1B7C35F0E8A9416 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 5C2EE4A0D1B7C35F0E8A9405 /* LiveActivityARM64.xcconfig */;
+			buildSettings = {
+				DEVELOPMENT_TEAM = K8Q74NT2BG;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -2538,6 +2643,15 @@
 			buildConfigurations = (
 				5C2EE4A0D1B7C35F0E8A9312 /* Debug-ApplePleaseFixFB19282108 */,
 				5C2EE4A0D1B7C35F0E8A9313 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		5C2EE4A0D1B7C35F0E8A9414 /* Build configuration list for PBXNativeTarget "iSHLiveActivity-ARM64" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5C2EE4A0D1B7C35F0E8A9415 /* Debug-ApplePleaseFixFB19282108 */,
+				5C2EE4A0D1B7C35F0E8A9416 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

@@ -33,6 +33,7 @@
 #import "UIActions.h"
 #import "DeviceStatus.h"
 #import "ShareInbox.h"
+#import "AgentActivityTracker.h"
 #import "UserPreferences.h"
 #include "kernel/init.h"
 #include "kernel/calls.h"
@@ -447,6 +448,8 @@ static void mount_documents(void) {
     get_device_report = device_device_report;
     // What other apps share with iSH, moved into Documents/inbox
     ShareInboxStart();
+    // The tabs' Claude Code on the Dynamic Island and the Lock Screen
+    AgentActivityTrackerStart();
     get_thermal_state = thermal_state;
     // this defaults key is set when taking app store screenshots
     extern const char *uname_hostname_override;
