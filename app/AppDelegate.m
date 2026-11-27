@@ -560,11 +560,15 @@ static void mount_documents(void) {
 
 // iOS terminating the app while it runs (swiped away in the app switcher, in
 // the foreground or kept alive in the background): the programs in the tabs
-// are told the terminal went away, and given time to finish, rather than
-// killed with the app (TerminalSessionStore). iOS gives this method about five
-// seconds; a suspended app it kills without calling it.
+// are told the terminal went away, and given a second to finish, rather than
+// killed with the app (TerminalSessionStore). Swiped away, iOS killed the app
+// 0.5 to 1.6 s after the tabs were hung up, not the five seconds its
+// documentation gives this method: waited longer for, the main thread was
+// held till iOS killed it. A shell or a program that ends on SIGHUP is done
+// in that time; Claude Code's shutdown, slower in iSH, is not. A suspended app
+// iOS kills without calling this, and an app being updated too.
 - (void)applicationWillTerminate:(UIApplication *)application {
-    [TerminalSessionStore.shared hangUpForTerminationWaiting:4];
+    [TerminalSessionStore.shared hangUpForTerminationWaiting:1];
 }
 
 @end
