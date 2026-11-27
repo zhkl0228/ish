@@ -211,7 +211,7 @@ bool jit_aot_serves(const char *path);
 bool jit_translates_with_room(void);
 
 // The size of the code region to make, in MB (the app's setting; 0: the
-// default, 120): it applies when the region is made, as iSH starts or by
+// default, 128): it applies when the region is made, as iSH starts or by
 // jit_region_now(), and ISH_JIT_REGION_MB comes before it. Under TXM the
 // debugger makes it once, so a new size waits for iSH's next start. The
 // region is cut into arenas of 128 MB at most, each with its own stubs, as a

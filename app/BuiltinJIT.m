@@ -26,7 +26,7 @@ NSNotificationName const BuiltinJITChangedNotification = @"BuiltinJITChangedNoti
 
 static NSString *const kEnabledAtStartKey = @"Built-in JIT";
 static NSString *const kCodeRegionMBKey = @"Built-in JIT Code Region MB";
-static const NSUInteger kCodeRegionMBDefault = 120;
+static const NSUInteger kCodeRegionMBDefault = 128;
 
 // asbestos/guest-arm64/jit.h's (a header for builds with ISH_JIT, which libish
 // is for the app: GuestARM64.xcconfig's ISH_ENABLE_JIT)
@@ -250,12 +250,10 @@ static char *BuiltinJITReport(void) {
     [self changed];
 }
 
-// Whole arenas of 128 MB (asbestos/guest-arm64/jit.c) past the first: the
-// native dispatch's window, 128 MB from each arena's start, ends where the
-// region does. 120, the size before there were arenas, leaves 8 MB past it,
-// which the JIT reserves when it can.
+// Whole arenas of 128 MB (asbestos/guest-arm64/jit.c): the native dispatch's
+// window, 128 MB from each arena's start, ends where the region does
 + (NSArray<NSNumber *> *)codeRegionChoices {
-    return @[@120, @256, @512, @768, @1024, @1280];
+    return @[@128, @256, @512, @1024, @1536, @2048];
 }
 
 + (NSUInteger)codeRegionMB {

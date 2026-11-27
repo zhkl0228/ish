@@ -22,6 +22,12 @@ enum {
 @property (nullable) UIAlertController *pairingAlert;
 @end
 
+// A code region's size as the settings say it: MB, or GB from 1 GB
+static NSString *RegionSizeText(NSUInteger mb) {
+    return mb >= 1024 ? [NSString stringWithFormat:@"%g GB", mb / 1024.0]
+                      : [NSString stringWithFormat:@"%lu MB", (unsigned long) mb];
+}
+
 @implementation BuiltinJITViewController
 
 - (instancetype)init {
@@ -72,10 +78,10 @@ enum {
                 "and the Network Extensions capability, and Wi-Fi (or, without, airplane mode after the tunnel is "
                 "up). iSH's own loopback tunnel, a VPN, runs only while the JIT is enabled, unless one is up already "
                 "(LocalDevVPN): iOS turns off another VPN while it runs.\n\n"
-                "Code Region: the room for translated code. When it is full every program's code is translated "
-                "again, so a larger one means fewer of those, and takes that much more memory as the JIT is "
-                "enabled (the debugger writes in each of its pages). It is made once: a new size applies at iSH's "
-                "next start if the JIT translates now.";
+                "Code Region: the room for translated code. At 128 MB, when it is full, every program's code is "
+                "translated again; a larger one is used 128 MB at a time, and as it fills only the code translated "
+                "longest ago is. It takes that much more memory as the JIT is enabled (the debugger writes in each "
+                "of its pages). It is made once: a new size applies at iSH's next start if the JIT translates now.";
     case SectionPairing:
         return OnDevicePairing.available
             ? @"The device's pairing file: made here, by pairing the device with iSH in Settings, or on a computer "
@@ -114,9 +120,9 @@ enum {
         } else if (indexPath.row == 3) {
             NSUInteger mb = BuiltinJIT.codeRegionMB, now = jit.codeRegionMBNow;
             NSString *detail = now == 0 || now == mb
-                ? [NSString stringWithFormat:@"%lu MB", (unsigned long) mb]
-                : [NSString stringWithFormat:@"%lu MB from iSH's next start (%lu MB now)", (unsigned long) mb,
-                                             (unsigned long) now];
+                ? RegionSizeText(mb)
+                : [NSString stringWithFormat:@"%@ from iSH's next start (%@ now)", RegionSizeText(mb),
+                                             RegionSizeText(now)];
             UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1
                                                            reuseIdentifier:nil];
             cell.textLabel.text = @"Code Region";
@@ -254,7 +260,7 @@ enum {
     NSUInteger current = BuiltinJIT.codeRegionMB;
     for (NSNumber *choice in BuiltinJIT.codeRegionChoices) {
         NSUInteger mb = choice.unsignedIntegerValue;
-        NSString *title = [NSString stringWithFormat:@"%lu MB%@", (unsigned long) mb, mb == current ? @" ✓" : @""];
+        NSString *title = [NSString stringWithFormat:@"%@%@", RegionSizeText(mb), mb == current ? @" ✓" : @""];
         [sheet addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault
                                                 handler:^(UIAlertAction *_) {
             BuiltinJIT.codeRegionMB = mb;

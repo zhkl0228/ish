@@ -145,7 +145,7 @@ static _Atomic uint64_t st_find_ticks;   // jit_ticks() spent in aot_lookup()
 // it leave the registry (jit_flush_end()). Should it not be evicted by then,
 // the region is flushed whole, as with one arena.
 
-#define REGION_MB_DEFAULT 120u
+#define REGION_MB_DEFAULT 128u   // one arena, whole
 #define REGION_MB_MAX 4096u
 #define ARENA_MB_MAX 128u
 #define ARENAS_MAX 32u   // fiber_block's jit_arenas has a bit for each
@@ -317,8 +317,8 @@ static bool map_prepared(uint64_t answer) {
     snprintf(region_how, sizeof(region_how), "allocated by the debugger iSH was launched under (JIT26), "
              "a writable view of it mapped by iSH");
     // The rest of the dispatch's window (region_window()), reserved: nothing
-    // is mapped there after this. If something is already, as it may have
-    // been past every 120MB region before (8MB), it is said.
+    // is mapped there after this (a region not of whole arenas of 128MB:
+    // ISH_JIT_REGION_MB's). If something is already, it is said.
     size_t tail = region_window() - region_size;
     if (tail != 0) {
         vm_address_t at = rx + region_size;
