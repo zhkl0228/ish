@@ -123,6 +123,11 @@ static void *thread_takes(void *arg) {
 int main(void) {
     char detail[300], vals[40];
     key_t key = 0x73650000 + (getpid() & 0xffff);
+    // The times the kernel stamps (sem_otime) are of a coarse clock, as Linux's
+    // are (ktime_get_real_seconds) and ish's on a Linux host (glibc's time()):
+    // for the few milliseconds a second has begun, still the second before,
+    // which time() here (CLOCK_REALTIME) is past. One second before start is
+    // the same moment (CI's linux job, 2026-11-27: otime -1).
     time_t start = time(NULL);
 
     // 1. a private set: IPC_STAT, all zero
@@ -207,7 +212,7 @@ int main(void) {
     semctl(id, 0, IPC_STAT, (union semun) {.buf = &ds});
     snprintf(detail, sizeof(detail), "child %d status %d, GETPID %d, otime %+ld", child, status, pid,
              (long) (ds.sem_otime - start));
-    check("GETPID and otime: the last to operate", status == 0 && pid == child && ds.sem_otime >= start, detail);
+    check("GETPID and otime: the last to operate", status == 0 && pid == child && ds.sem_otime >= start - 1, detail);
     set_val(id, 2, 0);
 
     // 6. semtimedop: EAGAIN after its timeout; EINVAL for a bad one

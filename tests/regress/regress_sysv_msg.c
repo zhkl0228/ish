@@ -115,6 +115,12 @@ static void on_usr1(int sig) {
 int main(void) {
     char detail[300];
     key_t key = 0x6d730000 + (getpid() & 0xffff);
+    // The times the kernel stamps (msg_stime, msg_rtime) are of a coarse
+    // clock, as Linux's are (ktime_get_real_seconds) and ish's on a Linux host
+    // (glibc's time()): for the few milliseconds a second has begun, still the
+    // second before, which time() here (CLOCK_REALTIME) is past. One second
+    // before start is the same moment (the semaphores' otime was, in CI's
+    // linux job, 2026-11-27).
     time_t start = time(NULL);
 
     // 1. a private queue's IPC_STAT
@@ -174,8 +180,8 @@ int main(void) {
              sent.msg_lspid, (long) (sent.msg_stime - start), (unsigned long) received.msg_qnum,
              (unsigned long) received.__msg_cbytes, received.msg_lrpid, (long) (received.msg_rtime - start));
     check("IPC_STAT: counts, pids and times", sent.msg_qnum == 2 && sent.__msg_cbytes == 8 &&
-          sent.msg_lspid == getpid() && sent.msg_stime >= start && received.msg_qnum == 1 &&
-          received.__msg_cbytes == 5 && received.msg_lrpid == getpid() && received.msg_rtime >= start, detail);
+          sent.msg_lspid == getpid() && sent.msg_stime >= start - 1 && received.msg_qnum == 1 &&
+          received.__msg_cbytes == 5 && received.msg_lrpid == getpid() && received.msg_rtime >= start - 1, detail);
 
     // 6. a full queue: EAGAIN with IPC_NOWAIT; more room than msgmnb is
     // root's to give
