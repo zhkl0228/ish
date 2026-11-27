@@ -45,11 +45,13 @@
 
 // What the column's two middle keys are, by the program in the foreground
 // (columnProfileForSession:): tab and / for a shell, an AI agent and most
-// programs; : and / for vi; space and q for a pager
+// programs; : and / for vi; space and q for a pager. An AI agent's Ctrl-C key
+// is its up arrow instead (columnKeysAlways).
 typedef NS_ENUM(NSInteger, ColumnKeyProfile) {
     ColumnKeyProfileDefault,
     ColumnKeyProfileEditor,
     ColumnKeyProfilePager,
+    ColumnKeyProfileAgent,
 };
 
 @interface TerminalViewController () <UIGestureRecognizerDelegate, TabBarViewDelegate, ClipboardShelfDelegate>
@@ -117,11 +119,14 @@ typedef NS_ENUM(NSInteger, ColumnKeyProfile) {
 // (columnKeysAboveKeyboard), where the CPU and the memory leave the room.
 @property UIStackView *columnKeys;
 // With the keyboard down: esc and return, the profile's middle keys
-// (columnProfileKeys) and the keyboard's own two (columnKeysAlways). With it
-// up, those two only, as the bar has the rest: the arrows' pad and Ctrl-C.
+// (columnProfileKeys) and the keyboard's own two (columnKeysAlways, by
+// profile too). With it up, those two only, as the bar has the rest: the
+// arrows' pad and Ctrl-C, or for an AI agent the up arrow, which sends
+// Ctrl-C held: there the prompt's history and a menu's choices go up more
+// often than what runs is interrupted.
 @property NSArray<UIView *> *columnKeysEdge;
 @property NSDictionary<NSNumber *, NSArray<UIView *> *> *columnProfileKeys;
-@property NSArray<UIView *> *columnKeysAlways;
+@property NSDictionary<NSNumber *, NSArray<UIView *> *> *columnKeysAlways;
 @property ColumnKeyProfile columnProfile;
 // The marks of what a held key sends, in its corner (badgeKey:), in the
 // theme's colors as the keys are
@@ -1309,7 +1314,8 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
 // above the home indicator: esc; two keys for what runs (columnProfileKeys,
 // updateColumnProfile): tab and / for a shell, an AI agent and most programs,
 // : and / for vi, space and q for a pager; the arrows' pad (arrowPadKey);
-// Ctrl-C, sent only held (a tap would end what runs); return. Held, esc is
+// Ctrl-C, sent only held (a tap would end what runs), or for an AI agent
+// the up arrow, Ctrl-C held; return. Held, esc is
 // backspace, tab shift-tab, / Ctrl-U (clearing the line) and space b (a
 // pager's page up), each said in a callout before it is let go
 // (columnKeyHeld:) and marked in its key's corner (badgeKey:with:). Esc and /
@@ -1348,10 +1354,16 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
     [self holdKey:interrupt badge:nil
           callout:[@"⌃C " stringByAppendingString:NSLocalizedString(@"Interrupt", @"The column's Ctrl-C key held: what it sends")]
              send:^{ [weakSelf.termView insertSequence:@"\x03"]; }];
+    BarButton *previous = [self columnKey:@"arrow.up" name:NSLocalizedString(@"Up", @"The column's up arrow key, read aloud")];
+    [previous addTarget:self action:@selector(pressColumnUp:) forControlEvents:UIControlEventTouchUpInside];
+    [self holdKey:previous badge:@"⌃C"
+          callout:[@"⌃C " stringByAppendingString:NSLocalizedString(@"Interrupt", @"The column's Ctrl-C key held: what it sends")]
+             send:^{ [weakSelf.termView insertSequence:@"\x03"]; }];
     BarButton *enter = [self columnKey:@"return" name:NSLocalizedString(@"Return", @"The column's return key, read aloud")];
     [enter addTarget:self action:@selector(pressReturn:) forControlEvents:UIControlEventTouchUpInside];
 
-    UIStackView *keys = [[UIStackView alloc] initWithArrangedSubviews:@[escape, tab, colon, space, slash, quit, pad, interrupt, enter]];
+    UIStackView *keys = [[UIStackView alloc] initWithArrangedSubviews:@[escape, tab, colon, space, slash, quit, pad, interrupt,
+                                                                        previous, enter]];
     keys.axis = UILayoutConstraintAxisVertical;
     keys.spacing = 8;
     keys.translatesAutoresizingMaskIntoConstraints = NO;
@@ -1363,8 +1375,14 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
         @(ColumnKeyProfileDefault): @[tab, slash],
         @(ColumnKeyProfileEditor): @[colon, slash],
         @(ColumnKeyProfilePager): @[space, quit],
+        @(ColumnKeyProfileAgent): @[tab, slash],
     };
-    self.columnKeysAlways = @[pad, interrupt];
+    self.columnKeysAlways = @{
+        @(ColumnKeyProfileDefault): @[pad, interrupt],
+        @(ColumnKeyProfileEditor): @[pad, interrupt],
+        @(ColumnKeyProfilePager): @[pad, interrupt],
+        @(ColumnKeyProfileAgent): @[pad, previous],
+    };
     // The meters' room is the column's, down to the keys: the rows that fit
     // in it show (MonitorColumnView's rowsForRoom:)
     [self.monitorColumn.bottomAnchor constraintEqualToAnchor:keys.topAnchor constant:-8].active = YES;
@@ -1512,6 +1530,11 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
              besideKey:key];
 }
 
+// An AI agent's up arrow, with the bar's modifiers as the pad's arrows
+- (void)pressColumnUp:(UIView *)key {
+    [self.termView insertSequence:[self.terminal arrow:'A' modifiers:[self.termView takeBarModifiers]]];
+}
+
 // The middle keys a profile has that are plain text: vi's :, a pager's
 // space and q
 - (void)pressColumnText:(BarButton *)key {
@@ -1631,16 +1654,20 @@ static NSString *ArrowGlyph(char direction) {
 }
 
 // The profile of what runs in a session: a pager's while any program of its
-// foreground job is one (git log's less), else vi's while one is vi, else
-// the default; the default too where the keys are not to follow
+// foreground job is one (git log's less), else vi's while one is vi (an
+// agent's editor for its prompt too), else an AI agent's while one is, else
+// the default; the default too where the keys are not to follow. The agents
+// by their names as they run: claude's own, and kimi's process title (node,
+// then MainThread as it starts, then kimi-code).
 - (ColumnKeyProfile)columnProfileForSession:(TerminalSession *)session {
     if (session == nil || !UserPreferences.shared.columnKeysFollowProgram)
         return ColumnKeyProfileDefault;
-    static NSSet<NSString *> *pagers, *editors;
+    static NSSet<NSString *> *pagers, *editors, *agents;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         pagers = [NSSet setWithArray:@[@"less", @"more", @"man", @"most"]];
         editors = [NSSet setWithArray:@[@"vi", @"vim", @"nvim", @"view", @"vimdiff"]];
+        agents = [NSSet setWithArray:@[@"claude", @"kimi-code"]];
     });
     NSArray<NSString *> *programs = session.foregroundJobPrograms;
     for (NSString *program in programs)
@@ -1649,6 +1676,9 @@ static NSString *ArrowGlyph(char direction) {
     for (NSString *program in programs)
         if ([editors containsObject:program])
             return ColumnKeyProfileEditor;
+    for (NSString *program in programs)
+        if ([agents containsObject:program])
+            return ColumnKeyProfileAgent;
     return ColumnKeyProfileDefault;
 }
 
@@ -1709,11 +1739,13 @@ static NSString *ArrowGlyph(char direction) {
     BOOL up = self.keyboardUp;
     if (self.columnKeys.hidden == shown)
         self.columnKeys.hidden = !shown;
-    // Up, the pad and Ctrl-C, where they fit; down, all the profile's
-    BOOL upKeysFit = up && [self columnHasRoomForKeys:self.columnKeysAlways];
+    // Up, the pad and Ctrl-C (an agent's up arrow), where they fit; down, all
+    // the profile's
+    NSArray<UIView *> *alwaysKeys = self.columnKeysAlways[@(self.columnProfile)];
+    BOOL upKeysFit = up && [self columnHasRoomForKeys:alwaysKeys];
     NSArray<UIView *> *middle = self.columnProfileKeys[@(self.columnProfile)];
     for (UIView *key in self.columnKeys.arrangedSubviews) {
-        BOOL always = [self.columnKeysAlways containsObject:key];
+        BOOL always = [alwaysKeys containsObject:key];
         BOOL wanted = up ? upKeysFit && always
                          : always || [self.columnKeysEdge containsObject:key] || [middle containsObject:key];
         if (key.hidden != !wanted)
