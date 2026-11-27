@@ -1649,8 +1649,13 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
         // (debug trace removed)
 
         // Check if page table changed (mmap/munmap by another thread) EVERY BLOCK.
+        // The TLB, attached all the while, has lost its entries of the pages
+        // changed already (tlb_handle_miss): only one not attached is flushed.
         if (tlb->mem_changes != __atomic_load_n(&tlb->mmu->changes, __ATOMIC_ACQUIRE)) {
-            tlb_flush(tlb);
+            if (tlb->attached == NULL)
+                tlb_flush(tlb);
+            else
+                tlb->mem_changes = __atomic_load_n(&tlb->mmu->changes, __ATOMIC_ACQUIRE);
             memset(cache, 0, sizeof(tlb->block_cache));
             tlb->block_cache_gen = asbestos->invalidate_gen;
             memset(frame->ret_cache, 0, sizeof(frame->ret_cache));

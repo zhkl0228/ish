@@ -152,7 +152,15 @@ __no_instrument void *tlb_handle_miss(struct tlb *tlb, addr_t addr, int type) {
     // change).
     for (int attempt = 0; ; attempt++) {
         gen = __atomic_load_n(&tlb->mmu->changes, __ATOMIC_SEQ_CST);
-        if (gen != tlb->mem_changes)
+        // Attached, the TLB has lost its entries of every page changed since
+        // mem_changes: a change made with the address space's lock held to
+        // read takes them out of the attached TLBs (mmu_tlbs_invalidate), one
+        // held to write has none attached, and an attach after it flushes
+        // (tlb_refresh). Its other entries stand: flushing it whole at each
+        // change cost java's threads, as it maps and protects, a 256 KB
+        // TLB's refill. Not attached (a C access in a syscall), it may have
+        // missed some: flushed.
+        if (gen != tlb->mem_changes && tlb->attached == NULL)
             tlb_flush(tlb);
         tlb->mem_changes = gen;
         ptr = mmu_translate(tlb->mmu, TLB_PAGE(addr), type);
