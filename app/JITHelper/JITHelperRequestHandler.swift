@@ -29,13 +29,21 @@ final class JITHelperRequestHandler: NSObject, NSExtensionRequestHandling {
     func beginRequest(with context: NSExtensionContext) {
         let request = (context.inputItems.first as! NSExtensionItem).userInfo!
         Self.work.async {
+            // Each line with the seconds since the request began: the lines
+            // come back together at its end, and this says how long each
+            // step took (the device's services found, the tunnel made, the
+            // attach)
+            let start = DispatchTime.now().uptimeNanoseconds
             var log: [String] = []
             var reply: [String: Any] = ["outcome": "failed"]
             if let txm = StikJIT.isTXMPresent {
                 reply["txm"] = txm
             }
             do {
-                reply["detail"] = try Self.perform(request) { log.append($0) }
+                reply["detail"] = try Self.perform(request) {
+                    let seconds = Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9
+                    log.append(String(format: "%.3f s: ", seconds) + $0)
+                }
                 reply["outcome"] = "succeeded"
             } catch {
                 reply["detail"] = error.localizedDescription
