@@ -106,6 +106,12 @@ extern NSString *const TerminalSessionNotificationUUIDKey;
 // session. Idempotent.
 - (void)closeSession:(TerminalSession *)session;
 
+// The app being terminated (applicationWillTerminate:): every running
+// session's terminal hung up, as a closed tab's is, and the sessions'
+// processes given till timeout (seconds) to exit. Main thread, which it holds
+// while it waits.
+- (void)hangUpForTerminationWaiting:(NSTimeInterval)timeout;
+
 @end
 
 NS_ASSUME_NONNULL_END

@@ -558,6 +558,15 @@ static void mount_documents(void) {
         exit(0);
 }
 
+// iOS terminating the app while it runs (swiped away in the app switcher, in
+// the foreground or kept alive in the background): the programs in the tabs
+// are told the terminal went away, and given time to finish, rather than
+// killed with the app (TerminalSessionStore). iOS gives this method about five
+// seconds; a suspended app it kills without calling it.
+- (void)applicationWillTerminate:(UIApplication *)application {
+    [TerminalSessionStore.shared hangUpForTerminationWaiting:4];
+}
+
 @end
 
 NSString *const ProcessExitedNotification = @"ProcessExitedNotification";

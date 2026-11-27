@@ -473,6 +473,38 @@ static int start_process(NSArray<NSString *> *command, NSString *directory, Term
     [session notifyChanged];
 }
 
+// The foreground jobs get SIGHUP, as when a tab is closed: Claude Code, for
+// one, shuts down (its writes drained, its SessionEnd hooks run) rather than
+// dying with the app as with kill -9. destroy, not hangup: a writer blocked
+// till the page takes its output, which the main thread, held here, would
+// never let it, gets EIO.
+//
+// Waited for: each session's process, its shell, which goes once its
+// foreground job has and it reads the terminal, hung up. Polled in the process
+// table, not told by processExited:, which comes on the main thread. Nothing
+// reaps them, nor changes the sessions: the app is gone a moment after, and
+// the tabs it saved as it went to the background come back at the next launch.
+- (void)hangUpForTerminationWaiting:(NSTimeInterval)timeout {
+    NSAssert(NSThread.isMainThread, @"sessions are hung up from the main thread");
+    NSMutableArray<NSNumber *> *pids = [NSMutableArray new];
+    for (TerminalSession *session in self.mutableSessions) {
+        if (session.state != TerminalSessionStateRunning)
+            continue;
+        [session.terminal destroy];
+        [pids addObject:@(session.pid)];
+    }
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:timeout];
+    while (pids.count > 0 && deadline.timeIntervalSinceNow > 0) {
+        usleep(20 * 1000);
+        lock(&pids_lock);
+        NSIndexSet *exited = [pids indexesOfObjectsPassingTest:^BOOL(NSNumber *pid, NSUInteger index, BOOL *stop) {
+            return pid_get_task(pid.intValue) == NULL; // a zombie, or gone
+        }];
+        unlock(&pids_lock);
+        [pids removeObjectsAtIndexes:exited];
+    }
+}
+
 - (void)processExited:(NSNotification *)notif {
     int pid = [notif.userInfo[@"pid"] intValue];
     int code = [notif.userInfo[@"code"] intValue];
