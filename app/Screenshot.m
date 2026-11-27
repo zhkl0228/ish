@@ -12,12 +12,16 @@
 #import "SceneDelegate.h"
 #include "kernel/errno.h"
 #include "util/sync.h"
+#include "debug.h"
 
 @interface ScreenshotRequest : NSObject
 // Under screenshot_lock: whether the main thread has drawn it, and what (nil:
-// no terminal window was in front)
+// no terminal window was in front), with what it said of the drawing and how
+// many windows it drew
 @property (nonatomic) BOOL drawn;
 @property (nonatomic, nullable) UIImage *image;
+@property (nonatomic) NSString *said;
+@property (nonatomic) int windowsDrawn;
 @end
 
 @implementation ScreenshotRequest
@@ -26,25 +30,45 @@
 static lock_t screenshot_lock = LOCK_INITIALIZER;
 static cond_t screenshot_cond = COND_INITIALIZER;
 
+static const char *ActivationStateName(UISceneActivationState state) {
+    switch (state) {
+    case UISceneActivationStateUnattached: return "unattached";
+    case UISceneActivationStateForegroundActive: return "active";
+    case UISceneActivationStateForegroundInactive: return "inactive";
+    case UISceneActivationStateBackground: return "background";
+    }
+    return "unknown";
+}
+
 // The main thread's: the windows of iSH's active scenes on the screen of the
 // terminal window in front, each where it is on that screen and over those of
-// lower levels, at the screen's scale; black where there is none (another
-// app's part of the screen in Split View). nil with no terminal window in
-// front (currentTerminalViewController, which an inactive scene is not).
-static UIImage *DrawScreen(void) {
+// lower levels, at the screen's scale, by method; black where there is none
+// (another app's part of the screen in Split View). nil with no terminal
+// window in front (currentTerminalViewController, which an inactive scene is
+// not). What it did goes to said, for the kernel log: the screen, each scene,
+// each window and whether it was drawn, as *drawn counts them.
+static UIImage *DrawScreen(enum screenshot_method method, NSMutableString *said, int *drawn) {
+    [said appendFormat:@"screenshot (%s):", screenshot_method_names[method]];
+    *drawn = 0;
     UIWindowScene *front = currentTerminalViewController.view.window.windowScene;
-    if (front == nil)
+    if (front == nil) {
+        [said appendString:@" no terminal window in front"];
         return nil;
+    }
     UIScreen *screen = front.screen;
+    [said appendFormat:@" screen %@ @%.0f;", NSStringFromCGRect(screen.bounds), screen.scale];
     NSMutableArray<UIWindow *> *windows = [NSMutableArray new];
     for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
-        if (![scene isKindOfClass:UIWindowScene.class] || scene.activationState != UISceneActivationStateForegroundActive)
+        BOOL isWindowScene = [scene isKindOfClass:UIWindowScene.class];
+        BOOL here = isWindowScene && ((UIWindowScene *) scene).screen == screen;
+        [said appendFormat:@" scene %@ %s%s%s;", NSStringFromClass(scene.class), ActivationStateName(scene.activationState),
+                           scene == front ? ", the terminal's" : "", here ? "" : ", not on the screen"];
+        if (!here || scene.activationState != UISceneActivationStateForegroundActive)
             continue;
-        UIWindowScene *windowScene = (UIWindowScene *) scene;
-        if (windowScene.screen != screen)
-            continue;
-        for (UIWindow *window in windowScene.windows) {
-            if (!window.hidden)
+        for (UIWindow *window in ((UIWindowScene *) scene).windows) {
+            if (window.hidden)
+                [said appendFormat:@" %@ hidden;", NSStringFromClass(window.class)];
+            else
                 [windows addObject:window];
         }
     }
@@ -66,21 +90,44 @@ static UIImage *DrawScreen(void) {
         [context fillRect:screen.bounds];
         for (UIWindow *window in windows) {
             CGRect frame = [window convertRect:window.bounds toCoordinateSpace:screen.coordinateSpace];
-            [window drawViewHierarchyInRect:frame afterScreenUpdates:NO];
+            BOOL done;
+            switch (method) {
+            case SCREENSHOT_VIEW:
+                done = [window drawViewHierarchyInRect:frame afterScreenUpdates:NO];
+                break;
+            case SCREENSHOT_VIEW_UPDATED:
+                done = [window drawViewHierarchyInRect:frame afterScreenUpdates:YES];
+                break;
+            case SCREENSHOT_LAYER:
+                CGContextSaveGState(context.CGContext);
+                CGContextTranslateCTM(context.CGContext, frame.origin.x, frame.origin.y);
+                [window.layer renderInContext:context.CGContext];
+                CGContextRestoreGState(context.CGContext);
+                done = YES;
+                break;
+            }
+            [said appendFormat:@" %@ %@ level %.0f alpha %.2f: %s;", NSStringFromClass(window.class),
+                               NSStringFromCGRect(frame), window.windowLevel, window.alpha,
+                               done ? "drawn" : "not drawn"];
+            *drawn += done;
         }
     }];
 }
 
 // On the reading program's thread: drawn on the main thread, which it waits
 // for (a signal ends the wait, as the read's error), and made a PNG here, off
-// the main thread
-int take_app_screenshot(void **png, size_t *size) {
+// the main thread. What the drawing did goes to the kernel log.
+int take_app_screenshot(enum screenshot_method method, void **png, size_t *size) {
     @autoreleasepool {
         ScreenshotRequest *request = [ScreenshotRequest new];
         dispatch_async(dispatch_get_main_queue(), ^{
-            UIImage *image = DrawScreen();
+            NSMutableString *said = [NSMutableString new];
+            int drawn;
+            UIImage *image = DrawScreen(method, said, &drawn);
             lock(&screenshot_lock);
             request.image = image;
+            request.said = said;
+            request.windowsDrawn = drawn;
             request.drawn = YES;
             notify(&screenshot_cond);
             unlock(&screenshot_lock);
@@ -94,9 +141,14 @@ int take_app_screenshot(void **png, size_t *size) {
             }
         }
         UIImage *image = request.image;
+        int windowsDrawn = request.windowsDrawn;
+        NSString *said = request.said;
         unlock(&screenshot_lock);
+        printk("%s\n", said.UTF8String);
         if (image == nil)
             return _EAGAIN;
+        if (windowsDrawn == 0)
+            return _EIO;
         NSData *data = UIImagePNGRepresentation(image);
         *png = malloc(data.length);
         if (*png == NULL)

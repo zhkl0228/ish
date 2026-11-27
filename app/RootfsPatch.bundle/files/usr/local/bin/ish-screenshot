@@ -11,7 +11,7 @@ fi
 file=${1:-/tmp/ish-screenshot.png}
 if ! cat /proc/ish/screenshot > "$file"; then
     rm -f "$file"
-    echo 'ish-screenshot: none taken (refused while iSH is not in front)' >&2
+    echo 'ish-screenshot: none taken: iSH not in front, or no window drawn (dmesg says which)' >&2
     exit 1
 fi
 echo "$file"
