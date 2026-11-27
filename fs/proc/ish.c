@@ -29,6 +29,7 @@ bool (*set_user_default)(const char *name, char *buffer, size_t size);
 bool (*remove_user_default)(const char *name);
 char *(*get_documents_directory)(void);
 int (*open_url)(const char *url, size_t size);
+int (*take_screenshot)(void **png, size_t *size);
 int (*get_thermal_state)(void);
 char *(*get_builtin_jit_report)(void);
 
@@ -388,6 +389,20 @@ static ssize_t proc_ish_write_open_url(struct proc_entry *UNUSED(entry), struct 
     return err < 0 ? err : (ssize_t) data->size;
 }
 
+// What the screen shows of the app, a PNG, drawn at each read from the start
+static int proc_ish_show_screenshot(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    if (take_screenshot == NULL)
+        return _ENODEV;
+    void *png;
+    size_t size;
+    int err = take_screenshot(&png, &size);
+    if (err < 0)
+        return err;
+    proc_buf_append(buf, png, size);
+    free(png);
+    return 0;
+}
+
 struct proc_children proc_ish_children = PROC_CHILDREN({
     {"colors", .show = proc_ish_show_colors},
     {".defaults", S_IFDIR, .readdir = proc_ish_underlying_defaults_readdir},
@@ -399,6 +414,7 @@ struct proc_children proc_ish_children = PROC_CHILDREN({
 #endif
     {"open_url", S_IFREG | 0222, .pwrite = proc_ish_write_open_url},
     {"poll_spin", .show = proc_ish_show_poll_spin, .pwrite = proc_ish_write_poll_spin},
+    {"screenshot", .show = proc_ish_show_screenshot},
     {"thermal", .show = proc_ish_show_thermal},
     {"threads", .show = proc_ish_show_threads},
     {"translations", S_IFREG | 0644, .show = proc_ish_show_translations, .pwrite = proc_ish_write_translations},

@@ -1,0 +1,17 @@
+#!/bin/sh
+# Installed by the iSH app, which rewrites this file when it updates the root.
+# ish-screenshot [FILE]: what the screen shows of iSH now, a PNG, written to
+# FILE (/tmp/ish-screenshot.png if none is named), whose path it prints: for
+# Claude Code to look at, its Read taking an image. iSH's own windows only
+# (/proc/ish/screenshot), and only while iSH is in front.
+if [ $# -gt 1 ]; then
+    echo 'usage: ish-screenshot [FILE]' >&2
+    exit 1
+fi
+file=${1:-/tmp/ish-screenshot.png}
+if ! cat /proc/ish/screenshot > "$file"; then
+    rm -f "$file"
+    echo 'ish-screenshot: none taken (refused while iSH is not in front)' >&2
+    exit 1
+fi
+echo "$file"

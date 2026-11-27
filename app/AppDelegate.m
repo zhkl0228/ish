@@ -29,6 +29,7 @@
 #import "Roots.h"
 #import "TerminalViewController.h"
 #import "UIApplication+OpenURL.h"
+#import "Screenshot.h"
 #import "UserPreferences.h"
 #include "kernel/init.h"
 #include "kernel/calls.h"
@@ -430,6 +431,8 @@ static void mount_documents(void) {
     proc_ish_version = strdup(ishVersion.UTF8String);
     // A program's URL (xdg-open) opens once the person allows it
     open_url = ask_to_open_url;
+    // What the screen shows of the app, for a program to see (ish-screenshot)
+    take_screenshot = take_app_screenshot;
     get_thermal_state = thermal_state;
     // this defaults key is set when taking app store screenshots
     extern const char *uname_hostname_override;

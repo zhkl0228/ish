@@ -145,6 +145,16 @@
             <key>mode</key>
             <integer>493</integer>
         </dict>
+        <!-- what the screen shows of iSH, a PNG for Claude Code to look at (/proc/ish/screenshot) -->
+        <dict>
+            <key>src</key>
+            <string>files/usr/local/bin/ish-screenshot</string>
+            <key>dst</key>
+            <string>/usr/local/bin/ish-screenshot</string>
+            <!-- 0755 -->
+            <key>mode</key>
+            <integer>493</integer>
+        </dict>
         <!-- the npm tools' versions ish-install installs: those the app's AOT images serve
              (benchmark/aojit/publish_app_images.py writes it, and raises the version above) -->
         <dict>

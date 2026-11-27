@@ -19,6 +19,11 @@ extern char *(*get_documents_directory)(void);
 // answered: 0 if it was opened, else the error the write gives. NULL in the
 // command line tool, which has no one to ask.
 extern int (*open_url)(const char *url, size_t size);
+// What the screen shows of the app now, a PNG (/proc/ish/screenshot): 0 with
+// *png malloc'd for the caller to free, or the error the read gives, _EAGAIN
+// while no window of the app is in front, where iOS draws none. NULL in the
+// command line tool, which has no windows.
+extern int (*take_screenshot)(void **png, size_t *size);
 // The processes the meters' details list, those taking the most of the CPUs
 // (app/MonitorSampler.m). Each process (its leader) but init and the zombies:
 // its pid, when it started (a pid used again is another process: start_ticks
