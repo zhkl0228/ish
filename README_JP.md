@@ -6,9 +6,7 @@
 [![shit counter](https://img.shields.io/github/search/ish-app/ish/shit.svg)](https://github.com/ish-app/ish/search?q=shit)
 
 <p align="center">
-<a href="https://ish.app">
-<img src="https://ish.app/assets/github-readme.png">
-</a>
+<img src="docs/screenshots/folded-unfolded.png" alt="iSH" width="860">
 </p>
 
 iSHは、ユーザーモードのAArch64（ARM64）エミュレーションとシステムコールの翻訳を使用して、iOS上でLinuxシェルを実行するプロジェクトです。iSHはAArch64ホスト（Apple silicon Mac、iPhone/iPad、またはコマンドラインツールならarm64 Linux）でのみビルド・実行できます。

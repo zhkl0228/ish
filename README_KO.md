@@ -6,9 +6,7 @@
 [![shit counter](https://img.shields.io/github/search/ish-app/ish/shit.svg)](https://github.com/ish-app/ish/search?q=shit)
 
 <p align="center">
-<a href="https://ish.app">
-<img src="https://ish.app/assets/github-readme.png">
-</a>
+<img src="docs/screenshots/folded-unfolded.png" alt="iSH" width="860">
 </p>
 
 사용자 모드 AArch64(ARM64) 에뮬레이션과 시스템 call 번역을 사용하여 iOS 에서 리눅스 쉘을 실행할 수 있게 해줍니다. iSH는 AArch64 호스트(Apple silicon Mac, iPhone/iPad, 또는 커맨드 라인 도구의 경우 arm64 리눅스)에서만 빌드하고 실행할 수 있습니다.

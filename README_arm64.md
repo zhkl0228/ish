@@ -10,6 +10,10 @@ since been removed, so the guest is AArch64 only. The result is a dramatically f
 compatible Linux environment capable of running **Python, Node.js, Go, Rust, and native
 CLI tools** directly on iPhone and iPad.
 
+<p align="center">
+<img src="docs/screenshots/folded-unfolded.png" alt="iSH on a foldable iPhone, folded and unfolded" width="860">
+</p>
+
 > ## 🚢 Production Use
 >
 > This engine is shipping in **[OpenMinis](https://openminis.app)** as the **Agent Shell Sandbox**,
@@ -19,16 +23,16 @@ CLI tools** directly on iPhone and iPad.
 
 > **Naming note**: *Asbestos* is the upstream project's name for its threaded-code
 > interpreter (see the upstream commit [`d375656f` "Rename the JIT"](https://github.com/ish-app/ish/commit/d375656f)
-> from June 2024). It is **not a JIT** — neither Asbestos nor its predecessor emits machine
-> code at runtime. For each basic block it builds an array of pointers to pre-compiled
-> native "gadget" functions that tail-call one another (the technique Forth interpreters use).
+> from June 2024). Asbestos itself emits no machine code: for each basic block it builds an
+> array of pointers to pre-compiled native "gadget" functions that tail-call one another (the
+> technique Forth interpreters use). This fork adds an **ARM64 guest backend** inside it: new
+> gadgets (`asbestos/guest-arm64/gadgets-aarch64/`) that map AArch64 guest instructions to a
+> few ARM64 host instructions each.
 >
-> What this fork adds is an **ARM64 guest backend** inside that same Asbestos infrastructure:
-> new gadgets (`asbestos/guest-arm64/gadgets-aarch64/`) that map AArch64 guest instructions
-> to a few ARM64 host instructions each — same-architecture dispatch, so each guest
-> instruction costs only a handful of host instructions. The upstream x86 backend is no longer
-> part of this fork. Some prose below says "JIT" as convenient shorthand —
-> read it as "same-arch gadget dispatch," not runtime codegen.
+> On top of Asbestos, this fork has a **native JIT** (`asbestos/guest-arm64/jit.c`), which does
+> emit machine code: it runs the **AOT images** the app links in, and translates other code at
+> run time once iOS lets the app run code it writes (see [Built-in JIT](#built-in-jit)). Below,
+> "JIT" means that one; Asbestos is "the gadgets".
 
 ---
 
@@ -58,6 +62,9 @@ fundamental limits:
 |  |                                                        |  |
 |  |   Decoder  -->  Gadget program  -->  Fiber Blocks      |  |
 |  |   (gen.c)       builder              (block cache)     |  |
+|  |                                                        |  |
+|  |   Native JIT (jit.c): AOT images linked into the app,  |  |
+|  |   and code translated at run time in its code region   |  |
 |  |                                                        |  |
 |  |   --- 48-bit Virtual Memory (4-level page table) ---   |  |
 |  |       TLB (8192 entries) + CoW + Lazy Reservations     |  |
@@ -92,9 +99,10 @@ calls — each gadget loads the next pointer from the program stream and branche
 (`br x8`). No executable memory is allocated, no machine code is generated at runtime.
 (The native JIT on top of it, `asbestos/guest-arm64/jit.c`, runs the AOT images the app links
 in, and translates at run time only when a debugger has had the app, which iOS requires for it:
-Xcode, or StikDebug on the device. From iOS 26 on A15/M2 and later (TXM) the debugger must also
-allocate the code region, which iSH asks for by iOS 26's JIT protocol as it starts: StikDebug
-with its `universal.js`. `/proc/ish/jit` says where the region came from, or why there is none.)
+Xcode, or the app's own JIT helper (see [Built-in JIT](#built-in-jit)). From iOS 26 on A15/M2
+and later (TXM) the debugger must also allocate the code region, which iSH asks for by iOS 26's
+JIT protocol: the helper's StikJIT answers it with its `universal.js`. `/proc/ish/jit` says
+where the region came from, or why there is none.)
 The host-code overhead per guest instruction is a few ARM64 instructions inside the
 corresponding gadget.
 
@@ -241,19 +249,27 @@ ninja -C build-arm64-release
 
 The iSH-ARM64 app embeds two extensions for it: `iSHJITHelper-ARM64` (`app/JITHelper`), which
 attaches StikJIT's debugger to iSH, gives it its code region and lets it go, and
-`iSHLoopbackTunnel-ARM64` (`app/LoopbackTunnel`), the loopback tunnel StikJIT reaches the device's
-own services through. StikJIT is built from source with `app/StikJIT/patches`, and the app links
-idevice (Rust) for its on-device pairing: run `app/StikJIT/build.sh` (it needs `xcodegen`) and
-`app/idevice/build.sh` (it needs `rustup` with `aarch64-apple-ios`) once before building the app in
-Xcode; CI runs both.
+`iSHLoopbackTunnel-ARM64` (`app/LoopbackTunnel`), the loopback VPN StikJIT reaches the device's
+own services through, up only while the helper needs it. StikJIT is
+[zhkl0228/StikJIT](https://github.com/zhkl0228/StikJIT) (`deps/StikJIT`): one tunnel to the
+device for the DDI check and the debug session, the code region's pages written with their answers
+read many at a time. It links idevice (Rust) built from
+[zhkl0228/idevice](https://github.com/zhkl0228/idevice)'s `stikjit` branch (`deps/idevice`),
+the tunnel's TLS and TCP compiled for speed. Run `app/StikJIT/build.sh` (it needs `xcodegen` and
+`rustup` with `aarch64-apple-ios`) and `app/idevice/build.sh` (idevice again, for the on-device
+pairing) once before building the app in Xcode; CI runs both.
 
-In Settings → JIT, get the device's pairing file: on iOS 27, Pair This Device (iSH advertises
-itself as a computer; tap "Pair with iSH" in Settings › Privacy & Security › Developer Mode and
-type the code iSH shows), or import one made on a computer with `idevice_pair`. Then enable it,
-now or as iSH starts. iSH starts without it, and the programs compiled once the
-helper has given the JIT its code region run as native code (`/proc/ish/jit` says where the region
-came from, or why there is none). It needs Developer Mode, the app signed with a development
-profile (`get-task-allow`), and the Network Extensions capability for the app and its tunnel.
+In Settings → Built-in JIT, get the device's pairing file: on iOS 27, Pair This Device (iSH
+advertises itself as a computer; tap "Pair with iSH" in Settings › Privacy & Security › Developer
+Mode and type the code iSH shows), or import one made on a computer with `idevice_pair`. Then
+enable it, now or as iSH starts: then three seconds after the start, once the app's own launch is
+done, so the two do not peak together. iSH starts without it, and the programs compiled once the
+helper has given the JIT its code region run as native code. The region's size is a setting
+(128 MB by default, in arenas of 128 MB): enabling the JIT takes about a second for the attach,
+which debugserver waits out, and half a second per 512 MB, a byte written in each of its 16 KB
+pages. `/proc/ish/jit` says where the region came from, or why there is none, and the helper's
+last steps with their times. It needs Developer Mode, the app signed with a development profile
+(`get-task-allow`), and the Network Extensions capability for the app and its tunnel.
 
 ### Tests
 
@@ -364,7 +380,8 @@ built the x86 backend (`benchmark/run.sh` now tests ARM64 only). Full report:
 | Category | Examples |
 |----------|---------|
 | **Package managers** | apk, pip, npm, npx, uv |
-| **Languages** | Python 3, Node.js 22, Go, Perl, Ruby, Lua |
+| **Languages** | Python 3.14, Node.js 24, Go, Java (OpenJDK 25), Perl, Ruby, Lua |
+| **AI agents** | Claude Code, Kimi Code (`ish-install claude kimi`) |
 | **Dev tools** | git, curl, wget, ssh, vim, nano |
 | **Build tools** | gcc, g++, cmake, make, meson |
 | **Data tools** | sqlite3, jq, yt-dlp, ffmpeg (via native offload) |
@@ -383,9 +400,7 @@ built the x86 backend (`benchmark/run.sh` now tests ARM64 only). Full report:
 
 ## Commit History
 
-86 commits on `feature-arm64`, 101 files changed, +23,198 / -7,620 lines.
-
-Major milestones:
+Major milestones (`git log` has the rest):
 1. **Interpreter foundation**: fiber_enter/exit, basic block compilation (to gadget program), TLB
 2. **Instruction coverage**: 200+ ARM64 opcodes including full NEON/Crypto
 3. **48-bit address space**: 4-level page table, lazy reservations
@@ -394,6 +409,10 @@ Major milestones:
 6. **Rust/uv support**: FUTEX_WAIT_BITSET, PMULL, BFM, demand-mapped reads
 7. **Agent integration**: ISHShellExecutor, DebugServer, Native Offload, Bind Mounts
 8. **Stability**: 50+ bug fixes for concurrency, memory leaks, use-after-free, deadlocks
+9. **Native JIT and AOT images**: native code at run time in a debugger-prepared code region, and
+   recorded translations of bash, Python, Node.js, Claude Code and more linked into the app
+10. **Built-in JIT helper**: StikJIT through a loopback VPN, the device's pairing done on the device
+11. **Foldable iPhone**: the status bar's column for meters and the keys that follow what runs
 
 ---
 

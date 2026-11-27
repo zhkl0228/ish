@@ -8,6 +8,10 @@
 guest 只支持 AArch64。结果是一个性能和兼容性大幅提升的 Linux 环境，
 能在 iPhone / iPad 上直接运行 **Python、Node.js、Go、Rust 和原生 CLI 工具**。
 
+<p align="center">
+<img src="docs/screenshots/folded-unfolded.png" alt="iSH 在折叠屏 iPhone 上，折叠与展开" width="860">
+</p>
+
 > ## 🚢 生产环境使用
 >
 > 本引擎已在 **[OpenMinis](https://openminis.app)** 中作为 **Agent Shell Sandbox** 投入使用，
@@ -16,13 +20,14 @@ guest 只支持 AArch64。结果是一个性能和兼容性大幅提升的 Linux
 
 > **命名说明**：*Asbestos* 是上游项目给自家 threaded-code 解释器起的名字（见上游 commit
 > [`d375656f` "Rename the JIT"](https://github.com/ish-app/ish/commit/d375656f)，2024 年 6 月）。
-> 它**不是 JIT** —— Asbestos 及其前身都不会在运行时生成机器码，而是为每个基本块构造一个
-> 指针数组（指向预编译的原生 gadget 函数），各 gadget 通过尾调用衔接（Forth 解释器采用的技术）。
->
-> 本 fork 所做的是在这个 Asbestos 框架里**新增一个 ARM64 guest 后端**：
+> Asbestos 本身不生成机器码：它为每个基本块构造一个指针数组（指向预编译的原生 gadget 函数），
+> 各 gadget 通过尾调用衔接（Forth 解释器采用的技术）。本 fork 在其中**新增了 ARM64 guest 后端**：
 > 新的 gadget（`asbestos/guest-arm64/gadgets-aarch64/`）把 AArch64 guest 指令映射到若干条
-> ARM64 host 指令——同架构分派，每条 guest 指令只需几条 host 指令。上游的 x86 后端已不在本 fork 中。
-> 下文部分地方用 "JIT" 作为简写，请理解为"同架构 gadget 分派"，而非运行时代码生成。
+> ARM64 host 指令。
+>
+> 在 Asbestos 之上，本 fork 还有一个**原生 JIT**（`asbestos/guest-arm64/jit.c`），它确实生成机器码：
+> 运行 App 链接进来的 **AOT 镜像**，并在 iOS 允许 App 执行自己写出的代码之后，于运行时翻译其余
+> 代码（见[内置 JIT](#内置-jit)）。下文的 "JIT" 指的就是它，Asbestos 则称为 "gadget"。
 >
 > 英文版: [README_arm64.md](README_arm64.md)
 
@@ -54,7 +59,10 @@ guest 只支持 AArch64。结果是一个性能和兼容性大幅提升的 Linux
 |  |   Decoder  -->  Gadget program  -->  Fiber Blocks      |  |
 |  |   (gen.c)       builder              (block cache)     |  |
 |  |                                                        |  |
-|  |   --- 48-bit 虚拟内存 (4 级页表) ---                    |  |
+|  |   原生 JIT (jit.c)：App 链接的 AOT 镜像，              |  |
+|  |   以及运行时翻译进代码区的代码                         |  |
+|  |                                                        |  |
+|  |   --- 48-bit 虚拟内存 (4 级页表) ---                   |  |
 |  |       TLB (8192 项) + CoW + 惰性预留                   |  |
 |  +--------------------------------------------------------+  |
 |                                                              |
@@ -84,9 +92,9 @@ guest 只支持 AArch64。结果是一个性能和兼容性大幅提升的 Linux
 `unsigned long` 数组，交替存放预编译 ARM64 gadget 函数指针和内联操作数。执行流程是一串尾调用 ——
 每个 gadget 从程序流读取下一条指针并 `br` 跳过去。**不分配可执行内存，不在运行时生成任何机器码**。
 （其上的原生 JIT，`asbestos/guest-arm64/jit.c`，运行 App 链接进来的 AOT 镜像；只有被调试器挂过
-才在运行时翻译，这是 iOS 的要求：Xcode，或设备上的 StikDebug。iOS 26 起在 A15/M2 及以后的机型上
-（TXM），代码区还必须由调试器分配，iSH 启动时用 iOS 26 的 JIT 协议去要：StikDebug 配它的
-`universal.js`。`/proc/ish/jit` 会说明代码区从哪来，或者为什么没有。）
+才在运行时翻译，这是 iOS 的要求：Xcode，或 App 自带的 JIT 辅助扩展（见[内置 JIT](#内置-jit)）。
+iOS 26 起在 A15/M2 及以后的机型上（TXM），代码区还必须由调试器分配，iSH 用 iOS 26 的 JIT 协议去要：
+辅助扩展里的 StikJIT 用它的 `universal.js` 应答。`/proc/ish/jit` 会说明代码区从哪来，或者为什么没有。）
 每条 guest 指令的 host 指令开销就是对应 gadget 中的几条 ARM64 指令。
 
 **关键文件:**
@@ -228,15 +236,23 @@ ninja -C build-arm64-release
 
 iSH-ARM64 App 为此嵌入两个扩展：`iSHJITHelper-ARM64`（`app/JITHelper`），把 StikJIT 的调试器挂到
 iSH 上、交给它代码区、再放开它；`iSHLoopbackTunnel-ARM64`（`app/LoopbackTunnel`），StikJIT 经由这条
-回环隧道访问设备自身的服务。StikJIT 用 `app/StikJIT/patches` 从源码编译，App 为本机配对链接 idevice
-（Rust）：在 Xcode 里编译 App 之前先各运行一次 `app/StikJIT/build.sh`（需要 `xcodegen`）和
-`app/idevice/build.sh`（需要 `rustup` 及 `aarch64-apple-ios` 目标）；CI 会运行它们。
+回环 VPN 访问设备自身的服务，只在辅助扩展需要时开着。StikJIT 用的是
+[zhkl0228/StikJIT](https://github.com/zhkl0228/StikJIT)（`deps/StikJIT`）：查 DDI 和调试会话共用一条
+到设备的隧道，给代码区逐页写字节时成批读回应答。它链接的 idevice（Rust）从
+[zhkl0228/idevice](https://github.com/zhkl0228/idevice) 的 `stikjit` 分支（`deps/idevice`）编译，
+隧道的 TLS 和 TCP 按速度优化编译。在 Xcode 里编译 App 之前先各运行一次 `app/StikJIT/build.sh`
+（需要 `xcodegen` 和带 `aarch64-apple-ios` 目标的 `rustup`）和 `app/idevice/build.sh`（设备内配对
+用的 idevice）；CI 会运行它们。
 
-在 设置 → JIT 里取得设备的配对文件：iOS 27 上用 Pair This Device（iSH 把自己广播成一台电脑；在
-设置 › 隐私与安全性 › 开发者模式 里点“Pair with iSH”，输入 iSH 显示的配对码），或者导入在电脑上用
-`idevice_pair` 生成的配对文件。然后启用：立即启用，或在 iSH 启动时启用。iSH 启动时不等它；辅助扩展把代码区交给 JIT 之后编译的程序以原生代码运行（
-`/proc/ish/jit` 说明代码区从哪来，或者为什么没有）。需要开发者模式、用开发描述文件签名（
-`get-task-allow`），以及 App 和隧道扩展的 Network Extensions 能力。
+在 设置 → Built-in JIT 里取得设备的配对文件：iOS 27 上用 Pair This Device（iSH 把自己广播成一台
+电脑；在 设置 › 隐私与安全性 › 开发者模式 里点“Pair with iSH”，输入 iSH 显示的配对码），或者导入
+在电脑上用 `idevice_pair` 生成的配对文件。然后启用：立即启用，或在 iSH 启动时启用。启动时启用的
+话，会在启动 3 秒后、App 自身的启动完成之后才进行，两波开销不叠在一起。iSH 启动时不等它；辅助
+扩展把代码区交给 JIT 之后编译的程序以原生代码运行。代码区大小可以设置（默认 128 MB，按 128 MB
+分区）：启用 JIT 时 attach 约需 1 秒（debugserver 在等待），每 512 MB 代码区约 0.5 秒（每个 16 KB
+页写一个字节）。`/proc/ish/jit` 说明代码区从哪来、或者为什么没有，以及辅助扩展上一次各步骤的
+耗时。需要开发者模式、用开发描述文件签名（`get-task-allow`），以及 App 和隧道扩展的 Network
+Extensions 能力。
 
 ### 测试
 
@@ -337,7 +353,8 @@ x86 minirootfs 缺 bind-tools/解析器配置，非模拟器 bug。
 | 类别 | 示例 |
 |------|------|
 | **包管理器** | apk、pip、npm、npx、uv |
-| **语言** | Python 3、Node.js 22、Go、Perl、Ruby、Lua |
+| **语言** | Python 3.14、Node.js 24、Go、Java（OpenJDK 25）、Perl、Ruby、Lua |
+| **AI 智能体** | Claude Code、Kimi Code（`ish-install claude kimi`） |
 | **开发工具** | git、curl、wget、ssh、vim、nano |
 | **构建工具** | gcc、g++、cmake、make、meson |
 | **数据工具** | sqlite3、jq、yt-dlp、ffmpeg（通过 native offload） |
@@ -356,9 +373,7 @@ x86 minirootfs 缺 bind-tools/解析器配置，非模拟器 bug。
 
 ## 提交历史
 
-`feature-arm64` 分支上 86+ 提交，101+ 个文件变更，+23,000+ / -7,600+ 行。
-
-主要里程碑:
+主要里程碑（其余见 `git log`）:
 1. **解释器基础**: fiber_enter/exit、基本块编译（到 gadget 程序）、TLB
 2. **指令覆盖**: 200+ ARM64 指令含完整 NEON/Crypto
 3. **48-bit 地址空间**: 4 级页表、惰性预留
@@ -367,6 +382,10 @@ x86 minirootfs 缺 bind-tools/解析器配置，非模拟器 bug。
 6. **Rust/uv 支持**: FUTEX_WAIT_BITSET、PMULL、BFM、按需映射读取
 7. **Agent 集成**: ISHShellExecutor、DebugServer、Native Offload、Bind Mounts
 8. **稳定性**: 50+ 个 bug 修复（并发、内存泄漏、use-after-free、死锁）
+9. **原生 JIT 与 AOT 镜像**: 在调试器准备好的代码区里运行时生成原生代码；bash、Python、Node.js、
+   Claude Code 等录制好的翻译链接进 App
+10. **内置 JIT 辅助扩展**: StikJIT 经回环 VPN 工作，设备配对在设备本机完成
+11. **折叠屏 iPhone**: 状态栏那一列放圆环和随程序变化的按键
 
 ---
 

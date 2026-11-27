@@ -2,31 +2,44 @@
 
 > ## 🚀 ARM64 Fork Notice
 >
-> **This repository is a fork of [ish-app/ish](https://github.com/ish-app/ish)** that adds a
-> **native ARM64 guest backend** to upstream iSH's threaded-code interpreter (*Asbestos*,
-> renamed from *jit* upstream in 2024 — [ish-app/ish@d375656f](https://github.com/ish-app/ish/commit/d375656f)).
-> It emulates AArch64 Linux on Apple Silicon. The guest is AArch64 only: upstream's x86 (i386)
-> guest backend, and its Linux-kernel variant (iSH+Linux), have been removed.
+> **This repository is a fork of [ish-app/ish](https://github.com/ish-app/ish)** that runs
+> **AArch64 Linux on iPhone and iPad**, made for the **foldable iPhone** first. The guest is
+> AArch64 only: upstream's x86 (i386) guest and its Linux-kernel variant (iSH+Linux) have been
+> removed.
 >
-> Asbestos is **not a JIT** — it doesn't emit machine code at runtime. For each basic block
-> it builds an array of pointers to pre-compiled native "gadget" functions that tail-call
-> each other (the threaded-code technique Forth interpreters use). This fork's contribution
-> is the **ARM64 guest backend** inside that framework: new hand-written ARM64 gadgets that
-> map each AArch64 guest instruction to just a handful of host instructions — same-architecture
-> dispatch, so the overhead per guest instruction is small.
+> **Guest code runs three ways**, each taking what the one before cannot:
+> - **AOT images**: native translations of the code that matters in bash, busybox, musl,
+>   Python, Node.js, Claude Code, the JVM, git, gh, OpenSSH and OpenSSL, recorded by CI and
+>   linked into the app. They run as native code with nothing more needed.
+> - **Built-in JIT** (`asbestos/guest-arm64/jit.c`): translates the rest at run time, into a
+>   code region iOS lets run once a debugger has had the app (on iOS 26 with TXM, one the
+>   debugger prepared). iSH is its own debugger's client: an extension of the app attaches
+>   [StikJIT](https://github.com/zhkl0228/StikJIT) through a loopback VPN to the device's own
+>   services, prepares the region and detaches, a few seconds after the app starts. It needs
+>   Developer Mode, a development-signed app and a pairing file, which iOS 27 lets iSH make on
+>   the device itself (Settings → Built-in JIT).
+> - **Asbestos**: upstream's threaded-code interpreter, with this fork's hand-written ARM64
+>   gadgets, a handful of host instructions for each guest instruction and no executable memory.
+>   All code runs here until the JIT has its region, and without one.
 >
-> **Key enhancements over upstream:**
-> - **Native ARM64 gadget dispatch** — same-architecture, 2-12x faster than upstream's x86 emulation for compute
-> - **48-bit virtual address space** — 4-level page table supports V8/Go/Rust runtimes
-> - **Node.js 22 / npm / npx** — V8 guard pages, binary patch, `--jitless` injection
-> - **Go and Rust** — large VA reservations, signal frame alignment, FUTEX_WAIT_BITSET, PMULL
-> - **Full NEON + Crypto** — AES/SHA/CRC32 instructions for TLS and hashing at native-ish speed
-> - **Agent integration** — `ISHShellExecutor` (Obj-C shell API), `DebugServer` (JSON-RPC over HTTP),
->   `Native Offload` (bypass emulation for selected binaries), bind mounts for host↔guest file sharing
-> - **iOS-first rootfs** — Alpine 3.21 aarch64 with full `apk` ecosystem and versioned overlay patching
+> **And:**
+> - **48-bit virtual address space**: a 4-level page table, for the V8, Go and Rust runtimes
+> - **`ish-install`** on an **Alpine 3.24** root: Python 3.14, Node.js 24, Claude Code, Kimi Code,
+>   Go, OpenJDK 25, gcc, clang, Redis and MariaDB, by group or all at once (`--cn` for mirrors in
+>   China), and bash, zsh or fish as root's shell
+> - **Full NEON + Crypto**: AES, SHA and CRC32 instructions for TLS and hashing
+> - **The foldable iPhone's column**: the right edge iOS gives the status bar carries the device's
+>   CPU, memory and JIT meters, and keys that follow what runs (esc, tab, return and /; the arrows'
+>   pad and Ctrl-C, or an AI agent's up and down arrows; `:` for vi, space and q for a pager)
+> - **Terminal**: tabs that come back in their directories, a clipboard history, programs'
+>   notifications (the bell, OSC 9 and 777), a keyboard bar as wide as the keyboard
+> - **Agent integration**: `ISHShellExecutor` (Obj-C shell API), `DebugServer` (JSON-RPC over
+>   HTTP), `Native Offload` (bypass emulation for selected binaries), bind mounts for host↔guest
+>   file sharing
 >
-> **Performance (ARM64 vs upstream's x86 emulation, compute-heavy):** C `int_arith_2M` **12x faster**,
-> Python `fib(30)` **9.2x faster**, `sum(1M)` **10.2x faster**, shell `seq+awk 100K` **7.2x faster**.
+> **Performance (Asbestos's ARM64 gadgets vs upstream's x86 emulation, compute-heavy):** C
+> `int_arith_2M` **12x faster**, Python `fib(30)` **9.2x faster**, `sum(1M)` **10.2x faster**,
+> shell `seq+awk 100K` **7.2x faster**.
 >
 > **Full docs:** [README_arm64.md](README_arm64.md) · [中文版](README_arm64_zh.md) ·
 > [Performance report](benchmark/BENCHMARK_PERF.md) · [Compatibility report](benchmark/BENCHMARK_COMPAT.md)
@@ -45,9 +58,15 @@
 [![shit counter](https://img.shields.io/github/search/ish-app/ish/shit.svg)](https://github.com/ish-app/ish/search?q=shit)
 
 <p align="center">
-<a href="https://ish.app">
-<img src="https://ish.app/assets/github-readme.png">
-</a>
+<img src="docs/screenshots/folded-unfolded.png" alt="iSH on a foldable iPhone, folded and unfolded" width="860">
+<br>
+<sub>Folded and unfolded: the meters and the keys in the column iOS gives the status bar</sub>
+</p>
+
+<p align="center">
+<img src="docs/screenshots/claude-code.png" alt="Claude Code running in iSH" width="640">
+<br>
+<sub>Claude Code, installed with <code>ish-install claude</code>, and the column's keys for an AI agent</sub>
 </p>
 
 A project to get a Linux shell running on iOS, using usermode AArch64 (ARM64) emulation and syscall translation.
@@ -62,7 +81,7 @@ For the current status of the project, check the issues tab, and the commit logs
 
 # Hacking
 
-This project has a git submodule, make sure to clone with `--recurse-submodules` or run `git submodule update --init` after cloning.
+This project has git submodules (libarchive, and for the app's built-in JIT StikJIT and idevice), make sure to clone with `--recurse-submodules` or run `git submodule update --init` after cloning.
 
 iSH builds and runs on an AArch64 host only: an Apple silicon Mac (the app, or the command line tool), an iPhone or iPad, or an arm64 Linux machine (the command line tool).
 
@@ -74,10 +93,11 @@ You'll need these things to build the project:
  - Clang and LLD (on mac, `brew install llvm`, on linux, `sudo apt install clang lld` or `sudo pacman -S clang lld` or whatever)
  - sqlite3 (this is so common it may already be installed on linux and is definitely already installed on mac. if not, do something like `sudo apt install libsqlite3-dev`)
  - libarchive (`brew install libarchive`, `sudo port install libarchive`, `sudo apt install libarchive-dev`) TODO: bundle this dependency
+ - For the iOS app: xcodegen (`brew install xcodegen`), and rustup with the `aarch64-apple-ios` target (`rustup target add aarch64-apple-ios`)
 
 ## Build for iOS
 
-Open the project in Xcode, open iSH.xcconfig, and change `ROOT_BUNDLE_IDENTIFIER` to something unique. You'll also need to update the development team ID in the project (not target!) build settings. Then choose the `iSH-ARM64` scheme and click Run. There are scripts that should do everything else automatically: the build fetches the root filesystem the app ships and the AOT images it links (`app/fetch-aot.py`, see [benchmark/aojit/README.md](benchmark/aojit/README.md)). If you run into any problems, open an issue and I'll try to help.
+Open the project in Xcode, open iSH.xcconfig, and change `ROOT_BUNDLE_IDENTIFIER` to something unique. You'll also need to update the development team ID in the project (not target!) build settings. Run `app/StikJIT/build.sh` (StikJIT and its idevice, from `deps/`) and `app/idevice/build.sh` (the on-device pairing's idevice) once, as CI does; then choose the `iSH-ARM64` scheme and click Run. There are scripts that should do everything else automatically: the build fetches the root filesystem the app ships and the AOT images it links (`app/fetch-aot.py`, see [benchmark/aojit/README.md](benchmark/aojit/README.md)). If you run into any problems, open an issue and I'll try to help.
 
 ## Build command line tool for testing
 
