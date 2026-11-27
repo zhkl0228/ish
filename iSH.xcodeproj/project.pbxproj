@@ -247,6 +247,10 @@
 		CBB7FAD71BCF0DCE56594538 /* JITHelperRequestHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F77181B7A04CE7F6E2AD5D9 /* JITHelperRequestHandler.swift */; };
 		4602C0A3EB05F494DEE39C2D /* BackgroundTasks.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 47BF4935815D8A2653ECC82D /* BackgroundTasks.framework */; };
 		E0654F36D17D87DC20085DBC /* OnDevicePairing.m in Sources */ = {isa = PBXBuildFile; fileRef = 7DDB87C0D363C6E97289A145 /* OnDevicePairing.m */; };
+		5C2EE4A0D1B7C35F0E8A9308 /* ShareViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 5C2EE4A0D1B7C35F0E8A9301 /* ShareViewController.m */; };
+		5C2EE4A0D1B7C35F0E8A9309 /* AppGroup.m in Sources */ = {isa = PBXBuildFile; fileRef = BB9C7B84240A240E00F5D4F0 /* AppGroup.m */; };
+		5C2EE4A0D1B7C35F0E8A930A /* iSHShare ARM64.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 5C2EE4A0D1B7C35F0E8A9305 /* iSHShare ARM64.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		5C2EE4A0D1B7C35F0E8A930B /* ShareInbox.m in Sources */ = {isa = PBXBuildFile; fileRef = 5C2EE4A0D1B7C35F0E8A9307 /* ShareInbox.m */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXBuildRule section */
@@ -349,6 +353,13 @@
 			remoteGlobalIDString = 25AD929F0213D8255CB3601A;
 			remoteInfo = "iSHLoopbackTunnel-ARM64";
 		};
+		5C2EE4A0D1B7C35F0E8A9314 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = BB792B461F96D8E000FFB7A4 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 5C2EE4A0D1B7C35F0E8A9310;
+			remoteInfo = "iSHShare-ARM64";
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -370,6 +381,7 @@
 			files = (
 				AAF20050AF96D90D00FFB7A4 /* iSHFileProvider ARM64.appex in Embed Foundation Extensions */,
 				56E5FA57740186FA3C7A0901 /* iSHJITHelper ARM64.appex in Embed Foundation Extensions */,
+				5C2EE4A0D1B7C35F0E8A930A /* iSHShare ARM64.appex in Embed Foundation Extensions */,
 				C8BF293A5E1AAEDD6FA0CD21 /* iSHLoopbackTunnel ARM64.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
@@ -710,6 +722,13 @@
 		47BF4935815D8A2653ECC82D /* BackgroundTasks.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = BackgroundTasks.framework; path = System/Library/Frameworks/BackgroundTasks.framework; sourceTree = SDKROOT; };
 		60D7BE736CF4B47198E225C1 /* OnDevicePairing.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = OnDevicePairing.h; sourceTree = "<group>"; };
 		7DDB87C0D363C6E97289A145 /* OnDevicePairing.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = OnDevicePairing.m; sourceTree = "<group>"; };
+		5C2EE4A0D1B7C35F0E8A9301 /* ShareViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = ShareViewController.m; sourceTree = "<group>"; };
+		5C2EE4A0D1B7C35F0E8A9302 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		5C2EE4A0D1B7C35F0E8A9303 /* Share.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Share.entitlements; sourceTree = "<group>"; };
+		5C2EE4A0D1B7C35F0E8A9304 /* ShareARM64.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = ShareARM64.xcconfig; sourceTree = "<group>"; };
+		5C2EE4A0D1B7C35F0E8A9305 /* iSHShare ARM64.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = "iSHShare ARM64.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
+		5C2EE4A0D1B7C35F0E8A9306 /* ShareInbox.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ShareInbox.h; sourceTree = "<group>"; };
+		5C2EE4A0D1B7C35F0E8A9307 /* ShareInbox.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = ShareInbox.m; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -737,6 +756,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		C82587C4F40F49CF1F26425F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		5C2EE4A0D1B7C35F0E8A930E /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -775,6 +801,7 @@
 				BB0B848E2586A4CF00208600 /* XcodeDefault.xcconfig */,
 				BB0B859C2586F19000208600 /* XcodeRelease.xcconfig */,
 				859E2D36EE8146A2CE1DE45D /* JITHelperARM64.xcconfig */,
+				5C2EE4A0D1B7C35F0E8A9304 /* ShareARM64.xcconfig */,
 				A1399BE30725580CC53DF76C /* LoopbackTunnelARM64.xcconfig */,
 			);
 			name = Configs;
@@ -850,6 +877,8 @@
 				650B337322EA235C00B4C03E /* PasteboardDevice.m */,
 				5C2EE4A0D1B7C35F0E8A9102 /* Screenshot.h */,
 				5C2EE4A0D1B7C35F0E8A9103 /* Screenshot.m */,
+				5C2EE4A0D1B7C35F0E8A9306 /* ShareInbox.h */,
+				5C2EE4A0D1B7C35F0E8A9307 /* ShareInbox.m */,
 				5C2EE4A0D1B7C35F0E8A9202 /* UIActions.h */,
 				5C2EE4A0D1B7C35F0E8A9203 /* UIActions.m */,
 				5C2EE4A0D1B7C35F0E8A9212 /* DeviceStatus.h */,
@@ -925,6 +954,7 @@
 				BB21A16F2689041500BD19B4 /* libfakefs.a */,
 				AA9C2BB72F44A3DD00F41633 /* iSH ARM64 ffmpeg.app */,
 				7784D4470E41B6E21AFA053B /* iSHJITHelper ARM64.appex */,
+				5C2EE4A0D1B7C35F0E8A9305 /* iSHShare ARM64.appex */,
 				378263D49E2685E2E7005F65 /* iSHLoopbackTunnel ARM64.appex */,
 			);
 			name = Products;
@@ -998,6 +1028,7 @@
 				BB88F4912154760800A341FD /* FileProvider */,
 				14F250A88670631024F6C9C9 /* Built-in JIT */,
 				727351C6915144CC008E4E83 /* JITHelper */,
+				5C2EE4A0D1B7C35F0E8A930C /* Share */,
 				71C448D61854E3D4573A74FD /* LoopbackTunnel */,
 			);
 			path = app;
@@ -1274,6 +1305,16 @@
 			path = JITHelper;
 			sourceTree = "<group>";
 		};
+		5C2EE4A0D1B7C35F0E8A930C /* Share */ = {
+			isa = PBXGroup;
+			children = (
+				5C2EE4A0D1B7C35F0E8A9302 /* Info.plist */,
+				5C2EE4A0D1B7C35F0E8A9303 /* Share.entitlements */,
+				5C2EE4A0D1B7C35F0E8A9301 /* ShareViewController.m */,
+			);
+			path = Share;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXLegacyTarget section */
@@ -1369,6 +1410,7 @@
 				AAF20060AF96D90D00FFB7A4 /* PBXTargetDependency */,
 				311BE065BEA6046E602B0918 /* PBXTargetDependency */,
 				8A8207AFB71DF59F301CF267 /* PBXTargetDependency */,
+				5C2EE4A0D1B7C35F0E8A9315 /* PBXTargetDependency */,
 			);
 			name = "iSH-ARM64";
 			productName = "iSH ARM64";
@@ -1492,6 +1534,23 @@
 			productReference = 7784D4470E41B6E21AFA053B /* iSHJITHelper ARM64.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		5C2EE4A0D1B7C35F0E8A9310 /* iSHShare-ARM64 */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 5C2EE4A0D1B7C35F0E8A9311 /* Build configuration list for PBXNativeTarget "iSHShare-ARM64" */;
+			buildPhases = (
+				5C2EE4A0D1B7C35F0E8A930D /* Sources */,
+				5C2EE4A0D1B7C35F0E8A930E /* Frameworks */,
+				5C2EE4A0D1B7C35F0E8A930F /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "iSHShare-ARM64";
+			productName = "iSHShare ARM64";
+			productReference = 5C2EE4A0D1B7C35F0E8A9305 /* iSHShare ARM64.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -1566,6 +1625,7 @@
 				497F6CE3254E5E4C00C82F46 /* MakeXcodeAutoCompleteWork */,
 				74B674687BE68C2FE768F439 /* iSH-ARM64-ffmpeg */,
 				B3731B17CA3FA382C2E3F908 /* iSHJITHelper-ARM64 */,
+				5C2EE4A0D1B7C35F0E8A9310 /* iSHShare-ARM64 */,
 				25AD929F0213D8255CB3601A /* iSHLoopbackTunnel-ARM64 */,
 			);
 		};
@@ -1658,6 +1718,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		45766647569BAD8E7F7D04F8 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		5C2EE4A0D1B7C35F0E8A930F /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -1892,6 +1959,7 @@
 				AA000022AF96D90D00FFB7A4 /* iOSFS.m in Sources */,
 				AA000023AF96D90D00FFB7A4 /* PasteboardDevice.m in Sources */,
 				5C2EE4A0D1B7C35F0E8A9101 /* Screenshot.m in Sources */,
+				5C2EE4A0D1B7C35F0E8A930B /* ShareInbox.m in Sources */,
 				5C2EE4A0D1B7C35F0E8A9201 /* UIActions.m in Sources */,
 				5C2EE4A0D1B7C35F0E8A9211 /* DeviceStatus.m in Sources */,
 				AA000100AF96D90D00FFB7A4 /* AboutAppearanceViewController.m in Sources */,
@@ -2018,6 +2086,15 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		5C2EE4A0D1B7C35F0E8A930D /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5C2EE4A0D1B7C35F0E8A9308 /* ShareViewController.m in Sources */,
+				5C2EE4A0D1B7C35F0E8A9309 /* AppGroup.m in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -2066,6 +2143,12 @@
 			name = "iSHLoopbackTunnel-ARM64";
 			target = 25AD929F0213D8255CB3601A /* iSHLoopbackTunnel-ARM64 */;
 			targetProxy = 4F9D66A41F456F59FD9A3B48 /* PBXContainerItemProxy */;
+		};
+		5C2EE4A0D1B7C35F0E8A9315 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = "iSHShare-ARM64";
+			target = 5C2EE4A0D1B7C35F0E8A9310 /* iSHShare-ARM64 */;
+			targetProxy = 5C2EE4A0D1B7C35F0E8A9314 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -2305,6 +2388,22 @@
 			};
 			name = Release;
 		};
+		5C2EE4A0D1B7C35F0E8A9312 /* Debug-ApplePleaseFixFB19282108 */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 5C2EE4A0D1B7C35F0E8A9304 /* ShareARM64.xcconfig */;
+			buildSettings = {
+				DEVELOPMENT_TEAM = K8Q74NT2BG;
+			};
+			name = "Debug-ApplePleaseFixFB19282108";
+		};
+		5C2EE4A0D1B7C35F0E8A9313 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 5C2EE4A0D1B7C35F0E8A9304 /* ShareARM64.xcconfig */;
+			buildSettings = {
+				DEVELOPMENT_TEAM = K8Q74NT2BG;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -2430,6 +2529,15 @@
 			buildConfigurations = (
 				7275D8027866C332532A98E3 /* Debug-ApplePleaseFixFB19282108 */,
 				A67DA9FC72FADCF626401FBF /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		5C2EE4A0D1B7C35F0E8A9311 /* Build configuration list for PBXNativeTarget "iSHShare-ARM64" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5C2EE4A0D1B7C35F0E8A9312 /* Debug-ApplePleaseFixFB19282108 */,
+				5C2EE4A0D1B7C35F0E8A9313 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

@@ -32,6 +32,7 @@
 #import "Screenshot.h"
 #import "UIActions.h"
 #import "DeviceStatus.h"
+#import "ShareInbox.h"
 #import "UserPreferences.h"
 #include "kernel/init.h"
 #include "kernel/calls.h"
@@ -444,6 +445,8 @@ static void mount_documents(void) {
     get_network_report = device_network_report;
     get_power_report = device_power_report;
     get_device_report = device_device_report;
+    // What other apps share with iSH, moved into Documents/inbox
+    ShareInboxStart();
     get_thermal_state = thermal_state;
     // this defaults key is set when taking app store screenshots
     extern const char *uname_hostname_override;
