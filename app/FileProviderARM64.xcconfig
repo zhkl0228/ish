@@ -17,7 +17,7 @@ MARKETING_VERSION = 2.3.5
 
 // Must match the host app (AppARM64.xcconfig): iOS rejects an extension
 // whose version differs from its containing app.
-CURRENT_PROJECT_VERSION = 846
+CURRENT_PROJECT_VERSION = 847
 
 // Header search paths for the FileProvider sources (fs/fake-db.h, kernel/errno.h).
 HEADER_SEARCH_PATHS = $(inherited) $(SRCROOT)
