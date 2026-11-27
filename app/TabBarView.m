@@ -72,6 +72,8 @@ static NSString *SymbolForProgram(NSString *_Nullable program) {
 @property (readonly) UIView *capsule;
 @property (readonly) CGRect capsuleFrame;
 @property (readonly) UIImageView *icon;
+// Over the icon, which it leaves room for, while the tab's agent works
+@property (readonly) UIActivityIndicatorView *spinner;
 @property (readonly) UILabel *label;
 // What it did unseen: output, a job that ended, or a bell (a program's
 // notification too)
@@ -93,9 +95,6 @@ static NSString *SymbolForProgram(NSString *_Nullable program) {
 // unseen
 @property TerminalSessionAgent agent;
 @property BOOL agentStopped;
-// The symbol the icon shows, and whether it breathes (an agent at work)
-@property (nullable) NSString *iconSymbol;
-@property BOOL iconBreathes;
 @end
 
 @implementation TabItemView
@@ -111,6 +110,13 @@ static NSString *SymbolForProgram(NSString *_Nullable program) {
             [UIImageSymbolConfiguration configurationWithPointSize:12 weight:UIImageSymbolWeightSemibold];
         _icon.contentMode = UIViewContentModeCenter;
         _icon.isAccessibilityElement = NO;
+
+        // the icon's size (a 12-point symbol), from the medium one's 20
+        _spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
+        _spinner.transform = CGAffineTransformMakeScale(0.7, 0.7);
+        _spinner.hidesWhenStopped = YES;
+        _spinner.isAccessibilityElement = NO;
+        _spinner.translatesAutoresizingMaskIntoConstraints = NO;
 
         _label = [UILabel new];
         _label.font = TabFont();
@@ -150,6 +156,7 @@ static NSString *SymbolForProgram(NSString *_Nullable program) {
         content.spacing = kCapsuleSpacing;
         content.translatesAutoresizingMaskIntoConstraints = NO;
         [self addSubview:content];
+        [self addSubview:_spinner];
 
         _trailingConstraint = [content.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-kCapsulePadding - kTabSpacing / 2];
         [NSLayoutConstraint activateConstraints:@[
@@ -158,6 +165,8 @@ static NSString *SymbolForProgram(NSString *_Nullable program) {
             [content.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
             [self.widthAnchor constraintGreaterThanOrEqualToConstant:kMinTabWidth + kTabSpacing],
             [self.widthAnchor constraintLessThanOrEqualToConstant:kMaxTabWidth + kTabSpacing],
+            [_spinner.centerXAnchor constraintEqualToAnchor:_icon.centerXAnchor],
+            [_spinner.centerYAnchor constraintEqualToAnchor:_icon.centerYAnchor],
             [_dot.widthAnchor constraintEqualToConstant:6],
             [_dot.heightAnchor constraintEqualToConstant:6],
             [_actionButton.widthAnchor constraintEqualToConstant:kActionSize],
@@ -516,6 +525,7 @@ static NSString *SymbolForProgram(NSString *_Nullable program) {
         UIColor *text = item.exited ? exitedText : item.tabSelected ? self.foreground : dimText;
         item.label.textColor = text;
         item.icon.tintColor = item.agentStopped ? UIColor.systemGreenColor : text;
+        item.spinner.color = text;
         item.dot.backgroundColor = UIColor.systemBlueColor;
         item.check.tintColor = UIColor.systemGreenColor;
         item.bell.tintColor = UIColor.systemOrangeColor;
@@ -525,24 +535,23 @@ static NSString *SymbolForProgram(NSString *_Nullable program) {
     }];
 }
 
-// The icon at a tab's start: its program's (an X once its shell exited), an
-// agent at work's breathing, and one that stopped since the tab was looked at
-// a green check (applyColors' tint) till it works again
+// The icon at a tab's start: its program's (an X once its shell exited); an
+// agent at work's, a spinner in its place; and one that stopped since the tab
+// was looked at, a green check (applyColors' tint) till it works again. The
+// symbol's own breathing (NSSymbolBreatheEffect) did not move on a phone
+// (846, 2026-11-27: six screenshots of it alike, a still star to the eye).
 - (void)updateIconOfItem:(TabItemView *)item program:(nullable NSString *)program {
     NSString *symbol = item.exited ? @"xmark.circle"
         : item.agentStopped ? @"checkmark.circle.fill"
         : SymbolForProgram(program);
-    // the same symbol not set again, which would start its breathing over
-    if (![symbol isEqualToString:item.iconSymbol]) {
-        item.iconSymbol = symbol;
-        item.icon.image = [UIImage systemImageNamed:symbol];
+    item.icon.image = [UIImage systemImageNamed:symbol];
+    if (item.agent == TerminalSessionAgentWorking) {
+        item.icon.alpha = 0;
+        [item.spinner startAnimating];
+    } else {
+        item.icon.alpha = 1;
+        [item.spinner stopAnimating];
     }
-    BOOL breathes = item.agent == TerminalSessionAgentWorking;
-    if (breathes && !item.iconBreathes)
-        [item.icon addSymbolEffect:[NSSymbolBreatheEffect effect]];
-    else if (!breathes && item.iconBreathes)
-        [item.icon removeAllSymbolEffects];
-    item.iconBreathes = breathes;
 }
 
 // What a tab shows at its end: the restart arrow once its shell exited; else,
