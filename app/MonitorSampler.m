@@ -61,6 +61,12 @@ const NSUInteger kMonitorHistoryLength = 60;
 
 // The most processes counted at once
 #define MAX_PROCESSES 1024
+// The least share of the CPUs a process is listed with: the details show a
+// whole percent, and one under half of one is 0%. Those are the idle ones,
+// which then ranked by next to nothing: a daemon in a poll without end
+// (s6-ipcserverd, utmps's) wakes each second (fs/poll.c's bounded wait), some
+// 30 us, and so came before those in a read, whose time does not move at all.
+#define MIN_LISTED_SHARE 0.005
 
 // A CPU's ticks (or all of theirs) between two readings. A CPU's counters are
 // 32 bits (natural_t), all of theirs their sum: a difference taken in 32 bits
@@ -154,11 +160,14 @@ static struct ticks_between TicksBetween(struct cpu_usage last, struct cpu_usage
         NSNumber *before = _lastProcessTimes[key];
         if (before == nil)
             continue;
+        double share = MIN(1, (double) (p->cpu_us - before.unsignedLongLongValue) / available);
+        if (share < MIN_LISTED_SHARE)
+            continue;
         MonitorProcess *process = [MonitorProcess new];
         process.pid = p->pid;
         process.startTicks = p->start_ticks;
         process.name = [NSString stringWithUTF8String:p->comm];
-        process.cpuShare = MIN(1, (double) (p->cpu_us - before.unsignedLongLongValue) / available);
+        process.cpuShare = share;
         [counted addObject:process];
     }
     free(processes);
