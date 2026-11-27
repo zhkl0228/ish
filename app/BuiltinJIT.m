@@ -309,9 +309,20 @@ static char *BuiltinJITReport(void) {
 
 #pragma mark Enabling
 
+// Three seconds after the start, once the app's launch is done rather than
+// with it: iOS launching the app, its window, the terminal's web view and
+// the boot kept the device's cores busy for its first second and a half,
+// and the JIT's start (the loopback tunnel, the helper, the attach and the
+// code region's pages) in the same second made a peak of more than three
+// cores. A JIT enabled meanwhile (Settings) is found translating then.
 - (void)startIfEnabled {
-    if (self.enabledAtStart)
-        [self enable];
+    if (!self.enabledAtStart)
+        return;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), _queue, ^{
+        [self run:@"Enabling the JIT" with:^NSString *{
+            return [self enableJIT];
+        }];
+    });
 }
 
 - (void)enable {

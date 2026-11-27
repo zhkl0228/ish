@@ -60,7 +60,8 @@ extern NSNotificationName const BuiltinJITChangedNotification;
 
 // Enables the JIT now, if it does not translate already
 - (void)enable;
-// At the start, if enabledAtStart
+// At the start, if enabledAtStart: three seconds after it, once the app's
+// launch is done
 - (void)startIfEnabled;
 // Reaches the device's services and mounts the developer disk image (which
 // enable does too), to see that all is there

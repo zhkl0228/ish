@@ -392,7 +392,8 @@ static void mount_documents(void) {
     [OnDevicePairing registerBackgroundTask];
     bootError = [self boot];
     // iSH runs from here as it does without the JIT; it translates once the
-    // built-in JIT, if enabled in Settings, has its code region
+    // built-in JIT, if enabled in Settings, has its code region (asked for
+    // three seconds on, once the launch is done)
     if (bootError == 0)
         [BuiltinJIT.shared startIfEnabled];
 
