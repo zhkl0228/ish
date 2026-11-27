@@ -14,9 +14,9 @@
 //  full and for 30 s after (red then: the details have it always); the
 //  heat, by name, while it is more than nominal; each but the CPU while the
 //  column has the room for it (rowsForRoom:). A tap (VoiceOver's activation)
-//  shows their details (MonitorDetailViewController). Under them, at the
-//  column's bottom, the terminal's keys (TerminalViewController's columnKeys)
-//  have the room the network's rates and the processes had.
+//  shows their details (MonitorDetailViewController). Right under them the
+//  terminal's keys (TerminalViewController's columnKeys), which have the room
+//  the network's rates and the processes had.
 //
 
 #import <UIKit/UIKit.h>
@@ -57,6 +57,10 @@ NS_ASSUME_NONNULL_BEGIN
 // The height of the CPU and the memory, the meters the column keeps: what is
 // put under them gives way for them (TerminalViewController's keys)
 @property (readonly) CGFloat leastHeight;
+// The bottom of the rows shown, which the column's height chooses
+// (rowsForRoom:): what is put under them follows them, up as they are fewer
+// (TerminalViewController's keys)
+@property (readonly) NSLayoutYAxisAnchor *rowsBottomAnchor;
 @end
 
 NS_ASSUME_NONNULL_END

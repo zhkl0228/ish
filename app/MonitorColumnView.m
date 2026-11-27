@@ -183,6 +183,10 @@ static UIColor *GaugeColor(double fraction) {
 // would have it come and go
 @property (nonatomic) BOOL showsJIT;
 @property CFTimeInterval jitShownUntil;
+// From the column's top, as tall as the rows shown (layoutSubviews):
+// rowsBottomAnchor
+@property UILayoutGuide *shownRows;
+@property NSLayoutConstraint *shownRowsHeight;
 
 @end
 
@@ -207,6 +211,16 @@ static UIColor *GaugeColor(double fraction) {
             [meters.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-2 * kStatusInset],
         ]];
         self.meters = meters;
+        UILayoutGuide *shownRows = [UILayoutGuide new];
+        [self addLayoutGuide:shownRows];
+        self.shownRowsHeight = [shownRows.heightAnchor constraintEqualToConstant:0];
+        [NSLayoutConstraint activateConstraints:@[
+            [shownRows.topAnchor constraintEqualToAnchor:self.topAnchor],
+            [shownRows.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
+            [shownRows.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
+            self.shownRowsHeight,
+        ]];
+        self.shownRows = shownRows;
 
         // The CPU's last minute over its gauge, first under the status bar, its
         // top a CPU's whole share at least (the guest's one thread busy) or
@@ -374,7 +388,10 @@ static UIColor *GaugeColor(double fraction) {
 }
 
 // The rows chosen, and those shown put in their places, one under another:
-// those that were shown move with the keyboard, in its animation
+// those that were shown move with the keyboard, in its animation. Their
+// bottom (rowsBottomAnchor) set only as it changes: what follows it is laid
+// out again, in the column's superview, which sets the column's height by
+// other things than it.
 - (void)layoutSubviews {
     [super layoutSubviews];
     [self chooseRows];
@@ -385,6 +402,9 @@ static UIColor *GaugeColor(double fraction) {
     }
     for (UIView *row in shown)
         row.frame = [self frameOfRow:row shown:shown];
+    CGFloat height = [self heightOfRows:shown];
+    if (self.shownRowsHeight.constant != height)
+        self.shownRowsHeight.constant = height;
 }
 
 - (CGRect)metersFrame {
@@ -398,6 +418,10 @@ static UIColor *GaugeColor(double fraction) {
 
 - (NSLayoutXAxisAnchor *)metersCenterXAnchor {
     return self.meters.centerXAnchor;
+}
+
+- (NSLayoutYAxisAnchor *)rowsBottomAnchor {
+    return self.shownRows.bottomAnchor;
 }
 
 - (void)tapped:(UITapGestureRecognizer *)tap {

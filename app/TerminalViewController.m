@@ -112,12 +112,12 @@ typedef NS_ENUM(NSInteger, ColumnKeyProfile) {
 // above the keyboard and the keys over it (the paste key's row), or the home
 // indicator (aboveKeys: applyBottomPad)
 @property NSLayoutConstraint *monitorColumnTop;
-// Keys at the bottom of the column, while it is shown (updateColumnKeys,
-// addColumnKeys): with the keyboard down, what a program's menus take
-// (claude's: / for its commands, esc to leave one) without the keyboard over
-// the terminal. The meters stay above them. With the keyboard up, the arrows'
-// pad and Ctrl-C only, at the column's bottom above the keyboard's bar
-// (columnKeysAboveKeyboard), where the CPU and the memory leave the room.
+// Keys in the column, right under its meters, while it is shown
+// (updateColumnKeys, addColumnKeys): with the keyboard down, what a program's
+// menus take (claude's: / for its commands, esc to leave one) without the
+// keyboard over the terminal. With the keyboard up, the arrows' pad and
+// Ctrl-C only, while the CPU and the memory leave them the room above the
+// keyboard's bar (columnKeysAboveKeyboard).
 @property UIStackView *columnKeys;
 // The keys' capsule of glass, as the system's own bars in the column are
 // (Feather's tab bar and its toolbar's buttons, the phone's screenshots): the
@@ -149,6 +149,8 @@ typedef NS_ENUM(NSInteger, ColumnKeyProfile) {
 @property CFTimeInterval padLastSent;
 @property CGFloat padDistance;
 @property NSTimer *padRepeat;
+// Where the keys' room ends, the lowest the capsule goes: by the home
+// indicator, or above the keyboard's bar (addColumnKeys, updateColumnKeys)
 @property NSLayoutConstraint *columnKeysAtBottom;
 @property NSLayoutConstraint *columnKeysAboveKeyboard;
 // A tap of one: the keyboard's click is heard only while a keyboard shows
@@ -1112,10 +1114,10 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
 
 // The terminal's bottom: above the keyboard, and with it away (put down, or
 // none on screen) above the home indicator, whose bar would be over the last
-// line. Whether that moved it. The column's keys, the keyboard up, are 8
-// points above the same (the keyboard's window over them hid them), the
-// meters over them; they move with the terminal, in the layout pass that
-// moves it.
+// line. Whether that moved it. The column keys' room, the keyboard up, ends
+// 8 points above the same (the keyboard's window over the keys hid them), the
+// meters over it; it moves with the terminal, in the layout pass that moves
+// it.
 - (BOOL)applyBottomPad {
     CGFloat pad = MAX(self.keyboardPad, self.view.safeAreaInsets.bottom);
     if (self.columnKeysAboveKeyboard.constant != -(pad + 8))
@@ -1327,15 +1329,15 @@ static NSURL *SavedTabOutputURL(NSString *uuid) {
 
 // A key's side; the capsule's width (the system's in the column is 49
 // points); the keys' ends in it, as far from its ends as from its sides; the
-// keys' gap; the capsule's bottom over the screen's (addColumnKeys)
+// keys' gap; the bottom of the keys' room over the screen's (addColumnKeys)
 static const CGFloat kColumnKeySide = 40;
 static const CGFloat kColumnKeysWidth = 48;
 static const CGFloat kColumnKeysInset = 4;
 static const CGFloat kColumnKeysSpacing = 4;
 static const CGFloat kColumnKeysBottom = 24;
 
-// One over another at the bottom of the column, under the meters' middle,
-// in a capsule of glass by the home indicator: esc; two keys for what runs
+// One over another right under the column's meters, on their middle, in a
+// capsule of glass: esc; two keys for what runs
 // (columnProfileKeys, updateColumnProfile): tab and / for a shell, an AI
 // agent and most programs, : and / for vi, space and q for a pager; the
 // arrows' pad (arrowPadKey) and Ctrl-C, sent only held (a tap would end what
@@ -1414,25 +1416,40 @@ static const CGFloat kColumnKeysBottom = 24;
         @(ColumnKeyProfilePager): @[pad, interrupt],
         @(ColumnKeyProfileAgent): @[previous, next],
     };
-    // The keys in their capsule, kColumnKeysInset from its ends; the meters'
-    // room is the column's, down to the capsule: the rows that fit in it show
-    // (MonitorColumnView's rowsForRoom:)
+    // The keys in their capsule, kColumnKeysInset from its ends. Its room, as
+    // tall as it, is at the column's bottom: the meters' room is the column's,
+    // down to it, and the rows that fit in it show (MonitorColumnView's
+    // rowsForRoom:). The capsule is 8 points under the rows shown, not at
+    // its room: the keys follow the CPU and the memory down, the column's
+    // room left under them, where they had stuck to its bottom, the room left
+    // between. Never under its room's top: where it was, while the CPU, shown
+    // whatever the room, has not the room.
+    UILayoutGuide *room = [UILayoutGuide new];
+    [self.view addLayoutGuide:room];
+    NSLayoutConstraint *underMeters = [glass.topAnchor constraintEqualToAnchor:self.monitorColumn.rowsBottomAnchor
+                                                                      constant:8];
+    underMeters.priority = UILayoutPriorityRequired - 1;
     [NSLayoutConstraint activateConstraints:@[
         [glass.widthAnchor constraintEqualToConstant:kColumnKeysWidth],
         [glass.centerXAnchor constraintEqualToAnchor:self.monitorColumn.metersCenterXAnchor],
         [keys.centerXAnchor constraintEqualToAnchor:glass.centerXAnchor],
         [keys.topAnchor constraintEqualToAnchor:glass.topAnchor constant:kColumnKeysInset],
         [keys.bottomAnchor constraintEqualToAnchor:glass.bottomAnchor constant:-kColumnKeysInset],
-        [self.monitorColumn.bottomAnchor constraintEqualToAnchor:glass.topAnchor constant:-8],
+        [room.leadingAnchor constraintEqualToAnchor:glass.leadingAnchor],
+        [room.widthAnchor constraintEqualToAnchor:glass.widthAnchor],
+        [room.heightAnchor constraintEqualToAnchor:glass.heightAnchor],
+        [self.monitorColumn.bottomAnchor constraintEqualToAnchor:room.topAnchor constant:-8],
+        underMeters,
+        [glass.topAnchor constraintLessThanOrEqualToAnchor:room.topAnchor],
     ]];
-    // Where the system's bar in the column ends: 23.7 points over the screen's
-    // bottom folded, 23.3 unfolded (Feather's tab bar, the phone's
-    // screenshots), in the safe area's bottom 34 kept for the home indicator,
-    // which is in the screen's middle, not under the column
-    self.columnKeysAtBottom = [glass.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor
-                                                                 constant:-kColumnKeysBottom];
+    // The room ends where the system's bar in the column does: 23.7 points
+    // over the screen's bottom folded, 23.3 unfolded (Feather's tab bar, the
+    // phone's screenshots), in the safe area's bottom 34 kept for the home
+    // indicator, which is in the screen's middle, not under the column
+    self.columnKeysAtBottom = [room.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor
+                                                                constant:-kColumnKeysBottom];
     // as the terminal's bottom is (applyBottomPad)
-    self.columnKeysAboveKeyboard = [glass.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor];
+    self.columnKeysAboveKeyboard = [room.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor];
     self.columnKeyFeedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
     self.holdFeedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
     self.holdChangeFeedback = [UISelectionFeedbackGenerator new];
@@ -1771,15 +1788,13 @@ static NSString *ArrowGlyph(char direction) {
     [self.columnKeyFeedback impactOccurred];
 }
 
-// Shown while the column is, at its bottom, the meters over them: with the
-// keyboard down six, the profile's (updateColumnProfile), by the home
-// indicator as the system's bar is; up the arrows' pad and Ctrl-C, above the
-// keyboard's bar, while the CPU and the memory have the room over them. They are what the bar has
-// not: it has esc, tab and / (folded or with the column hidden their only
-// place), and the column had them again. Up, the keys were under the memory
-// once, the column's last meter then, as far from the keyboard as the meters
-// had room for. Folded, the column has not the room for two from the status
-// bar's region (174) to the bar (371): it squashed the memory.
+// Shown while the column is, right under its meters: with the keyboard down
+// six, the profile's (updateColumnProfile); up the arrows' pad and Ctrl-C,
+// while the CPU and the memory leave them the room above the keyboard's bar.
+// They are what the bar has not: it has esc, tab and / (folded or with the
+// column hidden their only place), and the column had them again. Folded,
+// the column has not the room for two from the status bar's region (174) to
+// the bar (371): it squashed the memory.
 - (void)updateColumnKeys {
     BOOL shown = !self.monitorColumn.hidden;
     BOOL up = self.keyboardUp;
@@ -1803,7 +1818,7 @@ static NSString *ArrowGlyph(char direction) {
     BOOL glassHidden = !shown || !anyKey;
     if (self.columnKeysGlass.hidden != glassHidden)
         self.columnKeysGlass.hidden = glassHidden;
-    // Hidden, at the bottom still (a place of its own). Only what changes, as
+    // Hidden, its room at the bottom still (a place of its own). Only what changes, as
     // everything updateMonitorColumn sets, the one to go first, so that both
     // never hold at once: it runs in updateViewConstraints, where a constraint
     // set may ask for the constraints again (814 set them every time).
