@@ -18,7 +18,8 @@
 // msr fpcr, AdvSIMD's floating point and by-element multiplies, ssubw,
 // pmull (zip's CRC-32); gh's mrs cntfrq_el0. And accesses through a tagged
 // pointer (bits 56..63, as Linux's TBI lets them be): the JIT's TLB check
-// leaves those to the gadgets.
+// leaves those to the gadgets. And the SHA1 and SHA256 instructions and
+// CRC32's, which HWCAP offers (SHA2, CRC32): OpenSSL's SHA-256 runs them.
 //
 // Checked: each instruction (or pair: ldxr and stxr), put in a copy of a
 // template made at run time, run once in a fresh copy (the gadgets: a block
@@ -302,6 +303,25 @@ extern const uint32_t insn_template[], insn_template_slot[], insn_template_end[]
     X("SIMD", 1, 0, 0, "pmull2 v3.8h, v4.16b, v5.16b")                                            \
     X("SIMD", 1, 0, 0, "pmull v6.1q, v7.1d, v0.1d")                                               \
     X("SIMD", 1, 0, 0, "pmull2 v1.1q, v2.2d, v3.2d")                                              \
+    X("SHA1, SHA256", 1, 0, 0, "sha256h q0, q1, v2.4s")                                           \
+    X("SHA1, SHA256", 1, 0, 0, "sha256h2 q3, q4, v5.4s")                                          \
+    X("SHA1, SHA256", 1, 0, 0, "sha256su0 v6.4s, v7.4s")                                          \
+    X("SHA1, SHA256", 1, 0, 0, "sha256su1 v0.4s, v1.4s, v2.4s")                                   \
+    X("SHA1, SHA256", 1, 0, 0, "sha256su1 v3.4s, v3.4s, v3.4s")                                   \
+    X("SHA1, SHA256", 1, 0, 0, "sha1c q4, s5, v6.4s")                                             \
+    X("SHA1, SHA256", 1, 0, 0, "sha1p q7, s0, v1.4s")                                             \
+    X("SHA1, SHA256", 1, 0, 0, "sha1m q2, s3, v4.4s")                                             \
+    X("SHA1, SHA256", 1, 0, 0, "sha1su0 v5.4s, v6.4s, v7.4s")                                     \
+    X("SHA1, SHA256", 1, 0, 0, "sha1h s7, s0")                                                    \
+    X("SHA1, SHA256", 1, 0, 0, "sha1su1 v1.4s, v2.4s")                                            \
+    X("CRC32", 1, 0, 0, "crc32x w9, w10, x11")                                                    \
+    X("CRC32", 1, 0, 0, "crc32cx w15, w16, x17")                                                  \
+    X("CRC32", 1, 0, 0, "crc32b w1, w2, w3")                                                      \
+    X("CRC32", 1, 0, 0, "crc32h w4, w4, w5")                                                      \
+    X("CRC32", 1, 0, 0, "crc32w w12, w13, w14")                                                   \
+    X("CRC32", 1, 0, 0, "crc32cb w6, w7, w8")                                                     \
+    X("CRC32", 1, 0, 0, "crc32ch w9, w9, w9")                                                     \
+    X("CRC32", 1, 0, 0, "crc32cw w10, w1, w2")                                                    \
     X("tagged pointers", 2, 2, 9, "orr x9, x2, x3, lsl #56\n ldr x10, [x9]")                       \
     X("tagged pointers", 2, 2, 9, "orr x9, x2, x3, lsl #56\n str x11, [x9, #8]")                   \
     X("tagged pointers", 2, 2, 9, "orr x9, x2, x3, lsl #56\n ldp w10, w11, [x9, #4]")              \
@@ -311,6 +331,7 @@ extern const uint32_t insn_template[], insn_template_slot[], insn_template_end[]
 __asm__(".section .rodata\n"
         ".arch_extension lse\n"
         ".arch_extension crypto\n"
+        ".arch_extension crc\n"
         ".p2align 2\n"
         ".global insn_words\n"
         "insn_words:\n" INSNS(ASM_TEXT) ".global insn_words_end\n"
@@ -421,6 +442,20 @@ static void describe(char *buf, size_t size, const struct io *a, const struct io
             break;
         }
 #undef ADD
+}
+
+// References for the known values: CRC-32 (and CRC-32C, by its polynomial) of
+// the n bytes of v from crc, as crc32x and crc32cx compute it; a 32-bit rotate
+static uint32_t crc32_ref(uint32_t crc, uint64_t v, int n, uint32_t poly) {
+    for (int i = 0; i < n; i++) {
+        crc ^= (uint8_t) (v >> (8 * i));
+        for (int b = 0; b < 8; b++)
+            crc = (crc >> 1) ^ (poly & (0u - (crc & 1)));
+    }
+    return crc;
+}
+static uint32_t ror32(uint32_t x, int r) {
+    return x >> r | x << (32 - r);
 }
 
 // The JIT's mode and how many runs make a block hot, from /proc/ish/jit;
@@ -575,6 +610,34 @@ int main(void) {
             got = o->ox[d - 1];
             snprintf(detail, sizeof(detail), "%#llx, want %#llx", (unsigned long long) got, (unsigned long long) want);
             check(d == 1 ? "madd x1, x2, x3, x4: the product and sum" : "madd x8, x9, x10, x11: the product and sum",
+                  got == want, detail);
+        } else if (strcmp(t->text, "sha256su0 v6.4s, v7.4s") == 0) {
+            // Vd[e] + sigma0 of {Vd[1], Vd[2], Vd[3], Vn[0]}[e]
+            uint32_t vd[4], vn[4], res[4], ref[4];
+            memcpy(vd, o->q[6], 16);
+            memcpy(vn, o->q[7], 16);
+            memcpy(res, o->oq[6], 16);
+            for (int e = 0; e < 4; e++) {
+                uint32_t w = e < 3 ? vd[e + 1] : vn[0];
+                ref[e] = vd[e] + (ror32(w, 7) ^ ror32(w, 18) ^ (w >> 3));
+            }
+            snprintf(detail, sizeof(detail), "%08x %08x %08x %08x, want %08x %08x %08x %08x", res[3], res[2], res[1],
+                     res[0], ref[3], ref[2], ref[1], ref[0]);
+            check("sha256su0 v6.4s, v7.4s: the message schedule's sigma0 step", memcmp(res, ref, 16) == 0, detail);
+        } else if (strcmp(t->text, "sha1h s7, s0") == 0) {
+            uint32_t ref[4] = {ror32((uint32_t) o->q[0][0], 2), 0, 0, 0}, res[4];
+            memcpy(res, o->oq[7], 16);
+            snprintf(detail, sizeof(detail), "%08x %08x %08x %08x, want %08x and zeroes", res[3], res[2], res[1],
+                     res[0], ref[0]);
+            check("sha1h s7, s0: s0 rotated left by 30, the rest of v7 zeroed", memcmp(res, ref, 16) == 0, detail);
+        } else if (strcmp(t->text, "crc32x w9, w10, x11") == 0 || strcmp(t->text, "crc32cx w15, w16, x17") == 0) {
+            int c = t->text[5] == 'c';
+            int d = c ? 15 : 9;
+            want = crc32_ref((uint32_t) o->x[d], o->x[d + 1], 8, c ? 0x82F63B78u : 0xEDB88320u);
+            got = o->ox[d - 1];
+            snprintf(detail, sizeof(detail), "%#llx, want %#llx", (unsigned long long) got, (unsigned long long) want);
+            check(c ? "crc32cx w15, w16, x17: CRC-32C of x17's 8 bytes from w16"
+                    : "crc32x w9, w10, x11: CRC-32 of x11's 8 bytes from w10",
                   got == want, detail);
         }
     }

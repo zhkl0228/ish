@@ -1409,6 +1409,12 @@ static bool emit_simd_more(struct em *e, uint32_t x) {
     } else if ((x & 0xFFFFFC00u) == 0x4E284800u) {                            // aese
         d_in = true;
     } else if ((x & 0xFFFFFC00u) == 0x4E286800u) {                            // aesmc
+    } else if ((x & 0xFFE08C00u) == 0x5E000000u && ((x >> 12) & 7) != 7) {   // sha1c/p/m/su0, sha256h/h2/su1
+        // (HWCAP's SHA2: OpenSSL's SHA-256; opcode 7 is unallocated)
+        m = true;
+        d_in = true;
+    } else if ((x & 0xFFFFCC00u) == 0x5E280800u && ((x >> 12) & 3) != 3) {   // sha1h, sha1su1, sha256su0
+        d_in = ((x >> 12) & 3) != 0;                                           // sha1h does not read Sd
     } else if ((x & 0xBFE0FC00u) == 0x0E002C00u) {                            // smov
         bool ok = (imm5 & 1) || (imm5 & 3) == 2 || ((x & 0x40000000u) && (imm5 & 7) == 4);
         if (!ok) return false;
@@ -3375,7 +3381,7 @@ void ish_aot_register(const struct aot_module *m) {
 
 // Bump whenever the code emitted for some guest instruction, stub or exit
 // changes: images made before would still pass every other check.
-#define JIT_CODE_VERSION 16
+#define JIT_CODE_VERSION 17
 
 // Everything the emitted code bakes in besides the gadgets it names: the
 // conventions, the struct layouts it loads from and the TLB / block cache

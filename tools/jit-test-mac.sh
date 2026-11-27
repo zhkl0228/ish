@@ -23,8 +23,8 @@
 #   - regress_jit_fp: scalar floating point, each instruction's results and
 #     flags the gadgets' (ISH_JIT_PIC=1, as on iOS);
 #   - regress_jit_insns: atomics, SIMD loads and stores, literal loads, dc
-#     zva, barriers, msr fpcr, SIMD arithmetic, multiply-adds of unpinned
-#     registers, likewise;
+#     zva, barriers, msr fpcr, SIMD arithmetic, SHA and CRC32, multiply-adds
+#     of unpinned registers, likewise;
 #   - regression tests the JIT can break: instructions compared against
 #     hardware, faults, signals, memory.
 # Needs meson, ninja and timeout. Exits 1 if any test failed.
