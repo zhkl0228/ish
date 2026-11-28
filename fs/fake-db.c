@@ -245,18 +245,48 @@ static struct cache_slot *cache_slot(struct fakefs_db *fs, const char *path, siz
     return &fs->cache->slot[hash % CACHE_SLOTS];
 }
 
+// What a lookup of path found, kept as of version: fs->lock held (a
+// transaction of fs); the cache made as it is first used (the file
+// provider's connection has none)
+static void cache_store(struct fakefs_db *fs, uint64_t version, const char *path, size_t len, bool exists,
+                        const struct ish_stat *stat, inode_t inode) {
+    if (version == 0 || len > CACHE_PATH)
+        return;
+    if (fs->cache == NULL && (fs->cache = calloc(1, sizeof(struct fakefs_cache))) == NULL)
+        return;
+    struct cache_slot *slot = cache_slot(fs, path, len);
+    slot->version = version;
+    slot->len = (uint16_t) len;
+    memcpy(slot->path, path, len);
+    slot->exists = exists;
+    slot->stat = *stat;
+    slot->inode = inode;
+}
+
+uint64_t path_cache_version(struct fakefs_db *fs) {
+    return wal_version(fs);
+}
+
+bool path_read_stat_keep(struct fakefs_db *fs, uint64_t version, const char *path, struct ish_stat *stat,
+                         inode_t *inode) {
+    struct ish_stat s = {0};
+    inode_t i = 0;
+    bool exists = path_read_stat(fs, path, &s, &i);
+    cache_store(fs, version, path, strlen(path), exists, &s, i);
+    if (exists && stat)
+        *stat = s;
+    if (exists && inode)
+        *inode = i;
+    return exists;
+}
+
 bool path_read_stat_cached(struct fakefs_db *fs, const char *path, struct ish_stat *stat, inode_t *inode) {
     size_t len = strlen(path);
     uint64_t version = len <= CACHE_PATH ? wal_version(fs) : 0;
     if (version != 0) {
         sqlite3_mutex_enter(fs->lock);
-        // made as it is first used: the file provider's connection has none
-        if (fs->cache == NULL)
-            fs->cache = calloc(1, sizeof(struct fakefs_cache));
         struct cache_slot *slot = fs->cache != NULL ? cache_slot(fs, path, len) : NULL;
-        if (slot == NULL)
-            version = 0;
-        else if (slot->version == version && slot->len == len && memcmp(slot->path, path, len) == 0) {
+        if (slot != NULL && slot->version == version && slot->len == len && memcmp(slot->path, path, len) == 0) {
             bool exists = slot->exists;
             if (stat)
                 *stat = slot->stat;
@@ -267,24 +297,9 @@ bool path_read_stat_cached(struct fakefs_db *fs, const char *path, struct ish_st
         }
         sqlite3_mutex_leave(fs->lock);
     }
-    struct ish_stat s = {0};
-    inode_t i = 0;
     db_begin_read(fs);
-    bool exists = path_read_stat(fs, path, &s, &i);
-    if (version != 0 && fs->cache != NULL) {
-        struct cache_slot *slot = cache_slot(fs, path, len);
-        slot->version = version;
-        slot->len = (uint16_t) len;
-        memcpy(slot->path, path, len);
-        slot->exists = exists;
-        slot->stat = s;
-        slot->inode = i;
-    }
+    bool exists = path_read_stat_keep(fs, version, path, stat, inode);
     db_commit(fs);
-    if (exists && stat)
-        *stat = s;
-    if (exists && inode)
-        *inode = i;
     return exists;
 }
 

@@ -1170,71 +1170,185 @@ static ssize_t fakefs_readlink_or_stat(struct mount *mount, const char *path, ch
     return _EINVAL;
 }
 
+// ---- readdir, read ahead
+//
+// Each entry's inode is its meta.db row's, found by its path: a read
+// transaction for each entry (getdents did 5 to 15 a call), and a host call
+// for the directory's path each time. Entries are now read from the host
+// directory up to DIR_AHEAD at a time, and looked up in one transaction,
+// what it found kept for path_read_stat_cached() (a stat of each next, as in
+// ls -l, finds it there). The host's position after each entry is kept with
+// it, telldir's while it is the last one returned (getdents reports it as
+// the entry's d_off, and lseek to it seeks the host directory); lseek and
+// seekdir drop what was read ahead.
+#define DIR_AHEAD 64
+struct fakefs_dir_ahead {
+    unsigned n, next;       // entries read ahead, the next to return
+    int end;                // after them: 1 more, 0 the end, < 0 an error
+    bool returned;          // e[next - 1] returned: telldir is its pos
+    struct {
+        struct dir_entry entry;
+        unsigned long pos;  // the host directory's position after it
+    } e[DIR_AHEAD];
+};
+
+static void dir_ahead_drop(struct fd *fd) {
+    struct fakefs_dir_ahead *a = fd->fs_data;
+    if (a != NULL) {
+        a->n = a->next = 0;
+        a->end = 1;
+        a->returned = false;
+    }
+}
+
+// path of an entry of the directory at dir_path (its length dir_len)
+static void entry_path(char *out, const char *dir_path, size_t dir_len, const char *name) {
+    memcpy(out, dir_path, dir_len + 1);
+    if (strcmp(name, "..") == 0) {
+        char *slash = strrchr(out, '/');
+        if (slash != NULL && dir_len != 0)
+            *slash = '\0';
+    } else if (strcmp(name, ".") != 0) {
+        // the host's names are NAME_MAX at most, and the path MAX_PATH
+        size_t len = strlen(name);
+        if (dir_len + 1 + len <= MAX_PATH) {
+            out[dir_len] = '/';
+            memcpy(out + dir_len + 1, name, len + 1);
+        }
+    }
+}
+
+// The next entries, read ahead into a: some, or none at the end (a->end)
+static void dir_read_ahead(struct fd *fd, struct fakefs_dir_ahead *a) {
+    a->n = a->next = 0;
+    a->returned = false;
+    char dir_path[MAX_PATH + 1], path[MAX_PATH + 1];
+    // an entry's meta.db row is found by its path: none without the dir's
+    int err = realfs_getpath(fd, dir_path);
+    if (err < 0) {
+        a->end = err;
+        return;
+    }
+    size_t dir_len = strlen(dir_path);
+    struct fakefs_db *fs = &fd->mount->fakefs;
+    while (a->n == 0 && a->end == 1) {
+        while (a->n < DIR_AHEAD) {
+            int res = realfs_fdops.readdir(fd, &a->e[a->n].entry);
+            if (res <= 0) {
+                a->end = res;
+                break;
+            }
+            a->e[a->n].pos = realfs_telldir(fd);
+            a->n++;
+        }
+        uint64_t version = path_cache_version(fs);
+        bool begun = false;
+        unsigned kept = 0;
+        for (unsigned i = 0; i < a->n; i++) {
+            struct dir_entry *entry = &a->e[i].entry;
+            entry_path(path, dir_path, dir_len, entry->name);
+            /* [T-ios-log-verbose-tier] Per-ENTRY trace, gated on the app's
+             * Verbose level (unconditional, 1.68 M lines a day). */
+            if (ish_verbose_trace_enabled && (strstr(path, "minis") != NULL || strstr(path, "Library/MinisChat") != NULL))
+                fprintf(stderr, "fakefs_readdir: getpath=\"%s\" entry=\"%s\"\n", path, entry->name);
+            /* Hook-routed entries are not in meta.db by design (see
+             * fakefs_open): the inode realfs_readdir gave, the host's, stable
+             * while the fd is open. */
+            char host_check[PATH_MAX];
+            bool via_hook = false;
+            bind_mount_translate_path_ex(path, host_check, sizeof(host_check), &via_hook);
+            if (!via_hook) {
+                if (!begun) {
+                    db_begin_read(fs);
+                    begun = true;
+                }
+                inode_t inode = 0;
+                entry->inode = path_read_stat_keep(fs, version, path, NULL, &inode) ? inode : 0;
+            }
+            a->e[kept++] = a->e[i];
+        }
+        if (begun)
+            db_commit(fs);
+        a->n = kept;
+        // none in meta.db: a bind mount's made; still none, skipped
+        kept = 0;
+        for (unsigned i = 0; i < a->n; i++) {
+            struct dir_entry *entry = &a->e[i].entry;
+            if (entry->inode == 0) {
+                entry_path(path, dir_path, dir_len, entry->name);
+                if (is_under_bind_mount(path))
+                    entry->inode = bind_mount_ensure_inode(fs, fd->mount, path);
+                if (entry->inode == 0)
+                    continue;
+            }
+            a->e[kept++] = a->e[i];
+        }
+        a->n = kept;
+    }
+}
+
 static int fakefs_readdir(struct fd *fd, struct dir_entry *entry) {
     assert(fd->ops == &fakefs_fdops);
-    int res;
-retry:
-    res = realfs_fdops.readdir(fd, entry);
-    if (res <= 0)
-        return res;
-
-    // this is annoying
-    char entry_path[MAX_PATH + 1];
-    // an entry's meta.db row is found by its path: none without the dir's
-    int err = realfs_getpath(fd, entry_path);
-    if (err < 0)
-        return err;
-
-    /* [T-ios-log-verbose-tier] Per-ENTRY trace, gated on the app's Verbose
-     * level. Unconditional it produced 1.68 M lines / 183 MB in one day from
-     * only 549 distinct paths — one line per directory entry, "." and ".."
-     * included. Still valuable when chasing a bind-mount bug, so it is kept
-     * behind the gate rather than deleted. */
-    if (ish_verbose_trace_enabled &&
-        (strstr(entry_path, "minis") != NULL || strstr(entry_path, "Library/MinisChat") != NULL))
-        fprintf(stderr, "fakefs_readdir: getpath=\"%s\" entry=\"%s\"\n", entry_path, entry->name);
-
-    if (strcmp(entry->name, "..") == 0) {
-        if (strcmp(entry_path, "") != 0) {
-            *strrchr(entry_path, '/') = '\0';
+    struct fakefs_dir_ahead *a = fd->fs_data;
+    if (a == NULL) {
+        a = fd->fs_data = calloc(1, sizeof(*a));
+        if (a == NULL)
+            return _ENOMEM;
+        a->end = 1;
+    }
+    if (a->next == a->n) {
+        if (a->end != 1) {
+            a->returned = false;
+            return a->end;
         }
-    } else if (strcmp(entry->name, ".") != 0) {
-        // god I don't know what to do if this would overflow
-        strcat(entry_path, "/");
-        strcat(entry_path, entry->name);
+        dir_read_ahead(fd, a);
+        if (a->n == 0)
+            return a->end;
     }
+    *entry = a->e[a->next].entry;
+    a->next++;
+    a->returned = true;
+    return 1;
+}
 
-    /* Hook-routed entries are not in meta.db by design (see fakefs_open).
-     * Keep the inode that realfs_readdir gave us (it came straight from the
-     * host directory, so it's stable for the duration of the open fd). */
-    char host_check[PATH_MAX];
-    bool entry_via_hook = false;
-    bind_mount_translate_path_ex(entry_path, host_check, sizeof(host_check), &entry_via_hook);
-    if (entry_via_hook) {
-        return res;
+static unsigned long fakefs_telldir(struct fd *fd) {
+    struct fakefs_dir_ahead *a = fd->fs_data;
+    if (a != NULL && a->returned)
+        return a->e[a->next - 1].pos;
+    return realfs_telldir(fd);
+}
+
+static void fakefs_seekdir(struct fd *fd, unsigned long pos) {
+    dir_ahead_drop(fd);
+    realfs_seekdir(fd, pos);
+}
+
+static off_t fakefs_lseek(struct fd *fd, off_t offset, int whence) {
+    if (fd->dir != NULL && !(whence == LSEEK_CUR && offset == 0))
+        dir_ahead_drop(fd);
+    return realfs_lseek(fd, offset, whence);
+}
+
+// The close of fakefs's fds and of its mount's (fd_close() calls both if
+// they differ: a device's fd on the mount, its ops the device's, is closed
+// by the mount's too). What was read ahead is an fd of fakefs_fdops's: a
+// device's fd keeps its own in fs_data's place (devpts' number).
+static int fakefs_close(struct fd *fd) {
+    if (fd->ops == &fakefs_fdops) {
+        free(fd->fs_data);
+        fd->fs_data = NULL;
     }
-
-    struct fakefs_db *fs = &fd->mount->fakefs;
-    db_begin_read(fs);
-    entry->inode = path_get_inode(fs, entry_path);
-    db_commit(fs);
-
-    if (entry->inode == 0) {
-        /* Auto-create for bind-mounted paths */
-        if (is_under_bind_mount(entry_path)) {
-            entry->inode = bind_mount_ensure_inode(fs, fd->mount, entry_path);
-        }
-        /* Still no inode? Skip this entry to avoid crashes */
-        if (entry->inode == 0)
-            goto retry;
-    }
-    return res;
+    return realfs_close(fd);
 }
 
 static struct fd_ops fakefs_fdops;
 static void __attribute__((constructor)) init_fake_fdops(void) {
     fakefs_fdops = realfs_fdops;
     fakefs_fdops.readdir = fakefs_readdir;
+    fakefs_fdops.telldir = fakefs_telldir;
+    fakefs_fdops.seekdir = fakefs_seekdir;
+    fakefs_fdops.lseek = fakefs_lseek;
+    fakefs_fdops.close = fakefs_close;
 }
 
 /* ===== Public Bind Mount API ===== */
@@ -1645,7 +1759,7 @@ const struct fs_ops fakefs = {
     .symlink = fakefs_symlink,
     .mknod = fakefs_mknod,
 
-    .close = realfs_close,
+    .close = fakefs_close,
     .stat = fakefs_stat,
     .fstat = fakefs_fstat,
     .flock = realfs_flock,

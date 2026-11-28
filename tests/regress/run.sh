@@ -1155,6 +1155,18 @@ EOF
     fi
     rm -rf "$walkdir"
     echo
+    section "readdir on a fakefs root: read ahead, every d_ino stat's, seekdir, rewinddir, d_off (fakefs root)"
+    readdirdir=$(mktemp -d "$(cd "$(dirname "$ROOTFS")" && pwd)/regress-fakefs_readdir.XXXXXX")
+    if fakefs_init "$readdirdir" tests/regress/regress_fakefs_readdir.c; then
+        out=$(timeout 60 "$ISH" -f "$readdirdir/fs" /init 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+    else
+        echo "failed to set up regress_fakefs_readdir (needs $FAKEFSIFY and python3)" >&2
+        status=1
+    fi
+    rm -rf "$readdirdir"
+    echo
     section "fakefs's lookup cache: another process's chmod seen (two ish on one fakefs root)"
     shareddir=$(mktemp -d "$(cd "$(dirname "$ROOTFS")" && pwd)/regress-fakefs_shared.XXXXXX")
     if fakefs_init "$shareddir" tests/regress/regress_fakefs_shared.c; then

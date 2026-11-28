@@ -73,6 +73,13 @@ bool path_read_stat(struct fakefs_db *fs, const char *path, struct ish_stat *sta
 // since the same path was read: from the cache then. The database must be in
 // WAL mode for it (fake_db_init).
 bool path_read_stat_cached(struct fakefs_db *fs, const char *path, struct ish_stat *stat, uint64_t *inode);
+// For lookups of many paths in one read transaction (fakefs's readdir): the
+// version to keep them as, read before the transaction begins (0: none
+// kept), and path_read_stat() in it, what it found kept for
+// path_read_stat_cached()
+uint64_t path_cache_version(struct fakefs_db *fs);
+bool path_read_stat_keep(struct fakefs_db *fs, uint64_t version, const char *path, struct ish_stat *stat,
+                         uint64_t *inode);
 inode_t path_create(struct fakefs_db *fs, const char *path, struct ish_stat *stat);
 
 bool inode_read_stat_if_exist(struct fakefs_db *fs, inode_t inode, struct ish_stat *stat);
