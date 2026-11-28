@@ -118,6 +118,7 @@ static _Atomic uint64_t st_block_ends, st_block_end_fail, st_links, st_loops;
 static _Atomic uint64_t st_shared, st_aot, st_aot_moved, st_aot_busy, st_aot_fixed;
 static _Atomic uint64_t st_find_ticks;   // jit_ticks() spent in aot_lookup()
 static _Atomic uint64_t st_tlb_reused;   // accesses whose TLB check reuses the last one's entry
+static _Atomic uint64_t st_tlb_sp;       // sp accesses whose TLB check takes the frame's sp_entry
 
 // ---------------------------------------------------------------- code region
 //
@@ -768,9 +769,10 @@ struct em {
     int loop_head, body_end;
     // The guest register whose access left its TLB entry in x10, -1 none
     // (tlb_lookup()), and the full lookups of the checks that reused one,
-    // out of line: the b.hi at `at`, for an access of `bytes` at spos
+    // out of line: the b.hi at `at`, for an access of `bytes` at spos (sp:
+    // through sp, its entry then kept in the frame's sp_entry)
     int8_t tc_g;
-    struct { unsigned at, spos; uint8_t bytes; bool write; } slow[256];
+    struct { unsigned at, spos; uint8_t bytes; bool write, sp; } slow[256];
     unsigned nslow;
     // Guest V registers held in host V registers (vsrc()), and the ones the
     // instruction being emitted uses
@@ -1289,10 +1291,26 @@ static void tlb_check(struct em *e, unsigned bytes, bool write) {
 // to the dma load or goes to the stub. The entry's page and dma are loaded
 // at the access as the full lookup's are, so an entry another thread took
 // out since fails the check alike.
+//
+// An access through sp that cannot reuse x10 (the segment's first, or after
+// another register's) checks the page of the entry the last stack access
+// left, across segments: the frame's sp_entry, its offset from the TLB's
+// entries (x2), which every full lookup of an sp access stores. The stack
+// stays on a page for long, and that entry's load waits for nothing: the
+// inline full lookups of sp accesses, emitted twice, took up to 7.8% more
+// time. The offset always names an entry (a new frame's 0 the first), so the
+// check only ever reads one; and a page's entry can only be at its hash's
+// index, so an entry whose page is the access's is the one the full lookup
+// would find.
 static void tlb_lookup(struct em *e, unsigned bytes, bool write, unsigned spos, int g) {
     e->hflags = false;   // the checks below use cmp
     unsigned slow_max = sizeof(e->slow) / sizeof(e->slow[0]);
-    if (g >= 0 && g == e->tc_g && e->nslow < slow_max) {
+    bool reuse = g >= 0 && g == e->tc_g, sp = g == G_SP;
+    if ((reuse || sp) && e->nslow < slow_max) {
+        if (!reuse) {
+            put(e, 0xF9400000u | ((LOCAL_sp_entry / 8) << 10) | (1u << 5) | T_I);    // ldr x10, [x1, #sp_entry]
+            put(e, 0x8B000000u | (T_I << 16) | (2u << 5) | T_I);                     // add x10, x2, x10
+        }
         unsigned pg = write ? offsetof(struct tlb_entry, page_if_writable) : offsetof(struct tlb_entry, page);
         put(e, 0xF9400000u | ((pg / 8) << 10) | (T_I << 5) | T_E);            // ldr x11, [x10, #page]
         put(e, 0xCB000000u | (T_E << 16) | (T_A << 5) | T_P);                 // sub x8, x9, x11
@@ -1301,9 +1319,10 @@ static void tlb_lookup(struct em *e, unsigned bytes, bool write, unsigned spos, 
         e->slow[e->nslow].spos = spos;
         e->slow[e->nslow].bytes = (uint8_t) bytes;
         e->slow[e->nslow].write = write;
+        e->slow[e->nslow].sp = sp;
         e->nslow++;
         put(e, 0x54000008u);                                                  // b.hi <the full lookup>
-        atomic_fetch_add_explicit(&st_tlb_reused, 1, memory_order_relaxed);
+        atomic_fetch_add_explicit(reuse ? &st_tlb_reused : &st_tlb_sp, 1, memory_order_relaxed);
     } else {
         tlb_check(e, bytes, write);
         branch_stub(e, spos, 2);                               // b.hi stub
@@ -2350,11 +2369,16 @@ static void patch_here(struct em *e, unsigned at);
 // Returns the installed code, NULL if the segment could not be installed.
 static uint8_t *finish_native(struct em *e, struct fiber_block *b, uintptr_t orig_first, unsigned first_pos) {
     // The full lookups of the checks that reused an entry (tlb_lookup()):
-    // a miss there goes to the stub, a hit back to the dma load after the check
+    // a miss there goes to the stub, a hit back to the dma load after the
+    // check, an sp access's with its entry kept in sp_entry first
     for (unsigned i = 0; i < e->nslow; i++) {
         patch_here(e, e->slow[i].at);
         tlb_check(e, e->slow[i].bytes, e->slow[i].write);
         branch_stub(e, e->slow[i].spos, 2);                                   // b.hi stub
+        if (e->slow[i].sp) {
+            put(e, 0xCB000000u | (2u << 16) | (T_I << 5) | T_P);                       // sub x8, x10, x2
+            put(e, 0xF9000000u | ((LOCAL_sp_entry / 8) << 10) | (1u << 5) | T_P);      // str x8, [x1, #sp_entry]
+        }
         put(e, ENC_B(4 * ((int64_t) e->slow[i].at + 1 - (int64_t) e->n)));   // b <the dma load>
     }
     // one stub per distinct stream position
@@ -3630,7 +3654,7 @@ void ish_aot_register(const struct aot_module *m) {
 
 // Bump whenever the code emitted for some guest instruction, stub or exit
 // changes: images made before would still pass every other check.
-#define JIT_CODE_VERSION 20
+#define JIT_CODE_VERSION 21
 
 // Everything the emitted code bakes in besides the gadgets it names: the
 // conventions, the struct layouts it loads from and the TLB / block cache
@@ -3646,7 +3670,7 @@ uint32_t jit_abi(void) {
         CPU_pc, CPU_cycle, CPU_poked_ptr, CPU_tls_ptr, offsetof(struct cpu_state, sp),
         offsetof(struct cpu_state, regs), offsetof(struct cpu_state, nzcv), offsetof(struct cpu_state, fp),
         offsetof(struct cpu_state, excl_addr), offsetof(struct cpu_state, excl_val), offsetof(struct cpu_state, fpcr),
-        LOCAL_last_block, LOCAL_ret_cache,
+        LOCAL_last_block, LOCAL_ret_cache, LOCAL_sp_entry,
         sizeof(struct tlb_entry), offsetof(struct tlb_entry, page), offsetof(struct tlb_entry, page_if_writable),
         offsetof(struct tlb_entry, gen), offsetof(struct tlb_entry, data_minus_addr), TLB_BITS, PAGE_BITS,
         offsetof(struct tlb, entries), offsetof(struct tlb, mmu),
@@ -5074,6 +5098,8 @@ size_t jit_describe(char *buf, size_t size) {
         (unsigned long long) st_fault_resumed, (unsigned long long) st_fault_unknown);
     OUT("TLB checks of the last access's entry (an access through the same register), translated: %llu\n",
         (unsigned long long) st_tlb_reused);
+    OUT("TLB checks of the last stack access's entry (an access through sp, from another segment), translated: %llu\n",
+        (unsigned long long) st_tlb_sp);
     OUT("images: %u in use, %u rejected (abi %08x)\n", aot_nimages, aot_nrejected, jit_abi());
     for (unsigned i = 0; i < aot_nimages; i++)
         OUT("  ok        %s (%u translations, family %s)\n", aot_images[i]->path, aot_images[i]->ntrans,
@@ -5177,13 +5203,14 @@ void jit_report(void) {
     fprintf(stderr,
             "🛠  JIT(%s): blocks %llu, segments %llu, units %llu, code %llu KB, compile %.1f ms | "
             "block ends %llu (not translated %llu), direct links %llu, loop blocks %llu | "
-            "unsupported insns %llu, out of regs %llu | TLB checks of the last entry %llu | shared %llu, AOT %llu (%u images)\n",
+            "unsupported insns %llu, out of regs %llu | TLB checks of the last entry %llu, of sp's %llu | shared %llu, "
+            "AOT %llu (%u images)\n",
             dual_map ? (pic_on ? "dual-map, PIC" : "dual-map") : (pic_on ? "MAP_JIT, PIC" : "MAP_JIT"),
             (unsigned long long) st_blocks, (unsigned long long) st_segments, (unsigned long long) st_units,
             (unsigned long long) st_bytes / 1024, jit_ticks_ms(st_ticks), (unsigned long long) st_block_ends,
             (unsigned long long) st_block_end_fail, (unsigned long long) st_links, (unsigned long long) st_loops,
             (unsigned long long) st_unsupported_insns, (unsigned long long) st_fail_regs,
-            (unsigned long long) st_tlb_reused,
+            (unsigned long long) st_tlb_reused, (unsigned long long) st_tlb_sp,
             (unsigned long long) st_shared, (unsigned long long) st_aot, aot_nimages);
 }
 

@@ -36,6 +36,9 @@
 #   - regress_jit_vcache: guest V registers held in host registers within a
 #     segment, written through: more of them than the cache holds, the forms
 #     on scratch registers, an exit at a TLB miss, a loop block, scalar FP;
+#   - regress_jit_sp_entry: an sp access first in its segment checks the
+#     last stack access's TLB entry: pushes and pops across pages, two
+#     threads, SIGSEGV where the stack page is read-only or PROT_NONE;
 #   - regression tests the JIT can break: instructions compared against
 #     hardware, faults, signals, memory.
 # Needs meson, ninja and timeout. Exits 1 if any test failed.
@@ -67,6 +70,7 @@ if [ "${1:-}" = --prepare ]; then
     build jit_tlb_reuse -O0 tests/regress/regress_jit_tlb_reuse.c
     build jit_chain_copy -O0 tests/regress/regress_jit_chain_copy.c
     build jit_vcache -O0 tests/regress/regress_jit_vcache.c -lm
+    build jit_sp_entry -O0 tests/regress/regress_jit_sp_entry.c -lpthread
     build mmap_spin -O1 tests/regress/regress_mmap_spin.c
     build tlb_cross_thread -O1 tests/regress/regress_tlb_cross_thread.c
     build stack_extent -O0 tests/regress/regress_stack_extent.c
@@ -165,6 +169,10 @@ echo "== regress_jit_vcache"
 out=$(ISH_JIT_PIC=1 timeout 120 "$ISH" -r "$ROOT" /tmp/regress_jit_vcache 2>&1)
 echo "$out" | grep -v '^PASS' | tail -20
 echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || fail "regress_jit_vcache"
+echo "== regress_jit_sp_entry"
+out=$(ISH_JIT_PIC=1 timeout 120 "$ISH" -r "$ROOT" /tmp/regress_jit_sp_entry 2>&1)
+echo "$out" | grep -v '^PASS' | tail -20
+echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || fail "regress_jit_sp_entry"
 
 for t in $TESTS; do
     echo "== regress_$t"

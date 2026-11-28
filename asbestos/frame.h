@@ -15,5 +15,9 @@ struct fiber_frame {
     // ARM64: code-stream pointer (_pc) at the last fiber_exit, so an INT_GPF
     // can be mapped back to the faulting guest instruction.
     uint64_t fault_stream;
+    // JIT: the TLB entry of the last stack access's page, as its offset from
+    // the TLB's entries (0, an entry, when the frame is new): a translated
+    // segment's first access through sp checks that page first
+    uint64_t sp_entry;
     long ret_cache[FIBER_RETURN_CACHE_SIZE]; // a map of ip to pointer-to-call-gadget-arguments
 };
