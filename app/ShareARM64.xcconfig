@@ -19,4 +19,4 @@ HEADER_SEARCH_PATHS = $(inherited) $(SRCROOT)/app
 // Must match the host app (AppARM64.xcconfig): iOS rejects an extension
 // whose version differs from its containing app.
 MARKETING_VERSION = 2.3.5
-CURRENT_PROJECT_VERSION = 850
+CURRENT_PROJECT_VERSION = 851
