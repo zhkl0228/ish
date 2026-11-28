@@ -1725,7 +1725,16 @@ void mem_asbestos_page_unmapping(struct mem *mem, page_t page, struct pt_entry *
 static void mem_code_written(struct mem *mem, struct pt_entry *entry, page_t page) {
     struct asbestos *asbestos = mem->mmu.asbestos;
     if (asbestos == NULL || !asbestos_shared(asbestos)) {
-        asbestos_invalidate_page(asbestos, page);
+        // Of an asbestos of its own, a page has blocks only while it is marked
+        // P_CODE: fiber_block_compile_protected marks it before it reads it,
+        // and mem_ptr clears the mark only after this. Unmarked, the store
+        // has none to take away. Every write miss came here: a look at the
+        // page's bucket of the block hash, which is never empty with thousands
+        // of blocks, then asbestos->lock, which the run loop compiles under. A
+        // GC's stores over a heap larger than the TLB covers (Claude Code's
+        // 600 MB) queued on it.
+        if (__atomic_load_n(&entry->flags, __ATOMIC_ACQUIRE) & P_CODE)
+            asbestos_invalidate_page(asbestos, page);
         return;
     }
     if (!(entry->flags & (P_CODE | P_EXEC)) || (entry->flags & P_ANONYMOUS))
@@ -1738,7 +1747,8 @@ static void mem_code_written(struct mem *mem, struct pt_entry *entry, page_t pag
 void mmu_code_written(struct mmu *mmu, page_t page) {
     struct mem *mem = container_of(mmu, struct mem, mmu);
     struct pt_entry *entry = mem_pt(mem, page);
-    if (entry == NULL)
+    // The guest says it wrote code (ic ivau): its blocks go, marked or not
+    if (entry == NULL || mmu->asbestos == NULL || !asbestos_shared(mmu->asbestos))
         asbestos_invalidate_page(mmu->asbestos, page);
     else
         mem_code_written(mem, entry, page);

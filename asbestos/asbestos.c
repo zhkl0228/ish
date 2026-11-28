@@ -977,7 +977,13 @@ static struct fiber_block *fiber_block_compile_protected(addr_t ip, struct tlb *
             return block;
         if (attempt >= 16) {
             atomic_fetch_add_explicit(&st_wx_giveups, 1, memory_order_relaxed);
-            return block;  // pathological churn; accept (pre-W^X behavior)
+            // pathological churn; accept (pre-W^X behavior). Its pages marked
+            // again: a page with blocks is a marked one, which a store traps
+            // on (mem_code_written goes by the mark)
+            mmu_mark_code_page(mmu, PAGE(ip));
+            if (crossed)
+                mmu_mark_code_page(mmu, PAGE(block->end_addr));
+            return block;
         }
         atomic_fetch_add_explicit(&st_wx_retries, 1, memory_order_relaxed);
         fiber_block_free(NULL, block);
@@ -1424,6 +1430,9 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
                     frame->cpu.segfault_was_write = 0;
                     break;
                 }
+                // a page with blocks is a marked one (mem_code_written)
+                mmu_mark_code_page(tlb->mmu, PAGE(block->addr));
+                mmu_mark_code_page(tlb->mmu, PAGE(block->end_addr));
                 block->tag = fiber_block_code_tag(tlb->mmu, block);
                 asbestos->private_content = true;
                 fiber_insert(asbestos, block);
