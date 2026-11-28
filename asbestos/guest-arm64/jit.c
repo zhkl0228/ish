@@ -5728,6 +5728,12 @@ uint64_t jit_flushes(void) {
            atomic_load_explicit(&st_evictions, memory_order_acquire);
 }
 
+static _Atomic uint64_t ss_epoch;   // jit_flush_invalidated()
+
+void jit_flush_invalidated(void) {
+    atomic_fetch_add_explicit(&ss_epoch, 1, memory_order_release);
+}
+
 void jit_frame_enter(struct fiber_frame *frame, unsigned free_gen) {
     // An entry returns to the block end a call's block left in its native
     // code, which reads that block (non-PIC) or its context slot (PIC, the
@@ -5735,14 +5741,17 @@ void jit_frame_enter(struct fiber_frame *frame, unsigned free_gen) {
     // the block is freed. Blocks are freed with no thread running them (the
     // jetsam lock held to write), so none runs native code with such an
     // entry: emptied as the next run enters, as the block cache is. Likewise
-    // after a flush or an eviction, which gave code addresses to other code:
-    // one ends only after the run loop's passes then running
-    // (asbestos_jit_flush()).
-    uint64_t flushes = jit_flushes();
-    if (frame->ss_flushes == flushes && frame->ss_free_gen == free_gen)
+    // after a flush or an eviction, which gives code addresses to other
+    // code once the passes of the run loop running as it invalidated the
+    // blocks have ended (asbestos_jit_flush()): counted at the invalidation,
+    // not at the end (jit_flushes()), or a pass entered between the two
+    // would keep its entries into code that became other code's meanwhile
+    // (a host fault in native code, a 1 MB arena evicted under it).
+    uint64_t epoch = atomic_load_explicit(&ss_epoch, memory_order_acquire);
+    if (frame->ss_epoch == epoch && frame->ss_free_gen == free_gen)
         return;
     memset(frame->ss, 0, sizeof(frame->ss));
-    frame->ss_flushes = flushes;
+    frame->ss_epoch = epoch;
     frame->ss_free_gen = free_gen;
 }
 

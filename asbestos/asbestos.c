@@ -467,6 +467,9 @@ void asbestos_jit_flush(void) {
             asbestos_invalidate_arena(asbestos, (unsigned) what);
     }
     unlock(&all_lock);
+    // native code entered from now on returns into none of it (the frames'
+    // shadow stacks); entered before, it runs till the grace period's end
+    jit_flush_invalidated();
     // no pass runs a block it came by before the invalidation
     pass_grace();
     jit_flush_end(what);

@@ -128,11 +128,15 @@ bool jit_chain_ok(struct fiber_block *from, int i, struct fiber_block *to);
 // relation so that `to` leaving the cache unlinks it (jit_unlink()).
 bool jit_chain_refused(struct fiber_block *from, int i, struct fiber_block *to);
 // The thread's frame, as the run loop is about to run native code with it
-// (the jetsam lock held to read): its shadow stack of calls emptied if the
-// code region was flushed or blocks of its asbestos freed (free_gen moved)
-// since (jit.c, emit_ss_call()).
+// (the jetsam lock held to read): its shadow stack of calls emptied if a
+// flush invalidated blocks (jit_flush_invalidated()) or blocks of its
+// asbestos were freed (free_gen moved) since (jit.c, emit_ss_call()).
 struct fiber_frame;
 void jit_frame_enter(struct fiber_frame *frame, unsigned free_gen);
+// asbestos_jit_flush(): the blocks of what it flushes invalidated, before
+// the grace period after which their code is other code's. A pass of the run
+// loop entered later returns into none of it (jit_frame_enter()).
+void jit_flush_invalidated(void);
 // from's jump_ip[i] was written (chained, unchained): PIC native code tests a
 // copy of it, in its module context, which follows. Every write of a slot
 // is followed by this (asbestos lock held).
