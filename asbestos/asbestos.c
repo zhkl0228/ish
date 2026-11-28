@@ -1258,6 +1258,9 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
     }
     frame->last_block = NULL;
     frame->cpu = *cpu;
+#ifdef ISH_JIT
+    jit_frame_enter(frame, asbestos->free_gen);
+#endif
     host_fpsr_write(frame->cpu.fpsr);
 
     int interrupt = INT_NONE;

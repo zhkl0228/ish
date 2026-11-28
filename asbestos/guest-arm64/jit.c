@@ -38,6 +38,7 @@
 #include "asbestos/guest-arm64/aot.h"
 #include "asbestos/guest-arm64/fpcr.h"
 #include "asbestos/asbestos.h"
+#include "asbestos/frame.h"
 #include "emu/cpu.h"
 #include "emu/mmu.h"
 #include "emu/tlb.h"
@@ -67,6 +68,7 @@ extern void jit_fiber_ret_chain(void) __asm("fiber_ret_chain");
 static bool jit_on;       // ISH_JIT=0 turns the translator off
 static bool link_off;     // ISH_JIT_LINK=0: no direct links between blocks
 static bool loop_off;     // ISH_JIT_LOOP=0: no register promotion in self-loops
+static bool ss_off;       // ISH_JIT_SS=0: calls and returns without the frame's shadow stack (emit_ss_call())
 static bool simd_on;      // ISH_JIT_SIMD=0: leave SIMD/FP instructions to the gadgets
 static bool pin_on;       // ISH_JIT_PIN=0: no guest registers pinned in host registers
 static bool pic_on;       // ISH_JIT_PIC=1: position-independent code (see "PIC" below)
@@ -119,6 +121,7 @@ static _Atomic uint64_t st_shared, st_aot, st_aot_moved, st_aot_busy, st_aot_fix
 static _Atomic uint64_t st_find_ticks;   // jit_ticks() spent in aot_lookup()
 static _Atomic uint64_t st_tlb_reused;   // accesses whose TLB check reuses the last one's entry
 static _Atomic uint64_t st_tlb_sp;       // sp accesses whose TLB check takes the frame's sp_entry
+static _Atomic uint64_t st_ss_calls, st_ss_rets;   // calls made with a host bl, rets with a host ret
 
 // ---------------------------------------------------------------- code region
 //
@@ -2892,7 +2895,49 @@ static void emit_chain(struct em *e, struct fiber_block *b, unsigned long *slot,
     emit_chain_ex(e, b, slot, link, false);
 }
 
+// A guest call (bl, blr) whose return continuation is jump_ip[0], the guest
+// return address in host register h: a host bl, so that the return is a
+// host ret, which the CPU predicts from its own stack of the bls it ran
+// (an indirect branch at each ret site, from the targets it saw there,
+// missed often: ret, blr and br block ends were a fifth of python's
+// samples). The frame's shadow stack (struct fiber_frame) gets an entry: the
+// return address inverted, the host address the bl returns to, x29. The bl
+// goes to the code entering the callee, which the caller emits after the
+// return's (the trampoline: emit_ss_tramp()); the return comes back right
+// after the bl, to the block end for jump_ip[0], which the caller emits
+// next. Returns the bl's index, -1 for none (no shadow stack).
+static int emit_ss_call(struct em *e, int h) {
+    if (ss_off)
+        return -1;
+    put(e, 0xB9400000u | ((LOCAL_ss_top / 4) << 10) | (1u << 5) | 12);         // ldr w12, [x1, #ss_top]
+    put(e, 0x1100058Cu);                                                       // add w12, w12, #1
+    put(e, 0x1200158Cu);                                                       // and w12, w12, #63
+    put(e, 0xB9000000u | ((LOCAL_ss_top / 4) << 10) | (1u << 5) | 12);         // str w12, [x1, #ss_top]
+    put(e, 0x91000000u | (LOCAL_ss << 10) | (1u << 5) | 11);                   // add x11, x1, #ss
+    put(e, 0x8B0C156Bu);                                                       // add x11, x11, x12, lsl #5
+    put(e, 0xAA2003E8u | ((uint32_t) h << 16));                                // mvn x8, xh
+    put(e, 0x10000009u | (4u << 5));                                           // adr x9, <after the bl>: 4 words on
+    put(e, 0xA9002568u);                                                       // stp x8, x9, [x11]
+    put(e, 0xF900097Du);                                                       // str x29, [x11, #16]
+    int at = (int) e->n;
+    put(e, 0x94000000u);                                                       // bl <trampoline> (patched)
+    atomic_fetch_add_explicit(&st_ss_calls, 1, memory_order_relaxed);
+    return at;
+}
+
+// The trampoline of emit_ss_call()'s bl at `at` begins here
+static void emit_ss_tramp(struct em *e, int at) {
+    if (at < 0 || (unsigned) at >= e->n) {
+        if (at >= 0) e->fail = true;
+        return;
+    }
+    e->buf[at] = 0x94000000u | ((uint32_t) (e->n - (unsigned) at) & 0x3ffffff);
+}
+
 // ret: same as the RET gadget, but with its own dispatch branch per site.
+// First the frame's shadow stack: its last entry the call this returns from
+// (the address its bl returned to inverted is the target's), a host ret to
+// where its bl returned, x29 back as it was there.
 static void emit_ret(struct em *e, struct fiber_block *b, int rn) {
     int h = rn == 31 ? 31 : hreg(e, rn);
     put(e, 0x9240BC00u | ((uint32_t) h << 5) | 10);                              // and x10, xh, #0xffffffffffff
@@ -2904,6 +2949,21 @@ static void emit_ret(struct em *e, struct fiber_block *b, int rn) {
         put(e, 0x110005EFu);                                                     // add w15, w15, #1
         put(e, 0x720025FFu);                                                     // tst w15, #0x3ff
         miss0 = e->n; put(e, 0x54000000u);                                       // b.eq miss (timer/poke)
+    }
+    if (!ss_off) {
+        put(e, 0xB9400000u | ((LOCAL_ss_top / 4) << 10) | (1u << 5) | 12);     // ldr w12, [x1, #ss_top]
+        put(e, 0x91000000u | (LOCAL_ss << 10) | (1u << 5) | 11);               // add x11, x1, #ss
+        put(e, 0x8B0C156Bu);                                                   // add x11, x11, x12, lsl #5
+        put(e, 0xA9402169u);                                                   // ldp x9, x8, [x11]
+        put(e, 0xCA2A0129u);                                                   // eon x9, x9, x10: 0 if it is ~x10
+        unsigned other = e->n; put(e, 0xB5000009u);                            // cbnz x9, other
+        put(e, 0x5100058Cu);                                                   // sub w12, w12, #1
+        put(e, 0x1200158Cu);                                                   // and w12, w12, #63
+        put(e, 0xB9000000u | ((LOCAL_ss_top / 4) << 10) | (1u << 5) | 12);     // str w12, [x1, #ss_top]
+        put(e, 0xF940097Du);                                                   // ldr x29, [x11, #16]
+        put(e, 0xD65F0100u);                                                   // ret x8
+        patch_here(e, other);
+        atomic_fetch_add_explicit(&st_ss_rets, 1, memory_order_relaxed);
     }
     put(e, 0xD3443D4Bu);                                                         // ubfx x11, x10, #4, #12
     put(e, 0x91000000u | (LOCAL_ret_cache << 10) | (1u << 5) | 12);              // add x12, x1, #ret_cache
@@ -3021,6 +3081,12 @@ static void emit_indirect(struct em *e, struct fiber_block *b, const struct jit_
         mov_block_addr(e, 9, code_off(u->start + 1));      // BLR params: [self][ret][cont][rn]
         put(e, 0x91000000u | (LOCAL_ret_cache << 10) | (1u << 5) | 12);          // add x12, x1, #ret_cache
         store_ret_cache(e, h30, ret, 12);
+        int call = b->jump_ip[0] ? emit_ss_call(e, h30) : -1;   // x10, the target, kept
+        if (call >= 0) {
+            e->chain_fwd = true;
+            emit_chain(e, b, b->jump_ip[0], 0);   // the return: on to the block after the blr
+            emit_ss_tramp(e, call);
+        }
     }
     put(e, 0xF9000000u | ((CPU_pc / 8) << 10) | (1u << 5) | 10);                 // str x10, [x1, #pc]
     unsigned miss1, miss2, miss3, miss_jetsam;
@@ -3115,6 +3181,12 @@ static bool emit_block_end(struct em *e, struct fiber_block *b, const struct jit
         mov_block_addr(e, 9, code_off(u->start + 1));
         put(e, 0x91000000u | (LOCAL_ret_cache << 10) | (1u << 5) | 10);          // add x10, x1, #ret_cache
         store_ret_cache(e, h, ret, 10);
+        int call = b->jump_ip[0] ? emit_ss_call(e, h) : -1;
+        if (call >= 0) {
+            e->chain_fwd = true;
+            emit_chain(e, b, b->jump_ip[0], 0);   // the return: on to the block after the bl
+            emit_ss_tramp(e, call);
+        }
         e->chain_fwd = taken_fwd;
         emit_chain(e, b, b->jump_ip[1], 1);
         return !e->fail;
@@ -3654,7 +3726,7 @@ void ish_aot_register(const struct aot_module *m) {
 
 // Bump whenever the code emitted for some guest instruction, stub or exit
 // changes: images made before would still pass every other check.
-#define JIT_CODE_VERSION 21
+#define JIT_CODE_VERSION 22
 
 // Everything the emitted code bakes in besides the gadgets it names: the
 // conventions, the struct layouts it loads from and the TLB / block cache
@@ -3670,7 +3742,7 @@ uint32_t jit_abi(void) {
         CPU_pc, CPU_cycle, CPU_poked_ptr, CPU_tls_ptr, offsetof(struct cpu_state, sp),
         offsetof(struct cpu_state, regs), offsetof(struct cpu_state, nzcv), offsetof(struct cpu_state, fp),
         offsetof(struct cpu_state, excl_addr), offsetof(struct cpu_state, excl_val), offsetof(struct cpu_state, fpcr),
-        LOCAL_last_block, LOCAL_ret_cache, LOCAL_sp_entry,
+        LOCAL_last_block, LOCAL_ret_cache, LOCAL_sp_entry, LOCAL_ss_top, LOCAL_ss,
         sizeof(struct tlb_entry), offsetof(struct tlb_entry, page), offsetof(struct tlb_entry, page_if_writable),
         offsetof(struct tlb_entry, gen), offsetof(struct tlb_entry, data_minus_addr), TLB_BITS, PAGE_BITS,
         offsetof(struct tlb, entries), offsetof(struct tlb, mmu),
@@ -5100,6 +5172,8 @@ size_t jit_describe(char *buf, size_t size) {
         (unsigned long long) st_tlb_reused);
     OUT("TLB checks of the last stack access's entry (an access through sp, from another segment), translated: %llu\n",
         (unsigned long long) st_tlb_sp);
+    OUT("calls by a host bl, translated: %llu; rets by a host ret, translated: %llu%s\n",
+        (unsigned long long) st_ss_calls, (unsigned long long) st_ss_rets, ss_off ? " (ISH_JIT_SS=0: off)" : "");
     OUT("images: %u in use, %u rejected (abi %08x)\n", aot_nimages, aot_nrejected, jit_abi());
     for (unsigned i = 0; i < aot_nimages; i++)
         OUT("  ok        %s (%u translations, family %s)\n", aot_images[i]->path, aot_images[i]->ntrans,
@@ -5312,6 +5386,7 @@ static void jit_init(void) {
     bool have_images = aot_nregistered > 0;
     link_off = env_off("ISH_JIT_LINK");
     loop_off = env_off("ISH_JIT_LOOP");
+    ss_off = env_off("ISH_JIT_SS");
     simd_on = !env_off("ISH_JIT_SIMD");
     pin_on = !env_off("ISH_JIT_PIN");
     // AOT images are PIC code, so PIC is the default once one is linked in.
@@ -5651,6 +5726,24 @@ void jit_flush_end(int what) {
 uint64_t jit_flushes(void) {
     return atomic_load_explicit(&st_flushes, memory_order_acquire) +
            atomic_load_explicit(&st_evictions, memory_order_acquire);
+}
+
+void jit_frame_enter(struct fiber_frame *frame, unsigned free_gen) {
+    // An entry returns to the block end a call's block left in its native
+    // code, which reads that block (non-PIC) or its context slot (PIC, the
+    // chain copies, which stop following a freed block's slots): not after
+    // the block is freed. Blocks are freed with no thread running them (the
+    // jetsam lock held to write), so none runs native code with such an
+    // entry: emptied as the next run enters, as the block cache is. Likewise
+    // after a flush or an eviction, which gave code addresses to other code:
+    // one ends only after the run loop's passes then running
+    // (asbestos_jit_flush()).
+    uint64_t flushes = jit_flushes();
+    if (frame->ss_flushes == flushes && frame->ss_free_gen == free_gen)
+        return;
+    memset(frame->ss, 0, sizeof(frame->ss));
+    frame->ss_flushes = flushes;
+    frame->ss_free_gen = free_gen;
 }
 
 bool jit_region_usage(size_t *used, size_t *size) {

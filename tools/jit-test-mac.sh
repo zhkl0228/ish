@@ -39,6 +39,9 @@
 #   - regress_jit_sp_entry: an sp access first in its segment checks the
 #     last stack access's TLB entry: pushes and pops across pages, two
 #     threads, SIGSEGV where the stack page is read-only or PROT_NONE;
+#   - regress_jit_shadow: calls by a host bl, returns by a host ret through
+#     the frame's shadow stack: recursion deeper than it, blr, a longjmp, a
+#     return elsewhere, the code returned to rewritten, two threads;
 #   - regression tests the JIT can break: instructions compared against
 #     hardware, faults, signals, memory.
 # Needs meson, ninja and timeout. Exits 1 if any test failed.
@@ -71,6 +74,7 @@ if [ "${1:-}" = --prepare ]; then
     build jit_chain_copy -O0 tests/regress/regress_jit_chain_copy.c
     build jit_vcache -O0 tests/regress/regress_jit_vcache.c -lm
     build jit_sp_entry -O0 tests/regress/regress_jit_sp_entry.c -lpthread
+    build jit_shadow -O0 tests/regress/regress_jit_shadow.c -lpthread
     build mmap_spin -O1 tests/regress/regress_mmap_spin.c
     build tlb_cross_thread -O1 tests/regress/regress_tlb_cross_thread.c
     build stack_extent -O0 tests/regress/regress_stack_extent.c
@@ -173,6 +177,10 @@ echo "== regress_jit_sp_entry"
 out=$(ISH_JIT_PIC=1 timeout 120 "$ISH" -r "$ROOT" /tmp/regress_jit_sp_entry 2>&1)
 echo "$out" | grep -v '^PASS' | tail -20
 echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || fail "regress_jit_sp_entry"
+echo "== regress_jit_shadow"
+out=$(ISH_JIT_PIC=1 timeout 120 "$ISH" -r "$ROOT" /tmp/regress_jit_shadow 2>&1)
+echo "$out" | grep -v '^PASS' | tail -20
+echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || fail "regress_jit_shadow"
 
 for t in $TESTS; do
     echo "== regress_$t"

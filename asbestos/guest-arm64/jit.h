@@ -14,6 +14,8 @@
 // - Loads/stores inline the TLB lookup; a miss resumes the unit's gadget. An
 //   access through the register of the last one checks that one's entry first,
 //   and one through sp from another segment the last stack access's.
+// - Calls are host bls and their returns host rets, which the CPU predicts:
+//   the frame keeps a shadow stack of them (emit_ss_call()).
 // - Guest V registers, once loaded, stay in host registers within a segment;
 //   every write is stored through to cpu->fp at once.
 // - Block ends (b/bl/b.cond/cbz/tbz/ret/br/blr) are translated; chained
@@ -125,6 +127,12 @@ bool jit_chain_ok(struct fiber_block *from, int i, struct fiber_block *to);
 // true: from's native code now enters `to` itself; the caller records the
 // relation so that `to` leaving the cache unlinks it (jit_unlink()).
 bool jit_chain_refused(struct fiber_block *from, int i, struct fiber_block *to);
+// The thread's frame, as the run loop is about to run native code with it
+// (the jetsam lock held to read): its shadow stack of calls emptied if the
+// code region was flushed or blocks of its asbestos freed (free_gen moved)
+// since (jit.c, emit_ss_call()).
+struct fiber_frame;
+void jit_frame_enter(struct fiber_frame *frame, unsigned free_gen);
 // from's jump_ip[i] was written (chained, unchained): PIC native code tests a
 // copy of it, in its module context, which follows. Every write of a slot
 // is followed by this (asbestos lock held).
