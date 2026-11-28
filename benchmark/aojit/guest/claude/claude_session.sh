@@ -13,8 +13,10 @@ fi
 export HOME=/root
 export ANTHROPIC_BASE_URL=http://127.0.0.1:18082 ANTHROPIC_API_KEY=sk-ant-mock \
     DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
-# JavaScriptCore's JIT off, as the app's claude-wrapper runs it
-export BUN_JSC_useJIT=0
+# JavaScriptCore's tiers but FTL, as the app's claude-wrapper runs it with
+# iSH translating: the image is recorded in the mode the app runs it in (its
+# compilers' code then claude.exe's too, its interpreter's still)
+export BUN_JSC_useFTLJIT=0
 claude=/opt/claude-code/bin/claude
 until python3 -c "import socket; socket.create_connection(('127.0.0.1', 18082))" 2> /dev/null; do sleep 1; done
 

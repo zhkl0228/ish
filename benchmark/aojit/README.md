@@ -57,13 +57,19 @@ mode, 88.8% in the session, 85.6% in a long session resumed on the screen and 81
 (When the app had a JIT, the session recorded too made claude.exe's image 41 MB larger and the
 session no faster, 10.8 s either way; the image's size is not what counts.)
 
-Claude Code runs with JavaScriptCore's JIT off (`BUN_JSC_useJIT=0`, which the app's
-`/usr/libexec/claude-wrapper` sets unless it is set already, and its workloads too), as node runs in
-V8's interpreter: what the JIT writes at run time no image can serve and runs through the gadgets,
-while its interpreter is claude.exe's own code. Measured in the app (2026-11-24, iPhone, its
-images, two runs each): print mode 6.6 -> 6.1 s of CPU, a `[session]` 5.0 -> 4.5 s, in the same wall
-time or less; [anon] blocks 78-88K a run -> 200-1500; claude.exe's image serves 99% of its blocks
-with the JIT and 98% without.
+Claude Code runs with JavaScriptCore's tiers as iSH runs (the app's `/usr/libexec/claude-wrapper`
+chooses unless a `BUN_JSC_` setting of them is given already, as kernel/exec.c chooses node's), and
+its workloads record it in the mode it runs in with iSH translating:
+- iSH translating (`/proc/ish/jit`'s `mode: JIT`): its JITs but FTL (`BUN_JSC_useFTLJIT=0`). What
+  they write at run time no image serves, but iSH translates it once hot. On a Mac (2026-11-28, the
+  app's images linked into the CLI, PIC, a 512 MB code region), Claude Code resuming a long session
+  and working through tool calls took 2.17 s of CPU a turn with FTL off, 2.45 s with every tier,
+  2.44 s with Baseline alone and 4.0 s with no JIT, its GC's threads then half its CPU.
+- Not translating: no JIT (`BUN_JSC_useJIT=0`), as before the app had executable memory: what the
+  JIT writes then runs through the gadgets, while its interpreter is claude.exe's own code. Measured
+  in the app then (2026-11-24, iPhone, its images, two runs each): print mode 6.6 -> 6.1 s of CPU, a
+  `[session]` 5.0 -> 4.5 s, in the same wall time or less; [anon] blocks 78-88K a run -> 200-1500;
+  claude.exe's image serves 99% of its blocks with the JIT and 98% without.
 
 busybox (what a session's commands are on Alpine: ls, grep, sed, find and the rest), ssh (git over
 ssh) and libcrypto (ssh's, and TLS's) came in the same day (`guest/busybox/busybox_train.sh`,

@@ -105,14 +105,27 @@ export NPM_CONFIG_PREFIX=/opt/claude-code
 # installs; an update would run on without most of it. A new version comes
 # with an app whose images were recorded on it (benchmark/aojit/README.md).
 export DISABLE_AUTOUPDATER=1
-# JavaScriptCore's JIT off, unless BUN_JSC_useJIT is set already: no AOT image
-# can serve the code it writes at run time, which runs through iSH's gadgets,
-# and its compiler threads take CPU of their own, while its interpreter (LLInt)
-# is claude.exe's own code, which the image serves (98% of its blocks, as with
-# the JIT). Measured in the app (2026-11-24, its images): print mode 6.6 s of
-# CPU -> 6.1 s, a session with tools 5.0 -> 4.5 s, in the same wall time or
-# less. As kernel/exec.c runs node: in V8's interpreter.
-export BUN_JSC_useJIT="${BUN_JSC_useJIT:-0}"
+# JavaScriptCore's tiers as iSH runs, unless a BUN_JSC_ setting of them is
+# given already (as kernel/exec.c chooses node's):
+# - iSH translating (/proc/ish/jit's "mode: JIT"): its JITs but FTL. What they
+#   write at run time no image serves, but iSH translates it once it is hot.
+#   On a Mac (2026-11-28, the app's images, PIC, a 512 MB code region), Claude
+#   Code resuming a long session and working through tool calls took 2.17 s
+#   of CPU a turn with FTL off, 2.45 s with every tier, 2.44 s with Baseline
+#   alone and 4.0 s with none: with none, its GC's threads took half its CPU.
+#   Print mode, one answer: 2.4 s, 2.5 s and 1.9 s with none; resuming that
+#   session 3.7-3.8 s, 4.1 s and 3.7 s.
+# - Not translating (gadgets, or AOT images only): no JIT. What it writes then
+#   runs through the gadgets, its interpreter (LLInt) is claude.exe's own code,
+#   which the image serves. Measured in the app (2026-11-24, no executable
+#   memory then): print mode 6.6 s of CPU -> 6.1 s, a session with tools
+#   5.0 -> 4.5 s.
+if [ -z "${BUN_JSC_useJIT+set}${BUN_JSC_useDFGJIT+set}${BUN_JSC_useFTLJIT+set}" ]; then
+    case $(head -n 1 /proc/ish/jit 2>/dev/null) in
+        "mode: JIT"*) export BUN_JSC_useFTLJIT=0 ;;
+        *) export BUN_JSC_useJIT=0 ;;
+    esac
+fi
 # Of another version than the image was recorded on (an app updated since it
 # was installed), the image serves it only in part (half its blocks): said,
 # with what installs that version where it is (ish-install -u: npm -g --prefix
