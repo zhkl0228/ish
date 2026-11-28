@@ -28,9 +28,11 @@ typedef NS_ENUM(NSInteger, TerminalSessionActivity) {
 // phone with script(1) around it. Claude Code in the title it sets
 // (2026-11-27): ✳ and a space before its title while it waits for the person
 // (for a prompt, or to be allowed a tool), ◐ or ◑ (in turn, a turning glyph)
-// while it works, and no title once it exits. Kimi Code in its program
-// status reports (2026-11-28, Terminal's programStatus): working, and idle or
-// done (finished, not yet seen) while it waits.
+// while it works, and no title once it exits; or, the terminal answering its
+// query as iSH's does since 851, in its program status reports (2026-11-28,
+// Terminal's programStatus): working, and idle or done (its turn over) while
+// it waits. Kimi Code in its reports: working, and idle or done (finished,
+// not yet seen) while it waits.
 typedef NS_ENUM(NSInteger, TerminalSessionAgent) {
     TerminalSessionAgentNone,    // no agent it can tell of owns the terminal
     TerminalSessionAgentWaiting, // ✳; idle, done

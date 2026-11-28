@@ -73,10 +73,10 @@ static NSDictionary<NSString *, NSNumber *> *ClaudeTitleGlyphs(void) {
     return glyphs;
 }
 
-// Kimi Code's state, as it reports it (Terminal's programStatus: recorded
-// working, idle, and done, which is idle till it thinks it was seen), while
-// the job that reported it owns the terminal
-- (TerminalSessionAgent)kimiAgent {
+// An agent's state, as it reports it (Terminal's programStatus: recorded
+// working, idle, and done, its turn over), while the job that reported it
+// owns the terminal
+- (TerminalSessionAgent)reportedAgent {
     NSString *status = self.terminal.programStatus;
     if (status == nil || self.terminal.programStatusGroup != self.terminal.foregroundProcessGroup)
         return TerminalSessionAgentNone;
@@ -84,21 +84,25 @@ static NSDictionary<NSString *, NSNumber *> *ClaudeTitleGlyphs(void) {
 }
 
 // The title the job owning the terminal set, nil if none, and the agent's
-// state: Claude Code's told by its title's glyph, which the title returned
-// leaves off, Kimi Code's by its reports (kimiAgent). Claude Code's begins
-// with a glyph of those recorded; one it begins otherwise is said in the
-// kernel log (the first of each), and is shown as it is, telling no state.
+// state: Kimi Code's by its reports (reportedAgent); Claude Code's by its
+// reports too, which it makes once the terminal answers its query (iSH's
+// does since 851), its title then without a glyph (2026-11-28: "Claude
+// Code", its session's summary), else by its title's glyph, which the title
+// returned leaves off. A title of Claude Code's not reporting begins with a
+// glyph of those recorded; one it begins otherwise is said in the kernel log
+// (the first of each), and is shown as it is, telling no state.
 - (nullable NSString *)jobTitleWithAgent:(TerminalSessionAgent *)agent {
     *agent = TerminalSessionAgentNone;
     if (self.state != TerminalSessionStateRunning)
         return nil;
-    if ([self.foregroundProgram isEqualToString:@"kimi-code"])
-        *agent = [self kimiAgent];
+    NSString *program = self.foregroundProgram;
+    if ([program isEqualToString:@"kimi-code"] || [program isEqualToString:@"claude"])
+        *agent = [self reportedAgent];
     int fg_group = self.terminal.foregroundProcessGroup;
     NSString *title = self.terminal.windowTitle;
     if (title.length == 0 || self.terminal.windowTitleGroup != fg_group)
         return nil;
-    if (![self.foregroundProgram isEqualToString:@"claude"])
+    if (![program isEqualToString:@"claude"] || *agent != TerminalSessionAgentNone)
         return title;
     for (NSString *glyph in ClaudeTitleGlyphs()) {
         if ([title hasPrefix:glyph]) {

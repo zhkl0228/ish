@@ -196,10 +196,19 @@ NSNotificationName const TerminalProgramStatusDidChangeNotification = @"Terminal
 // A program status report (OSC 7501, its text after "7501;"), as Kimi Code's
 // were recorded (2026-11-28, PI_PROGRAM_STATUS=1): state=idle:app=kimi-code,
 // state=working:app=kimi-code:msg=<base64 of its session's title>, the same
-// with state=done, and state=clear (as it starts and as it exits). Pairs of
-// key=value by ':', the program as a whole's (no id=). One with a key, a
-// state or an app not recorded is said in the kernel log, whole, and taken
-// for nothing: what it would mean is not known.
+// with state=done, and state=clear (as it starts and as it exits); and as
+// Claude Code 2.1.332's were, iSH answering its query (2026-11-28, 851, in
+// the kernel log): state=idle:app=claude-code, state=working:app=claude-code,
+// the same with msg=<base64 of what it does> (a tool call's description, or
+// "1 shell still running": it says it works while a background task of its
+// runs, its turn over), and state=done:app=claude-code as its turn ends. Pairs of key=value by ':'. Those of the program as a
+// whole have no id=; those of one of its tasks do, Claude Code's background
+// shells' (2026-11-28): state=working:app=claude-code:id=<the task's
+// id>:title=<base64 of its description> as one starts, state=clear:id=<the
+// task's id> as it ends, taken for nothing, the program's own telling of
+// what it does. One with a key, a state or an app not recorded is said in
+// the kernel log, whole, and taken for nothing: what it would mean is not
+// known.
 - (void)programStatusReported:(NSString *)report {
     NSMutableDictionary<NSString *, NSString *> *pairs = [NSMutableDictionary new];
     for (NSString *pair in [report componentsSeparatedByString:@":"]) {
@@ -212,16 +221,33 @@ NSNotificationName const TerminalProgramStatusDidChangeNotification = @"Terminal
         }
         pairs[[pair substringToIndex:equals.location]] = [pair substringFromIndex:NSMaxRange(equals)];
     }
-    static NSSet<NSString *> *keys, *states;
+    static NSSet<NSString *> *keys, *taskStartKeys, *taskEndKeys;
+    // Each app's states recorded; clear, alone, Kimi Code's only
+    static NSDictionary<NSString *, NSSet<NSString *> *> *states;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         keys = [NSSet setWithArray:@[@"state", @"app", @"msg"]];
-        states = [NSSet setWithArray:@[@"idle", @"working", @"done", @"clear"]];
+        taskStartKeys = [NSSet setWithArray:@[@"state", @"app", @"id", @"title"]];
+        taskEndKeys = [NSSet setWithArray:@[@"state", @"id"]];
+        states = @{
+            @"kimi-code": [NSSet setWithArray:@[@"idle", @"working", @"done"]],
+            @"claude-code": [NSSet setWithArray:@[@"idle", @"working", @"done"]],
+        };
     });
     NSString *state = pairs[@"state"];
     BOOL clear = [state isEqualToString:@"clear"];
-    if (![[NSSet setWithArray:pairs.allKeys] isSubsetOfSet:keys] || ![states containsObject:state] ||
-            (clear ? pairs.count != 1 : ![pairs[@"app"] isEqualToString:@"kimi-code"])) {
+    NSSet<NSString *> *reportKeys = [NSSet setWithArray:pairs.allKeys];
+    if (pairs[@"id"] != nil) {
+        BOOL taskStarts = [state isEqualToString:@"working"] && [pairs[@"app"] isEqualToString:@"claude-code"] &&
+            [reportKeys isEqualToSet:taskStartKeys];
+        BOOL taskEnds = clear && [reportKeys isEqualToSet:taskEndKeys];
+        if (!taskStarts && !taskEnds)
+            printk("program status (OSC 7501) of a task, its keys, state or app not recorded, taken for nothing: %s\n",
+                   report.UTF8String);
+        return;
+    }
+    if (![reportKeys isSubsetOfSet:keys] ||
+            (clear ? pairs.count != 1 : ![states[pairs[@"app"]] containsObject:state])) {
         printk("program status (OSC 7501) of a key, a state or an app not recorded, taken for nothing: %s\n",
                report.UTF8String);
         return;
