@@ -1539,9 +1539,16 @@ static const CGFloat kColumnKeysBottom = 24;
     self.holdChangeFeedback = [UISelectionFeedbackGenerator new];
     // What runs in the selected tab, seen once a second as the tabs' titles
     // are (TerminalSessionStore): a pager a job runs (git log's less) owns no
-    // title of its own
+    // title of its own. And, in front, where the column's meters begin: UIKit
+    // says no change of where the status bar ends as the Dynamic Island, the
+    // app back in front, gives up the app's own Live Activity (2026-11-28:
+    // back in front, at times the status bar's region 264 or 217 points, then
+    // 174 unsaid, and the meters as far under it till the keyboard moved; at
+    // times 174 at once)
     NSTimer *profile = [NSTimer timerWithTimeInterval:1 repeats:YES block:^(NSTimer *_) {
         [weakSelf updateColumnProfile];
+        if (weakSelf.view.window.windowScene.activationState == UISceneActivationStateForegroundActive)
+            [weakSelf updateMonitorColumn];
     }];
     [NSRunLoop.mainRunLoop addTimer:profile forMode:NSRunLoopCommonModes];
 }
@@ -2371,10 +2378,11 @@ static NSString *ShellQuoted(NSString *string) {
 // layout goes to the kernel log (dmesg), and the last is kept for
 // /proc/ish/defaults/meters_column, with all it was laid out by, to place them
 // by on the phone. Called as the safe area, the traits and the status bar
-// change, and from updateViewConstraints, where UIKit notes the reserved
-// regions read and updates the constraints again as they change (an indicator
-// come or gone); never from a layout pass: a change it made laid out again,
-// which called it again.
+// change, from updateViewConstraints, where UIKit notes the reserved regions
+// read and updates the constraints again as they change (an indicator come or
+// gone), and once a second in front, for a change it does not tell (the
+// Dynamic Island giving up the app's Live Activity); never from a layout
+// pass: a change it made laid out again, which called it again.
 - (void)updateMonitorColumn {
     UIView *view = self.view;
     UIEdgeInsets insets = view.safeAreaInsets;
