@@ -2368,7 +2368,7 @@ static NSString *ShellQuoted(NSString *string) {
 // folded) had the meters cover. The status bar's frame alone says nothing: it
 // is the window's top, 2 points high, on that phone. With the status bar
 // hidden, or nothing said of where it ends, 8 points under the tab bar. Each
-// layout is logged, and kept for
+// layout goes to the kernel log (dmesg), and the last is kept for
 // /proc/ish/defaults/meters_column, with all it was laid out by, to place them
 // by on the phone. Called as the safe area, the traits and the status bar
 // change, and from updateViewConstraints, where UIKit notes the reserved
@@ -2429,7 +2429,11 @@ static NSString *ShellQuoted(NSString *string) {
                         statusHidden ? @"hidden" : NSStringFromCGRect(status)];
     if (![layout isEqualToString:self.monitorColumnLayout]) {
         self.monitorColumnLayout = layout;
-        NSLog(@"Meters' column: %@", layout);
+        // To the kernel log, each one: what laid the column out where it
+        // stayed (2026-11-28: 43 points under where it goes, the status bar
+        // back as it is, till the keyboard went and came) is one before the
+        // last, which is all the defaults have
+        printk("meters' column: %s\n", layout.UTF8String);
         [NSUserDefaults.standardUserDefaults setObject:layout forKey:kMetersColumnLayoutKey];
     }
 
