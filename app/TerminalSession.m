@@ -29,6 +29,9 @@ NSString *const TerminalSessionNotificationUUIDKey = @"session";
 @property TerminalSessionActivity shownActivity; // activity as last announced
 @property TerminalSessionAgent shownAgent; // agent as last announced
 @property BOOL agentStoppedUnseen;
+// agentStoppedUnseen as last announced: markSeen may end it with nothing
+// else changed, the Live Activity still telling of it as stopped
+@property BOOL shownAgentStoppedUnseen;
 // What of it is seen: its output and its programs' bells and notifications
 // so far, and whether a job ended since
 @property NSUInteger seenOutputCount;
@@ -209,10 +212,10 @@ static NSDictionary<NSString *, NSNumber *> *ClaudeTitleGlyphs(void) {
     [self announceChanges];
 }
 
-// Announces displayTitle or activity if either changed. Only while it runs: a
-// session that exited announced that already, and another change of one
-// would read as its exit again (a tab kept for a shell that died at once
-// would close).
+// Announces displayTitle, activity, agent or agentStoppedUnseen if one
+// changed. Only while it runs: a session that exited announced that already,
+// and another change of one would read as its exit again (a tab kept for a
+// shell that died at once would close).
 - (void)announceChanges {
     if (self.state != TerminalSessionStateRunning)
         return;
@@ -223,11 +226,13 @@ static NSDictionary<NSString *, NSNumber *> *ClaudeTitleGlyphs(void) {
         self.agentStoppedUnseen = NO;
     else if (self.shownAgent == TerminalSessionAgentWorking)
         self.agentStoppedUnseen = YES;
-    if ([title isEqualToString:self.shownTitle] && activity == self.shownActivity && agent == self.shownAgent)
+    if ([title isEqualToString:self.shownTitle] && activity == self.shownActivity && agent == self.shownAgent &&
+        self.agentStoppedUnseen == self.shownAgentStoppedUnseen)
         return;
     self.shownTitle = title;
     self.shownActivity = activity;
     self.shownAgent = agent;
+    self.shownAgentStoppedUnseen = self.agentStoppedUnseen;
     [self notifyChanged];
 }
 
