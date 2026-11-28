@@ -11,9 +11,9 @@
 # usage: tests/regress/ci.sh <work dir>
 #   the build, the rootfs and the programs go in <work dir>, new
 #
-# Needs clang, lld, meson, ninja, pkg-config, the sqlite3 and libarchive headers,
-# python3, curl, Docker and the network (the rootfs, the container's image and
-# its packages).
+# Needs clang, lld, meson, ninja, pkg-config, the libarchive headers, python3,
+# curl, Docker and the network (the rootfs, the container's image and its
+# packages). SQLite comes with the source (deps/sqlite).
 set -eu
 work=$1
 cd "$(dirname "$0")/../.."

@@ -73,7 +73,6 @@ iSH 是一个运行在 iOS 上的 Linux shell。本项目使用了 AArch64（ARM
     + Meson (`pip3 install meson`)
  - Ninja 请查看[此处](https://ninja-build.org/)
  - Clang and LLD (在安装了 `brew` 的 macOS 系统上运行 `brew install llvm`。在 Linux 系统上请根据你的包管理器，选择运行相应的安装命令 `sudo apt install clang lld` 或者 `sudo pacman -S clang lld`)
- - sqlite3 (通常 sqlite3 在 macOS 上是预安装的，但它或许没有安装在你的 Linux 上，运行 `which sqlite3` 以查看它是否存在。如果没有，你可以根据你的包管理器运行 `sudo apt install libsqlite3-dev` 之类的安装命令)
  - libarchive (在 macOS 系统上使用 `brew install libarchive` 或 `sudo port install libarchive` 来安装。在 Linux 系统上请根据你的包管理器，选择运行相应的安装命令如 `sudo apt install libarchive-dev` 来安装)
  - 编译 iOS 应用还需要：xcodegen（`brew install xcodegen`），以及带 `aarch64-apple-ios` 目标的 rustup（`rustup target add aarch64-apple-ios`）
 

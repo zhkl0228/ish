@@ -1,3 +1,6 @@
+#include <fcntl.h>
+#include <pthread.h>
+#include <stdarg.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -294,7 +297,37 @@ static void sqlite_func_change_prefix(sqlite3_context *context, int argc, sqlite
 extern int fakefs_rebuild(struct fakefs_db *fs, int root_fd);
 extern int fakefs_migrate(struct fakefs_db *fs, int root_fd);
 
+#if defined(__APPLE__) && defined(F_BARRIERFSYNC)
+// Syncs ordered on the disk, as Apple's libsqlite3 makes them, which this
+// SQLite (deps/sqlite) is not: it syncs with fsync(), which on Apple's systems
+// leaves the disk free to write in any order, or with F_FULLFSYNC, which
+// waits for the disk to have written everything (cp -r on a fakefs 43%
+// slower). checkpoint_fullfsync (fake_db_init()) makes a checkpoint's syncs,
+// with synchronous=NORMAL the only ones, F_FULLFSYNC; the unix VFS's fcntl
+// makes those F_BARRIERFSYNC. This SQLite serves fakefs alone.
+static int (*vfs_fcntl)(int, int, ...);
+static int barrier_fcntl(int fd, int op, ...) {
+    va_list ap;
+    va_start(ap, op);
+    void *arg = va_arg(ap, void *);
+    va_end(ap);
+    return vfs_fcntl(fd, op == F_FULLFSYNC ? F_BARRIERFSYNC : op, arg);
+}
+static void barrier_syncs(void) {
+    sqlite3_vfs *vfs = sqlite3_vfs_find("unix");
+    if (vfs == NULL || vfs->iVersion < 3)
+        return;
+    vfs_fcntl = (int (*)(int, int, ...)) vfs->xGetSystemCall(vfs, "fcntl");
+    if (vfs_fcntl != NULL)
+        vfs->xSetSystemCall(vfs, "fcntl", (sqlite3_syscall_ptr) barrier_fcntl);
+}
+#endif
+
 int fake_db_init(struct fakefs_db *fs, const char *db_path, int root_fd) {
+#if defined(__APPLE__) && defined(F_BARRIERFSYNC)
+    static pthread_once_t barrier_once = PTHREAD_ONCE_INIT;
+    pthread_once(&barrier_once, barrier_syncs);
+#endif
     int err = sqlite3_open_v2(db_path, &fs->db, SQLITE_OPEN_READWRITE, NULL);
     if (err != SQLITE_OK) {
         printk("error opening database: %s\n", sqlite3_errmsg(fs->db));
@@ -324,11 +357,18 @@ int fake_db_init(struct fakefs_db *fs, const char *db_path, int root_fd) {
     //    process crashes (like FULL) but skips an fsync per commit,
     //    cheap when fakefs writes are infrequent.
     //  - PRAGMA temp_store=MEMORY: keeps sort/temp tables off disk.
+    //  - PRAGMA checkpoint_fullfsync: a checkpoint's syncs, with NORMAL the
+    //    only ones, ordered on the disk (Apple's systems: F_BARRIERFSYNC, by
+    //    barrier_fcntl()), as Apple's libsqlite3 made every sync. A plain
+    //    fsync does not order them: after a power loss or a panic, pages a
+    //    checkpoint wrote could be there and the WAL frames they came from
+    //    not. This SQLite is our own (deps/sqlite).
     static const char *tuning[] = {
         "pragma mmap_size=268435456",   // 256 MB
         "pragma cache_size=-65536",     // 64 MB in-process page cache
         "pragma synchronous=NORMAL",
         "pragma temp_store=MEMORY",
+        "pragma checkpoint_fullfsync=1",
     };
     for (size_t ti = 0; ti < sizeof(tuning)/sizeof(tuning[0]); ti++) {
         // Tuning pragmas are best-effort: a failure here only loses a perf knob,

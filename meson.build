@@ -71,9 +71,18 @@ threads = dependency('threads')
 librt = cc.find_library('rt', required: false)
 libm = cc.find_library('m', required: false)
 libdl = cc.find_library('dl', required: false)
-sqlite3 = cc.find_library('sqlite3')
-# sqlite3 comes with libfakefs, for fs/fake.c too: here as well, it was on
-# the CLI's link line twice, which Apple's ld warned of
+# SQLite: the amalgamation in deps/sqlite (its README), not the system's:
+# Apple's libsqlite3 shrinks its purgeable page cache with a system call at
+# every statement reset, and fakefs resets one per guest file operation.
+# Linked whole into libfakefs, which fs/fake.c's users link too. HAVE_USLEEP:
+# a busy wait (the file provider holding meta.db) sleeps a millisecond at a
+# time, not a second; no extensions (iOS loads no code).
+libsqlite3 = static_library('sqlite3', 'deps/sqlite/sqlite3.c',
+    c_args: ['-w', '-DSQLITE_THREADSAFE=1', '-DHAVE_USLEEP=1', '-DSQLITE_DEFAULT_MEMSTATUS=0',
+             '-DSQLITE_OMIT_LOAD_EXTENSION=1'],
+    dependencies: [threads],
+    override_options: ['warning_level=0', 'werror=false'])
+includes += include_directories('deps/sqlite')
 dependencies = [librt, libm, libdl, threads]
 
 subdir('vdso/arm64')
@@ -1661,7 +1670,7 @@ endif
 libfakefs = library('fakefs',
     ['fs/fake-db.c', 'fs/fake-migrate.c', 'fs/fake-rebuild.c'],
     include_directories: includes,
-    dependencies: sqlite3)
+    link_whole: libsqlite3)
 
 arch_kernel_src = ['kernel/arch/arm64/calls.c', 'kernel/sysvipc.c', 'kernel/shm.c', 'kernel/msg.c', 'kernel/sem.c']
 

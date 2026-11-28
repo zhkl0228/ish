@@ -44,4 +44,4 @@ SWIFT_OBJC_INTERFACE_HEADER_NAME = iSH-Swift.h
 
 // Header search paths needed for sources compiled directly in this target
 // (previously compiled in libiSHApp, which used AppLib.xcconfig)
-HEADER_SEARCH_PATHS = $(inherited) $(SRCROOT) $(SRCROOT)/deps/libarchive/libarchive $(SRCROOT)/build/idevice
+HEADER_SEARCH_PATHS = $(inherited) $(SRCROOT) $(SRCROOT)/deps/sqlite $(SRCROOT)/deps/libarchive/libarchive $(SRCROOT)/build/idevice
