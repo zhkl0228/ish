@@ -114,6 +114,12 @@ struct AgentLiveActivity: Widget {
                         Text(context.state.status).font(.subheadline).foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    // In from the island's ends: the region is masked by a
+                    // rounded shape inside the island's, which cut off the
+                    // second line's first letter at its lower left (2026-11-28,
+                    // 852, the foldable's island expanded: the C of "Claude is
+                    // working")
+                    .padding(.horizontal, 12)
                 }
             } compactLeading: {
                 StateIcon(state: context.state)
