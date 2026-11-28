@@ -204,15 +204,8 @@ static void exit_current(int status, bool ran) {
         fs_info_release(current->fs);
         current->fs = NULL;
     }
-    // Close per-thread futex wakeup pipe
-    if (current->futex_pipe[0] != -1) {
-        close(current->futex_pipe[0]);
-        current->futex_pipe[0] = -1;
-    }
-    if (current->futex_pipe[1] != -1) {
-        close(current->futex_pipe[1]);
-        current->futex_pipe[1] = -1;
-    }
+    // Close per-thread futex wakeup pipe, out of a signal's kick's way
+    futex_pipe_close();
 
     // sighand must be released below so it can be protected by pids_lock
     // since it can be accessed by other threads

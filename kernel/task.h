@@ -68,7 +68,9 @@ struct task {
     // Used for deadlock detection: if all threads are blocking, it's a hang.
     bool blocking;
     // Per-thread pipe for futex_wait wakeup (reused across calls to avoid
-    // pipe creation overhead in Go runtime spin loops)
+    // pipe creation overhead in Go runtime spin loops): written by a wake and
+    // by a signal's kick. Set and closed under waiting_cond_lock, which the
+    // kick takes (kernel/futex.c).
     int futex_pipe[2]; // [0]=read, [1]=write; -1 if not yet created
     // Timestamp (CLOCK_MONOTONIC ns) of last time blocking became false.
     // Used by deadlock detector to check how long ALL threads have been stuck.
@@ -401,7 +403,7 @@ void update_thread_name(void);
 // at times, where it takes 0.1 s, the time in the outer's clone and in the
 // inner's pids_lock. Kept as they happen (stat_max: the longest so far).
 extern _Atomic uint64_t st_pids_waits, st_pids_wait_ns, st_pids_wait_max_ns;
-extern _Atomic uint64_t st_futex_waits, st_futex_woken, st_futex_missed;
+extern _Atomic uint64_t st_futex_waits, st_futex_shared, st_futex_woken, st_futex_missed;
 void stat_max(_Atomic uint64_t *max, uint64_t value);
 uint64_t stat_now_ns(void);
 void thread_stats_describe(char *buf, size_t size);

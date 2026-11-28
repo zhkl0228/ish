@@ -3,6 +3,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include "kernel/calls.h"
+#include "kernel/futex.h"
 #include "kernel/signal.h"
 #include "kernel/task.h"
 #include "kernel/resource.h"
@@ -122,6 +123,8 @@ static void wake_for_signal_unlocked(struct task *task) {
         lock(&task->waiting_cond_lock);
         if (task->waiting_cond != NULL)
             notify(task->waiting_cond);
+        // and its futex wait's, which SIGUSR1 misses before it is in poll()
+        futex_signal_kick(task);
         unlock(&task->waiting_cond_lock);
         lock(&task->sighand->lock);
     }

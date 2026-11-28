@@ -473,6 +473,18 @@ else
         status=1
     fi
     echo
+    section "process-shared futexes woken across processes; futex waits ended by a signal, the deadline, exit_group"
+    if "$CC_GUEST" -static -O0 -Wall -pthread -o "$GUEST_ROOT/tmp/regress_futex_shared" \
+            tests/regress/regress_futex_shared.c; then
+        out=$(timeout 120 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_futex_shared 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_futex_shared"
+    else
+        echo "failed to build regress_futex_shared" >&2
+        status=1
+    fi
+    echo
     section "set_tid_address returns the caller's thread id"
     if "$CC_GUEST" -static -O0 -Wall -pthread -o "$GUEST_ROOT/tmp/regress_set_tid_address" \
             tests/regress/regress_set_tid_address.c; then

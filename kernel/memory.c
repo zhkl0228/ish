@@ -753,6 +753,7 @@ void pt_set_file(struct mem *mem, page_t start, pages_t pages, struct fd *fd, si
             continue;
         data->fd = fd_retain(fd);
         data->file_offset = file_offset + (size_t) (page - start) * PAGE_SIZE;
+        data->file_base = data->file_offset - mem_pt(mem, page)->offset;
     }
 }
 

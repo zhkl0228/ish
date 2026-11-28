@@ -827,6 +827,7 @@ static int shared_map_add(struct mem *mem, page_t start, pages_t pages, void *me
         .refcount = 1,
         .fd = fd_retain(fd),
         .file_offset = file_offset,
+        .file_base = offset,
         .release = shared_map_release,
     };
     *map = (struct shared_map) {

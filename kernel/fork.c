@@ -347,13 +347,14 @@ void thread_stats_describe(char *buf, size_t size) {
              "clones: %llu (%llu of them threads), %.1f us each on average, the longest %.1f ms\n"
              "  starting the host thread (pthread_create): %.1f us each, the longest %.1f ms\n"
              "pids_lock as a task is made: waited %.1f us each, the longest %.1f ms\n"
-             "futex waits: %llu; woken by their wake: %llu; the word found changed at the 100ms re-check, "
-             "the wake not seen: %llu\n",
+             "futex waits: %llu (%llu of them process-shared); woken by their wake: %llu; the word found "
+             "changed at the re-check (every 30 s), the wake not seen: %llu\n",
              (unsigned long long) clones, (unsigned long long) atomic_load(&st_clone_threads),
              atomic_load(&st_clone_ns) / 1e3 / each, atomic_load(&st_clone_max_ns) / 1e6,
              atomic_load(&st_start_ns) / 1e3 / each, atomic_load(&st_start_max_ns) / 1e6,
              atomic_load(&st_pids_wait_ns) / 1e3 / waits, atomic_load(&st_pids_wait_max_ns) / 1e6,
-             (unsigned long long) atomic_load(&st_futex_waits), (unsigned long long) atomic_load(&st_futex_woken),
+             (unsigned long long) atomic_load(&st_futex_waits), (unsigned long long) atomic_load(&st_futex_shared),
+             (unsigned long long) atomic_load(&st_futex_woken),
              (unsigned long long) atomic_load(&st_futex_missed));
 }
 

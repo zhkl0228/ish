@@ -98,6 +98,9 @@ struct data {
     // for display in /proc/pid/maps
     struct fd *fd;
     size_t file_offset;
+    // The file's offset of the first byte of data: with the file, what a
+    // process-shared futex on a shared page of it is known by (kernel/futex.c)
+    size_t file_base;
     const char *name;
     // Guest module id + 1 for the ARM64 JIT (asbestos/guest-arm64/jit.c), 0
     // until looked up. Not under ISH_JIT: app code sees this struct too.
