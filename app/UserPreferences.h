@@ -66,7 +66,17 @@ extern const int kDefaultFontSize;
 @property (null_resettable) NSString *fontFamily;
 @property (readonly) NSString *fontFamilyUserFacingName;
 @property (readonly) UIFont *approximateFont;
+// The terminal's font size: in a wide window (regular width: an iPad's, a
+// foldable's screen unfolded), and in a narrow one (compact width: a phone's,
+// a foldable's screen folded) its own once set there (compactFontSize, nil
+// till then: fontSize there too), so a foldable's two screens keep each the
+// size picked on it (2026-11-28: 40 columns folded at the size good
+// unfolded). Read and set for a window's width (fontSizeForWidth:): a pinch,
+// ⌘+ and ⌘-, and Settings set the one of the window they are in.
 @property NSNumber *fontSize;
+@property (nullable) NSNumber *compactFontSize;
+- (int)fontSizeForWidth:(UIUserInterfaceSizeClass)width;
+- (void)setFontSize:(int)size forWidth:(UIUserInterfaceSizeClass)width;
 @property ColorScheme colorScheme;
 @property (readonly) BOOL requestingDarkAppearance;
 @property (readonly) UIUserInterfaceStyle userInterfaceStyle;

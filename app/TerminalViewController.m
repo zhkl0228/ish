@@ -1976,10 +1976,10 @@ static NSString *ShellQuoted(NSString *string) {
 }
 
 - (void)increaseFontSize:(id)sender {
-    [self.termView changeFontSize:UserPreferences.shared.fontSize.intValue + 1];
+    [self.termView changeFontSize:self.termView.fontSize + 1];
 }
 - (void)decreaseFontSize:(id)sender {
-    [self.termView changeFontSize:UserPreferences.shared.fontSize.intValue - 1];
+    [self.termView changeFontSize:self.termView.fontSize - 1];
 }
 - (void)resetFontSize:(id)sender {
     [self.termView changeFontSize:kDefaultFontSize];

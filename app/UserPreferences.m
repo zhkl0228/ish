@@ -18,6 +18,7 @@ static NSString *const kPreferenceHideExtraKeysWithExternalKeyboardKey = @"Hide 
 static NSString *const kPreferenceOverrideControlSpaceKey = @"Override Control Space";
 static NSString *const kPreferenceFontFamilyKey = @"Font Family";
 static NSString *const kPreferenceFontSizeKey = @"Font Size";
+static NSString *const kPreferenceCompactFontSizeKey = @"Font Size Compact Width";
 static NSString *const kPreferenceThemeKey = @"ModernTheme";
 static NSString *const kPreferenceDisableDimmingKey = @"Disable Dimming";
 NSString *const kPreferenceLaunchCommandKey = @"Init Command";
@@ -189,6 +190,7 @@ bool remove_user_default_impl(const char *name) {
             @"override_control_space": kPreferenceOverrideControlSpaceKey,
             @"font_family": kPreferenceFontFamilyKey,
             @"font_size": kPreferenceFontSizeKey,
+            @"font_size_compact": kPreferenceCompactFontSizeKey,
             @"disable_dimming": kPreferenceDisableDimmingKey,
             @"launch_command": kPreferenceLaunchCommandKey,
             @"boot_command": kPreferenceBootCommandKey,
@@ -220,6 +222,7 @@ bool remove_user_default_impl(const char *name) {
             kPreferenceOverrideControlSpaceKey: property(overrideControlSpace),
             kPreferenceFontFamilyKey: property(fontFamily),
             kPreferenceFontSizeKey: property(fontSize),
+            kPreferenceCompactFontSizeKey: property(compactFontSize),
             kPreferenceDisableDimmingKey: property(shouldDisableDimming),
             kPreferenceLaunchCommandKey: property(launchCommand),
             kPreferenceBootCommandKey: property(bootCommand),
@@ -332,6 +335,31 @@ bool remove_user_default_impl(const char *name) {
 
 - (BOOL)validateFontSize:(id *)value error:(NSError **)error {
     return [*value isKindOfClass:NSNumber.class];
+}
+
+- (NSNumber *)compactFontSize {
+    return [_defaults objectForKey:kPreferenceCompactFontSizeKey];
+}
+
+- (void)setCompactFontSize:(NSNumber *)compactFontSize {
+    [_defaults setObject:compactFontSize forKey:kPreferenceCompactFontSizeKey];
+}
+
+- (BOOL)validateCompactFontSize:(id *)value error:(NSError **)error {
+    return [*value isKindOfClass:NSNumber.class];
+}
+
+- (int)fontSizeForWidth:(UIUserInterfaceSizeClass)width {
+    if (width == UIUserInterfaceSizeClassCompact && self.compactFontSize != nil)
+        return self.compactFontSize.intValue;
+    return self.fontSize.intValue;
+}
+
+- (void)setFontSize:(int)size forWidth:(UIUserInterfaceSizeClass)width {
+    if (width == UIUserInterfaceSizeClassCompact)
+        self.compactFontSize = @(size);
+    else
+        self.fontSize = @(size);
 }
 
 // MARK: fontFamily

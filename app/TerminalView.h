@@ -18,9 +18,11 @@ enum OverrideAppearance {
 
 @property IBInspectable (nonatomic) BOOL canBecomeFirstResponder;
 
-// The font size, the one in Settings (UserPreferences' fontSize): a pinch on
-// the terminal, ⌘+ and ⌘- change it, within the sizes it can be, and the
-// terminal shows the size and the columns and rows it makes
+// The font size, the one in Settings for the window's width (UserPreferences'
+// fontSizeForWidth:: a narrow window's, a wide one's): a pinch on the
+// terminal, ⌘+ and ⌘- change it, within the sizes it can be, and the terminal
+// shows the size and the columns and rows it makes
+@property (readonly) int fontSize;
 - (void)changeFontSize:(int)size;
 // Puts the keyboard away (the bar's Hide Keyboard key, the View menu's)
 - (IBAction)loseFocus:(nullable id)sender;

@@ -67,7 +67,7 @@ char *previewString = "# cat /proc/ish/colors\r\n"
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    [UserPreferences.shared observe:@[@"theme", @"fontSize", @"fontFamily", @"colorScheme"]
+    [UserPreferences.shared observe:@[@"theme", @"fontSize", @"compactFontSize", @"fontFamily", @"colorScheme"]
                             options:0 owner:self usingBlock:^(typeof(self) self) {
         dispatch_async(dispatch_get_main_queue(), ^{
             [self.tableView reloadData];
@@ -157,6 +157,7 @@ enum {
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     switch (section) {
         case PreviewSection: return @"Change the color scheme used for the preview.";
+        case MainSection: return @"The font size is kept apart for narrow windows (a phone's, a foldable's screen folded) and wide ones (an iPad's, a foldable's screen unfolded): this one is the window's, and a pinch on the terminal sets the size of the window it is in.";
         case MetersSection: return @"The CPUs, the memory and the heat, right of the terminal's last column. Tap them for more. Where the window has a column, its keys follow the program: vim's : and /, a pager's space and q, an AI agent's up and down arrows in the pad's and Ctrl-C's places (the up one held is Ctrl-C).";
         default: return nil;
     }
@@ -215,11 +216,12 @@ enum {
                     cell.detailTextLabel.font = [UIFont fontWithName:UserPreferences.shared.fontFamily size:cell.detailTextLabel.font.pointSize];
                     break;
                 case 2: {
-                    UserPreferences *prefs = [UserPreferences shared];
+                    // the window's width's (fontSizeChanged:)
+                    int size = [UserPreferences.shared fontSizeForWidth:self.windowWidth];
                     UILabel *label = [cell viewWithTag:1];
                     UIStepper *stepper = [cell viewWithTag:2];
-                    label.text = prefs.fontSize.stringValue;
-                    stepper.value = prefs.fontSize.doubleValue;
+                    label.text = @(size).stringValue;
+                    stepper.value = size;
                     cell.selectionStyle = UITableViewCellSelectionStyleNone;
                     break;
                 }
@@ -305,8 +307,15 @@ enum {
     [self.navigationController popToViewController:self animated:YES];
 }
 
+// The window's width, the font size set for it (UserPreferences'
+// fontSizeForWidth:): the window scene's, as its terminals' (TerminalView), not
+// this page's, which in a sheet may be narrower
+- (UIUserInterfaceSizeClass)windowWidth {
+    return self.view.window.windowScene.traitCollection.horizontalSizeClass;
+}
+
 - (IBAction)fontSizeChanged:(UIStepper *)sender {
-    UserPreferences.shared.fontSize = @((int) sender.value);
+    [UserPreferences.shared setFontSize:(int) sender.value forWidth:self.windowWidth];
 }
 
 - (void)columnKeysFollowProgramChanged:(UISwitch *)sender {

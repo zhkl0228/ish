@@ -149,11 +149,20 @@ struct rowcol {
             self->_keyCommands = nil;
         });
     }];
-    [prefs observe:@[@"colorScheme", @"fontFamily", @"fontSize", @"theme", @"cursorStyle", @"blinkCursor"]
+    [prefs observe:@[@"colorScheme", @"fontFamily", @"fontSize", @"compactFontSize", @"theme", @"cursorStyle",
+                     @"blinkCursor"]
            options:0 owner:self usingBlock:^(typeof(self) self) {
         dispatch_async(dispatch_get_main_queue(), ^{
             [self _updateStyle];
         });
+    }];
+    // Into a window, or the window narrower or wider (a foldable folded or
+    // unfolded): the font size for its width (fontSize), shown as a pinch's is
+    [self registerForTraitChanges:@[UITraitHorizontalSizeClass.class]
+                      withHandler:^(TerminalView *view, UITraitCollection *previous) {
+        if (previous.horizontalSizeClass != UIUserInterfaceSizeClassUnspecified)
+            view.showsSizeAtNextStyle = YES;
+        [view _updateStyle];
     }];
     [NSNotificationCenter.defaultCenter addObserver:self
                                            selector:@selector(darkerColorsChanged:)
@@ -289,9 +298,10 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollRange", 
     if (self.overrideAppearance != OverrideAppearanceNone) {
         palette = self.overrideAppearance == OverrideAppearanceLight ? prefs.theme.lightPalette : prefs.theme.darkPalette;
     }
+    int fontSize = self.fontSize;
     NSMutableDictionary<NSString *, id> *themeInfo = [@{
         @"fontFamily": prefs.fontFamily,
-        @"fontSize": prefs.fontSize,
+        @"fontSize": @(fontSize),
         @"foregroundColor": palette.foregroundColor,
         @"backgroundColor": palette.backgroundColor,
         @"blinkCursor": @(prefs.blinkCursor),
@@ -302,7 +312,6 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollRange", 
         themeInfo[@"colorPaletteOverrides"] = palette.colorPaletteOverrides;
     }
     NSString *json = [[NSString alloc] initWithData:[NSJSONSerialization dataWithJSONObject:themeInfo options:0 error:nil] encoding:NSUTF8StringEncoding];
-    int fontSize = prefs.fontSize.intValue;
     // updateStyle returns the columns and rows the style makes
     [self.terminal.webView evaluateJavaScript:[NSString stringWithFormat:@"exports.updateStyle(%@)", json] completionHandler:^(NSArray<NSNumber *> *size, NSError *error){
         if (error != nil) {
@@ -326,6 +335,17 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollRange", 
     [self _updateStyle];
 }
 
+// The window's width, which picks the font size: the window scene's, so a
+// terminal in a sheet narrower than the window (Settings' preview) has the
+// size of the window's terminals, which Settings sets
+- (UIUserInterfaceSizeClass)windowWidth {
+    return self.window.windowScene.traitCollection.horizontalSizeClass;
+}
+
+- (int)fontSize {
+    return [UserPreferences.shared fontSizeForWidth:self.windowWidth];
+}
+
 // The sizes the font can be: as small as can still be read, as big as
 // Settings' stepper goes
 static const int kMinFontSize = 6;
@@ -333,13 +353,12 @@ static const int kMaxFontSize = 72;
 
 - (void)changeFontSize:(int)size {
     size = MAX(kMinFontSize, MIN(kMaxFontSize, size));
-    UserPreferences *prefs = UserPreferences.shared;
-    if (size == prefs.fontSize.intValue)
+    if (size == self.fontSize)
         return;
     // shown once the terminal has it: _updateStyle, which the preference's
     // observer calls on the main queue after this
     self.showsSizeAtNextStyle = YES;
-    prefs.fontSize = @(size);
+    [UserPreferences.shared setFontSize:size forWidth:self.windowWidth];
 }
 
 // A pinch zooms the font once it has gone a tenth either way (a two-finger
@@ -347,7 +366,7 @@ static const int kMaxFontSize = 72;
 - (void)pinched:(UIPinchGestureRecognizer *)pinch {
     switch (pinch.state) {
         case UIGestureRecognizerStateBegan:
-            self.pinchStartSize = UserPreferences.shared.fontSize.intValue;
+            self.pinchStartSize = self.fontSize;
             self.pinchZooms = NO;
             break;
         case UIGestureRecognizerStateChanged:
