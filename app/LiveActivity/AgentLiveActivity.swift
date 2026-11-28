@@ -5,7 +5,7 @@
 //  The Live Activity extension: the tabs' agents (Claude Code, Kimi Code) on
 //  the Dynamic Island and the Lock Screen (AgentActivityAttributes.swift). At
 //  work, sparkles and the time it has worked; stopped, a green check and the
-//  time it worked.
+//  time it worked; waiting, grey sparkles.
 //
 
 import ActivityKit
@@ -21,23 +21,27 @@ struct AgentWidgets: WidgetBundle {
 
 extension AgentActivityAttributes.ContentState {
     // The one told of, by its agent's name (tabs may run different agents),
-    // then how many more stopped, and how many work: "Kimi stopped · 1 more
-    // stopped · 2 working", "Claude is working · 1 more working"
+    // then how many more do as it does, and how many work if it stopped:
+    // "Kimi stopped · 1 more stopped · 2 working", "Claude is working · 1
+    // more working", "Claude is waiting · 1 more waiting". One waiting is
+    // told of only while none works or stopped unseen.
     var status: String {
-        var parts = [working ? "\(agent) is working" : "\(agent) stopped"]
-        if working {
-            if workingCount > 1 {
-                parts.append("\(workingCount - 1) more working")
-            }
-        } else {
-            if stoppedCount > 1 {
-                parts.append("\(stoppedCount - 1) more stopped")
-            }
+        switch phase {
+        case .working:
+            return joined("\(agent) is working", more: workingCount, "working")
+        case .stopped:
+            var status = joined("\(agent) stopped", more: stoppedCount, "stopped")
             if workingCount > 0 {
-                parts.append("\(workingCount) working")
+                status += " · \(workingCount) working"
             }
+            return status
+        case .waiting:
+            return joined("\(agent) is waiting", more: waitingCount, "waiting")
         }
-        return parts.joined(separator: " · ")
+    }
+
+    private func joined(_ first: String, more count: Int, _ doing: String) -> String {
+        count > 1 ? "\(first) · \(count - 1) more \(doing)" : first
     }
 }
 
@@ -45,26 +49,33 @@ struct StateIcon: View {
     let state: AgentActivityAttributes.ContentState
 
     var body: some View {
-        if state.working {
+        switch state.phase {
+        case .working:
             Image(systemName: "sparkles").foregroundStyle(.orange)
-        } else {
+        case .stopped:
             Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+        case .waiting:
+            Image(systemName: "sparkles").foregroundStyle(.secondary)
         }
     }
 }
 
 // The time it has worked, running; once it stopped, the time it worked, as
 // it was then (2026-11-28: on a foldable's upright island the check alone
-// left the trailing half empty)
+// left the trailing half empty); waiting, none
 struct WorkedTime: View {
     let state: AgentActivityAttributes.ContentState
 
     var body: some View {
-        if let stopped = state.stopped {
+        switch state.phase {
+        case .working:
+            Text(state.since, style: .timer)
+        case .stopped:
+            let stopped = state.stopped!
             Text(timerInterval: state.since...stopped, pauseTime: stopped, countsDown: false)
                 .foregroundStyle(.secondary)
-        } else {
-            Text(state.since, style: .timer)
+        case .waiting:
+            EmptyView()
         }
     }
 }

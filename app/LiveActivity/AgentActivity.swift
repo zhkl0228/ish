@@ -3,8 +3,9 @@
 //  iSH
 //
 //  The app's side of the Live Activity (AgentActivityAttributes.swift), for
-//  AgentActivityTracker.m: started as an agent starts working (ActivityKit
-//  starts one only for an app in front), told of what changes, ended.
+//  AgentActivityTracker.m: started while an agent is in a tab and the app in
+//  front (ActivityKit starts one only for an app in front), told of what
+//  changes, ended.
 //
 
 import ActivityKit
@@ -17,32 +18,50 @@ import Foundation
     private static var current: Activity<AgentActivityAttributes>?
     private static var shown: AgentActivityAttributes.ContentState?
 
-    // What it shows: the activity told of it, or started if there is none
-    // and a tab works (one stopped may be told of, others working)
-    @objc public static func show(title: String, agent: String, since: Date, stopped: Date?, workingCount: Int,
-                                  stoppedCount: Int) {
-        let state = AgentActivityAttributes.ContentState(title: title, agent: agent, since: since, stopped: stopped,
-                                                         workingCount: workingCount, stoppedCount: stoppedCount)
+    // There is one: it can be told of what changes, the app in front or not
+    @objc public static var started: Bool {
+        current != nil
+    }
+
+    // What it shows: the activity told of it, or started if there is none.
+    // nil once it is, else why ActivityKit started none.
+    @objc public static func show(title: String, agent: String, phase: AgentPhase, since: Date, stopped: Date?,
+                                  workingCount: Int, stoppedCount: Int, waitingCount: Int) -> String? {
+        let state = AgentActivityAttributes.ContentState(title: title, agent: agent, phase: phase, since: since,
+                                                         stopped: stopped, workingCount: workingCount,
+                                                         stoppedCount: stoppedCount, waitingCount: waitingCount)
         if let activity = current {
             if state == shown {
-                return
+                return nil
             }
             shown = state
             Task {
                 await activity.update(ActivityContent(state: state, staleDate: nil))
             }
-            return
+            return nil
         }
-        if workingCount == 0 {
-            return
-        }
+        let activity: Activity<AgentActivityAttributes>
         do {
-            current = try Activity.request(attributes: AgentActivityAttributes(),
-                                           content: ActivityContent(state: state, staleDate: nil))
-            shown = state
+            activity = try Activity.request(attributes: AgentActivityAttributes(),
+                                            content: ActivityContent(state: state, staleDate: nil))
         } catch {
-            NSLog("AgentActivity: Live Activity not started: %@", String(describing: error))
+            return String(describing: error)
         }
+        current = activity
+        shown = state
+        // Ended by the system (at most eight hours on), or dismissed on the
+        // Lock Screen: none left to tell of what changes, the next one
+        // started with the app in front again
+        Task { @MainActor in
+            for await state in activity.activityStateUpdates where state == .ended || state == .dismissed {
+                if current?.id == activity.id {
+                    current = nil
+                    shown = nil
+                }
+                return
+            }
+        }
+        return nil
     }
 
     @objc public static func end() {
