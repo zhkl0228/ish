@@ -820,6 +820,17 @@ EOF
         status=1
     fi
     echo
+    section "JIT: guest V registers held in host registers within a segment, written through: every result C's"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_jit_vcache" tests/regress/regress_jit_vcache.c -lm; then
+        out=$(ISH_JIT_PIC=1 timeout 120 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_jit_vcache 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_jit_vcache"
+    else
+        echo "failed to build regress_jit_vcache" >&2
+        status=1
+    fi
+    echo
     section "System V shared memory: shmget, shmat, shmdt, shmctl"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_sysv_shm" tests/regress/regress_sysv_shm.c; then
         out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_sysv_shm 2>&1)

@@ -772,6 +772,10 @@ struct em {
     int8_t tc_g;
     struct { unsigned at, spos; uint8_t bytes; bool write; } slow[256];
     unsigned nslow;
+    // Guest V registers held in host V registers (vsrc()), and the ones the
+    // instruction being emitted uses
+    struct vcache { int8_t host[32], owner[32]; uint8_t victim; } vc;
+    uint32_t vlocked;
 };
 
 static void put(struct em *e, uint32_t x) {
@@ -1310,9 +1314,15 @@ static void tlb_lookup(struct em *e, unsigned bytes, bool write, unsigned spos, 
 }
 
 // Load/store translation. Returns false if the form is unsupported.
-// ---- SIMD & FP: guest V registers live in cpu->fp; an instruction loads the
-// ones it reads into host v16..v23 (caller-saved, unused by the gadgets),
-// runs the same operation there and stores the destination back.
+// ---- SIMD & FP: guest V registers live in cpu->fp. An instruction runs the
+// same operation on host registers holding them: within a segment a guest
+// register, once loaded, stays in one of the cache's host registers (vpool,
+// caller-saved, unused by the gadgets: they have v0..v3), its every write
+// stored through to cpu->fp at once, so that exits, faults and the gadgets
+// find cpu->fp as it is. A segment starts with none held (a loop block's
+// head too: the back edge comes in with them in any state). Forms that need
+// consecutive registers (tbl's table, ld2-4/st2-4, ld1's lane) use the
+// scratch registers v16..v22, copied from the held ones.
 static unsigned fp_off(int v) { return (unsigned) offsetof(struct cpu_state, fp) + 16u * (unsigned) v; }
 static void vload(struct em *e, int h, int v) {
     put(e, 0x3DC00000u | ((fp_off(v) / 16) << 10) | (1u << 5) | (uint32_t) h);  // ldr qh, [x1, #fp[v]]
@@ -1320,7 +1330,83 @@ static void vload(struct em *e, int h, int v) {
 static void vstore(struct em *e, int h, int v) {
     put(e, 0x3D800000u | ((fp_off(v) / 16) << 10) | (1u << 5) | (uint32_t) h);  // str qh, [x1, #fp[v]]
 }
-enum { V_N = 16, V_M = 17, V_D = 18, V_T = 19 };   // table registers: v19..v22
+enum { V_N = 16, V_M = 17, V_D = 18, V_T = 19 };   // scratch; table registers: v19..v22
+static const uint8_t vpool[] = {23, 24, 25, 26, 27, 28, 29, 30, 31, 4, 5, 6, 7};
+
+static void vcache_reset(struct em *e) {
+    memset(e->vc.host, -1, sizeof(e->vc.host));
+    memset(e->vc.owner, -1, sizeof(e->vc.owner));
+    e->vc.victim = 0;
+}
+
+// A host register for guest register v, none of the instruction's taken:
+// a free one, else one held for another (dropped: cpu->fp has its value)
+static int vreg_take(struct em *e, int v) {
+    int h = -1;
+    for (unsigned i = 0; i < sizeof(vpool) && h < 0; i++)
+        if (e->vc.owner[vpool[i]] < 0)
+            h = vpool[i];
+    for (unsigned tries = 0; tries < sizeof(vpool) && h < 0; tries++) {
+        int cand = vpool[e->vc.victim++ % sizeof(vpool)];
+        if (!(e->vlocked & (1u << cand)))
+            h = cand;
+    }
+    if (h < 0) {   // more than the pool in one instruction: none has
+        e->fail = true;
+        return V_N;
+    }
+    if (e->vc.owner[h] >= 0)
+        e->vc.host[e->vc.owner[h]] = -1;
+    e->vc.host[v] = (int8_t) h;
+    e->vc.owner[h] = (int8_t) v;
+    return h;
+}
+
+// The host register holding guest register v's value (loaded if not held)
+static int vsrc(struct em *e, int v) {
+    int h = e->vc.host[v];
+    if (h < 0) {
+        h = vreg_take(e, v);
+        vload(e, h, v);
+    }
+    e->vlocked |= 1u << h;
+    return h;
+}
+
+// The host register to write guest register v's new value to, for an
+// instruction that writes all of it (its old value not loaded); vdone() after
+static int vdst(struct em *e, int v) {
+    int h = e->vc.host[v];
+    if (h < 0)
+        h = vreg_take(e, v);
+    e->vlocked |= 1u << h;
+    return h;
+}
+
+// v's new value is in h: through to cpu->fp
+static void vdone(struct em *e, int h, int v) {
+    vstore(e, h, v);
+}
+
+// Scratch register s = guest register v
+static void vcopy(struct em *e, int s, int v) {
+    int h = e->vc.host[v];
+    if (h >= 0)
+        put(e, 0x4EA01C00u | ((uint32_t) h << 16) | ((uint32_t) h << 5) | (uint32_t) s);   // mov vs.16b, vh.16b
+    else
+        vload(e, s, v);
+}
+
+// Guest register v's new value, in scratch register s: through to cpu->fp,
+// and no longer held where it was
+static void vdone_scratch(struct em *e, int s, int v) {
+    vstore(e, s, v);
+    int h = e->vc.host[v];
+    if (h >= 0) {
+        e->vc.owner[h] = -1;
+        e->vc.host[v] = -1;
+    }
+}
 
 // Vector data processing without memory access or flags. Returns false for
 // anything not handled (the gadget runs it).
@@ -1330,52 +1416,53 @@ static bool emit_simd(struct em *e, uint32_t x) {
     if ((x & 0xBFE0FC00u) == 0x0E000C00u) {                                   // dup (general)
         if ((x & 0x000F0000u) == 0 || (((x >> 16) & 0xF) == 8 && !(x & 0x40000000u))) return false;
         int hn = rn == 31 ? 31 : hreg(e, rn);
-        put(e, (x & ~0x3FFu) | ((uint32_t) hn << 5) | V_D);
-        vstore(e, V_D, rd);
+        int vd = vdst(e, rd);
+        put(e, (x & ~0x3FFu) | ((uint32_t) hn << 5) | (uint32_t) vd);
+        vdone(e, vd, rd);
         return true;
     }
     if ((x & 0xBFE0FC00u) == 0x0E003C00u) {                                   // umov / mov (to general)
-        vload(e, V_N, rn);
         if (rd == 31) return true;
+        int vn = vsrc(e, rn);
         int hd = hreg(e, rd);
-        put(e, (x & ~0x3FFu) | (V_N << 5) | (uint32_t) hd);
+        put(e, (x & ~0x3FFu) | ((uint32_t) vn << 5) | (uint32_t) hd);
         writeback(e, rd);
         return true;
     }
     if ((x & 0xFFE0FC00u) == 0x4E001C00u) {                                   // ins (general)
-        vload(e, V_D, rd);
+        int vd = vsrc(e, rd);
         int hn = rn == 31 ? 31 : hreg(e, rn);
-        put(e, (x & ~0x3FFu) | ((uint32_t) hn << 5) | V_D);
-        vstore(e, V_D, rd);
+        put(e, (x & ~0x3FFu) | ((uint32_t) hn << 5) | (uint32_t) vd);
+        vdone(e, vd, rd);
         return true;
     }
     if ((x & 0xFFE08400u) == 0x6E000400u) {                                   // ins (element)
-        vload(e, V_D, rd);
-        vload(e, V_N, rn);
-        put(e, (x & ~0x3FFu) | (V_N << 5) | V_D);
-        vstore(e, V_D, rd);
+        int vd = vsrc(e, rd), vn = vsrc(e, rn);
+        put(e, (x & ~0x3FFu) | ((uint32_t) vn << 5) | (uint32_t) vd);
+        vdone(e, vd, rd);
         return true;
     }
     uint32_t fm = x & 0xFFFFFC00u;
     if (fm == 0x9E670000u || fm == 0x1E270000u) {                              // fmov d, x / s, w
         int hn = rn == 31 ? 31 : hreg(e, rn);
-        put(e, fm | ((uint32_t) hn << 5) | V_D);
-        vstore(e, V_D, rd);
+        int vd = vdst(e, rd);
+        put(e, fm | ((uint32_t) hn << 5) | (uint32_t) vd);
+        vdone(e, vd, rd);
         return true;
     }
     if (fm == 0x9E660000u || fm == 0x1E260000u) {                              // fmov x, d / w, s
-        vload(e, V_N, rn);
         if (rd == 31) return true;
+        int vn = vsrc(e, rn);
         int hd = hreg(e, rd);
-        put(e, fm | (V_N << 5) | (uint32_t) hd);
+        put(e, fm | ((uint32_t) vn << 5) | (uint32_t) hd);
         writeback(e, rd);
         return true;
     }
-    bool three = false, two = false, rd_in = true;
+    bool three = false;
     if ((x & 0x9FF80400u) == 0x0F000400u) {                                   // modified immediate (movi/mvni/orr/bic/fmov)
-        vload(e, V_D, rd);
-        put(e, (x & ~0x1Fu) | V_D);
-        vstore(e, V_D, rd);
+        int vd = vsrc(e, rd);
+        put(e, (x & ~0x1Fu) | (uint32_t) vd);
+        vdone(e, vd, rd);
         return true;
     } else if ((x & 0x9F200400u) == 0x0E200400u) {                            // three same (integer)
         unsigned op = (x >> 11) & 31;
@@ -1385,17 +1472,14 @@ static bool emit_simd(struct em *e, uint32_t x) {
         unsigned op = (x >> 12) & 31, U = (x >> 29) & 1;
         if (!(op <= 0x02 || op == 0x05 || op == 0x06 || (op >= 0x08 && op <= 0x0B) || (op == 0x12 && !U))) return false;
         if (op == 0x05 && U && ((x >> 22) & 3) >= 2) return false;
-        two = true;
     } else if ((x & 0x9F3E0C00u) == 0x0E300800u) {                            // across lanes (integer)
         unsigned op = (x >> 12) & 31;
         if (op != 0x03 && op != 0x0A && op != 0x1A && op != 0x1B) return false;
-        two = true;
     } else if ((x & 0x9F800400u) == 0x0F000400u && (x & 0x00780000u)) {       // shift by immediate
         unsigned op = (x >> 11) & 31, U = (x >> 29) & 1;
         if (!(op == 0x00 || op == 0x02 || op == 0x04 || op == 0x06 || op == 0x08 || op == 0x0A || op == 0x14 ||
               ((op == 0x10 || op == 0x11) && !U)))
             return false;
-        two = true;
     } else if ((x & 0xBF208C00u) == 0x0E000800u) {                            // zip / uzp / trn
         three = true;
     } else if ((x & 0xBFE08400u) == 0x2E000000u) {                            // ext
@@ -1403,21 +1487,19 @@ static bool emit_simd(struct em *e, uint32_t x) {
     } else if ((x & 0xBF209C00u) == 0x0E000000u) {                            // tbl / tbx
         unsigned len = ((x >> 13) & 3) + 1;
         for (unsigned i = 0; i < len; i++)
-            vload(e, V_T + (int) i, (rn + (int) i) & 31);
-        vload(e, V_M, rm);
-        vload(e, V_D, rd);   // tbx keeps out-of-range lanes
-        put(e, base | ((uint32_t) V_M << 16) | ((uint32_t) V_T << 5) | V_D);
-        vstore(e, V_D, rd);
+            vcopy(e, V_T + (int) i, (rn + (int) i) & 31);   // consecutive registers
+        int vm = vsrc(e, rm), vd = vsrc(e, rd);   // tbx keeps out-of-range lanes
+        put(e, base | ((uint32_t) vm << 16) | ((uint32_t) V_T << 5) | (uint32_t) vd);
+        vdone(e, vd, rd);
         return true;
     } else {
         return false;
     }
-    vload(e, V_N, rn);
-    if (three) vload(e, V_M, rm);
-    if (rd_in) vload(e, V_D, rd);   // accumulating forms (bsl, sra, sadalp, ...)
-    put(e, base | (three ? (uint32_t) V_M << 16 : (x & 0x001F0000u)) | ((uint32_t) V_N << 5) | V_D);
-    (void) two;
-    vstore(e, V_D, rd);
+    int vn = vsrc(e, rn);
+    int vm = three ? vsrc(e, rm) : 0;
+    int vd = vsrc(e, rd);   // accumulating forms (bsl, sra, sadalp, ...) read it
+    put(e, base | (three ? (uint32_t) vm << 16 : (x & 0x001F0000u)) | ((uint32_t) vn << 5) | (uint32_t) vd);
+    vdone(e, vd, rd);
     return true;
 }
 
@@ -1480,20 +1562,20 @@ static bool emit_simd_more(struct em *e, uint32_t x) {
     } else if ((x & 0xBFE0FC00u) == 0x0E002C00u) {                            // smov
         bool ok = (imm5 & 1) || (imm5 & 3) == 2 || ((x & 0x40000000u) && (imm5 & 7) == 4);
         if (!ok) return false;
-        vload(e, V_N, rn);
         if (rd == 31) return true;
+        int vn = vsrc(e, rn);
         int hd = hreg(e, rd);
-        put(e, (x & ~0x3FFu) | (V_N << 5) | (uint32_t) hd);
+        put(e, (x & ~0x3FFu) | ((uint32_t) vn << 5) | (uint32_t) hd);
         writeback(e, rd);
         return true;
     } else {
         return false;
     }
-    vload(e, V_N, rn);
-    if (m) vload(e, V_M, rm);
-    if (d_in) vload(e, V_D, rd);
-    put(e, (x & ~(m ? 0x001F03FFu : 0x3FFu)) | (m ? (uint32_t) V_M << 16 : 0) | (V_N << 5) | V_D);
-    vstore(e, V_D, rd);
+    int vn = vsrc(e, rn);
+    int vm = m ? vsrc(e, rm) : 0;
+    int vd = d_in ? vsrc(e, rd) : vdst(e, rd);
+    put(e, (x & ~(m ? 0x001F03FFu : 0x3FFu)) | (m ? (uint32_t) vm << 16 : 0) | ((uint32_t) vn << 5) | (uint32_t) vd);
+    vdone(e, vd, rd);
     return true;
 }
 
@@ -1526,50 +1608,50 @@ static bool emit_fp(struct em *e, uint32_t x) {
     }
     if ((x & 0xFF000000u) == 0x1F000000u) {                                   // fmadd fmsub fnmadd fnmsub
         if (type > 1) return false;
-        vload(e, V_N, rn);
-        vload(e, V_M, rm);
-        vload(e, V_T, (x >> 10) & 31);
-        put(e, (x & ~0x001F7FFFu) | ((uint32_t) V_M << 16) | ((uint32_t) V_T << 10) | ((uint32_t) V_N << 5) | V_D);
-        vstore(e, V_D, rd);
+        int vn = vsrc(e, rn), vm = vsrc(e, rm), va = vsrc(e, (x >> 10) & 31), vd = vdst(e, rd);
+        put(e, (x & ~0x001F7FFFu) | ((uint32_t) vm << 16) | ((uint32_t) va << 10) | ((uint32_t) vn << 5) |
+                   (uint32_t) vd);
+        vdone(e, vd, rd);
         return true;
     }
     if ((x & 0xFFFFFC00u) == 0x9EAF0000u) {                                   // fmov v.d[1], x
-        vload(e, V_D, rd);
+        int vd = vsrc(e, rd);
         int hn = rn == 31 ? 31 : hreg(e, rn);
-        put(e, 0x9EAF0000u | ((uint32_t) hn << 5) | V_D);
-        vstore(e, V_D, rd);
+        put(e, 0x9EAF0000u | ((uint32_t) hn << 5) | (uint32_t) vd);
+        vdone(e, vd, rd);
         return true;
     }
     if ((x & 0xFFFFFC00u) == 0x9EAE0000u) {                                   // fmov x, v.d[1]
-        vload(e, V_N, rn);
         if (rd == 31) return true;
+        int vn = vsrc(e, rn);
         int hd = hreg(e, rd);
-        put(e, 0x9EAE0000u | (V_N << 5) | (uint32_t) hd);
+        put(e, 0x9EAE0000u | ((uint32_t) vn << 5) | (uint32_t) hd);
         writeback(e, rd);
         return true;
     }
     // AdvSIMD's scalar fcvtzs/fcvtzu and scvtf/ucvtf, the forms of it the
     // gadgets have (gen.c; the others are their SIGILL)
     if ((x & 0xDFBFFC00u) == 0x5EA1B800u || (x & 0xDFBFFC00u) == 0x5E21D800u) {
-        vload(e, V_N, rn);
-        put(e, (x & ~0x3FFu) | (V_N << 5) | V_D);
-        vstore(e, V_D, rd);
+        int vn = vsrc(e, rn), vd = vdst(e, rd);
+        put(e, (x & ~0x3FFu) | ((uint32_t) vn << 5) | (uint32_t) vd);
+        vdone(e, vd, rd);
         return true;
     }
     if ((x & 0x7F200000u) == 0x1E000000u && type <= 1) {                     // fixed-point to and from integer
         unsigned rmode = (x >> 19) & 3, op = (x >> 16) & 7, scale = (x >> 10) & 63;
         if (!(x & 0x80000000u) && scale < 32) return false;                   // a 32-bit one's fbits: 1..32
         if (rmode == 3 && op <= 1) {                                          // fcvtzs / fcvtzu: to a register
-            vload(e, V_N, rn);
+            int vn = vsrc(e, rn);
             int hd = rd == 31 ? 31 : hreg(e, rd);
-            put(e, (x & ~0x3FFu) | (V_N << 5) | (uint32_t) hd);
+            put(e, (x & ~0x3FFu) | ((uint32_t) vn << 5) | (uint32_t) hd);
             if (rd != 31) writeback(e, rd);
             return true;
         }
         if (rmode == 0 && (op == 2 || op == 3)) {                             // scvtf / ucvtf: from a register
             int hn = rn == 31 ? 31 : hreg(e, rn);
-            put(e, (x & ~0x3FFu) | ((uint32_t) hn << 5) | V_D);
-            vstore(e, V_D, rd);
+            int vd = vdst(e, rd);
+            put(e, (x & ~0x3FFu) | ((uint32_t) hn << 5) | (uint32_t) vd);
+            vdone(e, vd, rd);
             return true;
         }
         return false;
@@ -1579,16 +1661,17 @@ static bool emit_fp(struct em *e, uint32_t x) {
     if ((x & 0x7F20FC00u) == 0x1E200000u) {                                   // conversion to and from integer
         unsigned rmode = (x >> 19) & 3, op = (x >> 16) & 7;
         if (op <= 1 || ((op == 4 || op == 5) && rmode == 0)) {                // fcvt[npmz]s/u, fcvtas/u: to a register
-            vload(e, V_N, rn);
+            int vn = vsrc(e, rn);
             int hd = rd == 31 ? 31 : hreg(e, rd);
-            put(e, (x & ~0x3FFu) | (V_N << 5) | (uint32_t) hd);
+            put(e, (x & ~0x3FFu) | ((uint32_t) vn << 5) | (uint32_t) hd);
             if (rd != 31) writeback(e, rd);
             return true;
         }
         if ((op == 2 || op == 3) && rmode == 0) {                             // scvtf / ucvtf: from a register
             int hn = rn == 31 ? 31 : hreg(e, rn);
-            put(e, (x & ~0x3FFu) | ((uint32_t) hn << 5) | V_D);
-            vstore(e, V_D, rd);
+            int vd = vdst(e, rd);
+            put(e, (x & ~0x3FFu) | ((uint32_t) hn << 5) | (uint32_t) vd);
+            vdone(e, vd, rd);
             return true;
         }
         return false;   // fmov: emit_simd's, for the forms it has
@@ -1606,8 +1689,9 @@ static bool emit_fp(struct em *e, uint32_t x) {
         if (!ok) return false;
         src_m = false;
     } else if ((x & 0xFF201FE0u) == 0x1E201000u) {                            // fmov (immediate)
-        put(e, (x & ~0x1Fu) | V_D);
-        vstore(e, V_D, rd);
+        int vd = vdst(e, rd);
+        put(e, (x & ~0x1Fu) | (uint32_t) vd);
+        vdone(e, vd, rd);
         return true;
     } else if ((x & 0xFF20FC07u) == 0x1E202000u) {                            // fcmp / fcmpe (#0.0: no m)
         src_m = !(x & 8);
@@ -1622,15 +1706,16 @@ static bool emit_fp(struct em *e, uint32_t x) {
         return false;
     }
     if (rflags && !e->hflags) load_flags(e);
-    vload(e, V_N, rn);
-    if (src_m) vload(e, V_M, rm);
-    put(e, (x & ~(src_m ? 0x001F03FFu : 0x3FFu)) | (src_m ? (uint32_t) V_M << 16 : 0) | (V_N << 5) |
-               (dst ? V_D : (x & 0x1Fu)));
+    int vn = vsrc(e, rn);
+    int vm = src_m ? vsrc(e, rm) : 0;
+    int vd = dst ? vdst(e, rd) : (int) (x & 0x1Fu);   // fcmp's opc bits otherwise
+    put(e, (x & ~(src_m ? 0x001F03FFu : 0x3FFu)) | (src_m ? (uint32_t) vm << 16 : 0) | ((uint32_t) vn << 5) |
+               (uint32_t) vd);
     if (wflags) {
         store_flags(e);
         e->hflags = true;
     }
-    if (dst) vstore(e, V_D, rd);
+    if (dst) vdone(e, vd, rd);
     return true;
 }
 
@@ -1670,9 +1755,29 @@ static bool emit_ldst_fp(struct em *e, uint32_t x, unsigned spos) {
         int gn = rn == 31 ? G_SP : rn;
         int hn = ldst_addr(e, gn, imm, idx == 1);
         tlb_lookup(e, 2u << scale, !L, spos, gn);
-        if (!L) { vload(e, V_N, rt); vload(e, V_M, rt2); }
-        put(e, (x & 0xC0400000u) | 0x2D000000u | ((uint32_t) V_M << 10) | (T_A << 5) | V_N);   // ldp/stp vN, vM, [x9]
-        if (L) { vstore(e, V_N, rt); vstore(e, V_M, rt2); }
+        // A store's registers: loaded between the lookup and the access if
+        // not held (access_exit() knows those loads); a load's: written there
+        // (ldp of one register twice, its value unpredictable: the scratch
+        // registers, as before, rt2's last)
+        int vt, vt2;
+        if (!L) {
+            vt = vsrc(e, rt);
+            vt2 = vsrc(e, rt2);
+        } else if (rt == rt2) {
+            vt = V_N;
+            vt2 = V_M;
+        } else {
+            vt = vdst(e, rt);
+            vt2 = vdst(e, rt2);
+        }
+        put(e, (x & 0xC0400000u) | 0x2D000000u | ((uint32_t) vt2 << 10) | (T_A << 5) | (uint32_t) vt);   // ldp/stp
+        if (L && rt == rt2) {
+            vdone_scratch(e, V_N, rt);
+            vdone_scratch(e, V_M, rt2);
+        } else if (L) {
+            vdone(e, vt, rt);
+            vdone(e, vt2, rt2);
+        }
         if (idx == 1 || idx == 3) ldst_wb(e, gn, hn, imm);
         return true;
     }
@@ -1706,9 +1811,9 @@ static bool emit_ldst_fp(struct em *e, uint32_t x, unsigned spos) {
         return false;
     }
     tlb_lookup(e, 1u << scale, !load, spos, (x & 0x3B200C00u) == 0x38200800u ? -1 : gn);
-    if (!load) vload(e, V_N, rt);
-    put(e, (x & 0xC0C00000u) | 0x3D000000u | (T_A << 5) | V_N);              // ldr/str vN, [x9]
-    if (load) vstore(e, V_N, rt);   // the host load zeroed the rest of the register
+    int vt = load ? vdst(e, rt) : vsrc(e, rt);   // a store's: loaded here if not held, as a pair's
+    put(e, (x & 0xC0C00000u) | 0x3D000000u | (T_A << 5) | (uint32_t) vt);    // ldr/str vt, [x9]
+    if (load) vdone(e, vt, rt);   // the host load zeroed the rest of the register
     if (wbmode) ldst_wb(e, gn, hn, imm);
     return true;
 }
@@ -1729,12 +1834,12 @@ static bool emit_ldst_multi(struct em *e, uint32_t x, unsigned spos) {
     int hn = hreg(e, gn);
     int hm = post && rm != 31 ? hreg(e, rm) : -1;
     if (!L)
-        for (int i = 0; i < n; i++) vload(e, V_N + i, (rt + i) & 31);
+        for (int i = 0; i < n; i++) vcopy(e, V_N + i, (rt + i) & 31);
     put(e, 0xAA0003E0u | ((uint32_t) hn << 16) | T_A);                       // mov x9, xn
     tlb_lookup(e, bytes, !L, spos, gn);
     put(e, 0x0C000000u | (x & 0x40400000u) | (x & 0xFC00u) | (T_A << 5) | V_N);   // ldN/stN {v16..}, [x9]
     if (L)
-        for (int i = 0; i < n; i++) vstore(e, V_N + i, (rt + i) & 31);
+        for (int i = 0; i < n; i++) vdone_scratch(e, V_N + i, (rt + i) & 31);
     if (post) {
         if (rm == 31) put(e, 0x91000000u | (bytes << 10) | ((uint32_t) hn << 5) | (uint32_t) hn);   // add xn, xn, #bytes
         else put(e, 0x8B000000u | ((uint32_t) hm << 16) | ((uint32_t) hn << 5) | (uint32_t) hn);     // add xn, xn, xm
@@ -1765,7 +1870,7 @@ static bool emit_ldst_rep(struct em *e, uint32_t x, unsigned spos) {
         else if (opc == 4 && size == 1 && !S) bytes = 8;
         else return false;
         n = 1;
-        vload(e, V_N, x & 31);
+        vcopy(e, V_N, x & 31);   // the other lanes kept
     }
     int rt = x & 31, rn = (x >> 5) & 31, rm = (x >> 16) & 31;
     bool post = (x >> 23) & 1;
@@ -1775,7 +1880,7 @@ static bool emit_ldst_rep(struct em *e, uint32_t x, unsigned spos) {
     put(e, 0xAA0003E0u | ((uint32_t) hn << 16) | T_A);                       // mov x9, xn
     tlb_lookup(e, bytes, false, spos, gn);
     put(e, 0x0D000000u | (x & 0x4060FC00u) | (T_A << 5) | V_N);              // ldNr {v16..}, [x9] / ld1 {v16.t}[i], [x9]
-    for (int i = 0; i < n; i++) vstore(e, V_N + i, (rt + i) & 31);
+    for (int i = 0; i < n; i++) vdone_scratch(e, V_N + i, (rt + i) & 31);
     if (post) {
         if (rm == 31) put(e, 0x91000000u | (bytes << 10) | ((uint32_t) hn << 5) | (uint32_t) hn);
         else put(e, 0x8B000000u | ((uint32_t) hm << 16) | ((uint32_t) hn << 5) | (uint32_t) hn);
@@ -1978,8 +2083,9 @@ static bool emit_ldr_literal(struct em *e, uint32_t x, uint64_t pc, unsigned spo
     if (v) {
         static const uint32_t ldr_v[3] = {0xBD400000u, 0xFD400000u, 0x3DC00000u};   // ldr s/d/q, [x9]
         tlb_lookup(e, 4u << opc, false, spos, -1);
-        put(e, ldr_v[opc] | (T_A << 5) | V_N);
-        vstore(e, V_N, rt);   // the host load zeroed the rest of the register
+        int vt = vdst(e, rt);
+        put(e, ldr_v[opc] | (T_A << 5) | (uint32_t) vt);
+        vdone(e, vt, rt);   // the host load zeroed the rest of the register
         return true;
     }
     static const uint32_t ldr_x[3] = {0xB9400000u, 0xF9400000u, 0xB9800000u};       // ldr w/x, ldrsw, [x9]
@@ -2047,6 +2153,7 @@ static bool emit_insn(struct em *e, uint32_t x, uint64_t pc, unsigned spos, bool
 static bool emit_insn1(struct em *e, uint32_t x, uint64_t pc, unsigned spos, bool *has_mem) {
     int wrote = -1;
     e->locked = 0;
+    e->vlocked = 0;
     *has_mem = false;
     if (x == NOP || (x & 0xFFFFF01Fu) == 0xD503201Fu)     // hints
         return true;
@@ -3047,6 +3154,7 @@ static unsigned emit_segment(struct em *e, struct fiber_block *b, const struct j
     e->chain_fwd = false;
     e->tc_g = -1;
     e->nslow = 0;
+    vcache_reset(e);
     unsigned covered = 0, real = 0;   // real: units that emitted code
     bool ended = false;
     e->b = b;
@@ -3073,6 +3181,7 @@ static unsigned emit_segment(struct em *e, struct fiber_block *b, const struct j
             unsigned n0 = e->n, nfix0 = e->nfix, nrel0 = e->nrel, nslow0 = e->nslow;
             uint8_t npool0 = e->npool, victim0 = e->victim;
             int8_t tc0 = e->tc_g;
+            struct vcache vc0 = e->vc;
             bool hf0 = e->hflags;
             int8_t host0[33], owner0[32];
             memcpy(host0, e->host, sizeof(host0));
@@ -3086,7 +3195,7 @@ static unsigned emit_segment(struct em *e, struct fiber_block *b, const struct j
             } else {
                 e->link_at[0] = e->link_at[1] = -1;   // only the block end sets them
                 e->n = n0; e->nfix = nfix0; e->nrel = nrel0; e->npool = npool0; e->fail = false; e->hflags = hf0;
-                e->nslow = nslow0; e->tc_g = tc0;
+                e->nslow = nslow0; e->tc_g = tc0; e->vc = vc0;
                 e->victim = victim0;
                 memcpy(e->host, host0, sizeof(host0));
                 memcpy(e->owner, owner0, sizeof(owner0));
@@ -3099,6 +3208,7 @@ static unsigned emit_segment(struct em *e, struct fiber_block *b, const struct j
         unsigned n0 = e->n, nfix0 = e->nfix, nrel0 = e->nrel, nslow0 = e->nslow;
         uint8_t npool0 = e->npool, victim0 = e->victim;
         int8_t tc0 = e->tc_g;
+        struct vcache vc0 = e->vc;
         bool hf0 = e->hflags;
         int8_t host0[33], owner0[32];
         memcpy(host0, e->host, sizeof(host0));
@@ -3116,7 +3226,7 @@ static unsigned emit_segment(struct em *e, struct fiber_block *b, const struct j
         }
         if (!ok) {
             e->n = n0; e->nfix = nfix0; e->nrel = nrel0; e->npool = npool0; e->fail = false; e->hflags = hf0;
-            e->nslow = nslow0; e->tc_g = tc0;
+            e->nslow = nslow0; e->tc_g = tc0; e->vc = vc0;
             e->victim = victim0;
             memcpy(e->host, host0, sizeof(host0));
             memcpy(e->owner, owner0, sizeof(owner0));
@@ -3520,7 +3630,7 @@ void ish_aot_register(const struct aot_module *m) {
 
 // Bump whenever the code emitted for some guest instruction, stub or exit
 // changes: images made before would still pass every other check.
-#define JIT_CODE_VERSION 19
+#define JIT_CODE_VERSION 20
 
 // Everything the emitted code bakes in besides the gadgets it names: the
 // conventions, the struct layouts it loads from and the TLB / block cache

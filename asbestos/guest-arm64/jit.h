@@ -13,6 +13,8 @@
 //   code and are stored back whenever control leaves it.
 // - Loads/stores inline the TLB lookup; a miss resumes the unit's gadget. An
 //   access through the register of the last one checks that one's entry first.
+// - Guest V registers, once loaded, stay in host registers within a segment;
+//   every write is stored through to cpu->fp at once.
 // - Block ends (b/bl/b.cond/cbz/tbz/ret/br/blr) are translated; chained
 //   successors are reached through patched direct branches.
 //
