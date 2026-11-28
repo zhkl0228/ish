@@ -122,6 +122,10 @@ bool jit_chain_ok(struct fiber_block *from, int i, struct fiber_block *to);
 // true: from's native code now enters `to` itself; the caller records the
 // relation so that `to` leaving the cache unlinks it (jit_unlink()).
 bool jit_chain_refused(struct fiber_block *from, int i, struct fiber_block *to);
+// from's jump_ip[i] was written (chained, unchained): PIC native code tests a
+// copy of it, in its module context, which follows. Every write of a slot
+// is followed by this (asbestos lock held).
+void jit_chain_written(struct fiber_block *from, int i);
 
 // Leave the thread's JIT write mode (if a compile or link entered it) before
 // running guest code.

@@ -809,6 +809,17 @@ EOF
         status=1
     fi
     echo
+    section "JIT: block ends testing a copy of their chain slots, the code they go to rewritten (ish -Djit=true; skips otherwise)"
+    if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_jit_chain_copy" tests/regress/regress_jit_chain_copy.c; then
+        out=$(ISH_JIT_PIC=1 timeout 120 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_jit_chain_copy 2>&1)
+        echo "$out"
+        echo "$out" | grep -q '^SKIP' || echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+        rm -f "$GUEST_ROOT/tmp/regress_jit_chain_copy"
+    else
+        echo "failed to build regress_jit_chain_copy" >&2
+        status=1
+    fi
+    echo
     section "System V shared memory: shmget, shmat, shmdt, shmctl"
     if "$CC_GUEST" -static -O0 -Wall -o "$GUEST_ROOT/tmp/regress_sysv_shm" tests/regress/regress_sysv_shm.c; then
         out=$(timeout 60 "$ISH" "$MOUNT_FLAG" "$ROOTFS" /tmp/regress_sysv_shm 2>&1)

@@ -1032,6 +1032,7 @@ static void fiber_block_hot(struct asbestos *asbestos, struct tlb *tlb, addr_t i
             continue;
         }
         *block->jump_ip[i] = block->old_jump_ip[i];
+        jit_chain_written(block, i);
         list_remove_safe(&block->jumps_from_links[i]);
         if (jit_chain_refused(block, i, to))
             list_add(&to->jumps_from[i], &block->jumps_from_links[i]);
@@ -1045,8 +1046,10 @@ static void fiber_block_hot(struct asbestos *asbestos, struct tlb *tlb, addr_t i
             unsigned long slot = *from->jump_ip[i];
             bool refused = slot == (fake_ip | (1UL << 62));
             if ((slot == (unsigned long) block->code || refused) && jit_chain_ok(from, i, block)) {
-                if (refused)
+                if (refused) {
                     __atomic_store_n(from->jump_ip[i], (unsigned long) block->code, __ATOMIC_RELEASE);
+                    jit_chain_written(from, i);
+                }
                 jit_link(from, i, block);
             }
         }
@@ -1073,6 +1076,7 @@ static void fiber_block_disconnect(struct asbestos *asbestos, struct fiber_block
             if (prev_block->jump_ip[i] != NULL)
                 *prev_block->jump_ip[i] = prev_block->old_jump_ip[i];
 #ifdef ISH_JIT
+            jit_chain_written(prev_block, i);
             jit_unlink(prev_block, i);
 #endif
             list_remove(&prev_block->jumps_from_links[i]);
@@ -1542,6 +1546,7 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
                         *last_block->jump_ip[i] = (unsigned long) block->code;
                         list_add(&block->jumps_from[i], &last_block->jumps_from_links[i]);
 #ifdef ISH_JIT
+                        jit_chain_written(last_block, i);
                         jit_link(last_block, i, block);
 #endif
                     }

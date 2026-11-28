@@ -911,8 +911,9 @@ static void place_arena_base(struct em *e, const uint8_t *dst) {
 // data next to the branch.
 // - x29 holds the module context of this address space: the guest address the
 //   module's constants are relative to, and per translation (ctx->slot[idx])
-//   the fiber_block currently holding it and the guest address its constants
-//   are relative to. It stays the same while
+//   the fiber_block currently holding it, the guest address its constants
+//   are relative to and a copy of the block's chain slots (jump_ip[], what
+//   its block ends test). It stays the same while
 //   control moves between blocks of one module; a block pointer is loaded
 //   from the context only where needed, so block transitions carry no chain
 //   of dependent loads.
@@ -943,6 +944,8 @@ static unsigned code_off(unsigned k) { return FIBER_BLOCK_code + 8 * k; }
 struct jit_slot {
     struct fiber_block *blk;    // the block holding the translation
     uint64_t base;              // guest address its constants are relative to
+    unsigned long chain[2];     // a copy of blk's jump_ip slots (jit_chain_written()), which its
+                                // block ends test: one load from x29, not blk's then the slot's
 };
 // ... and what it rarely needs, below x29 (far[idx] at x29 - CTX_FAR * (idx + 1)).
 struct jit_far {
@@ -955,8 +958,13 @@ struct jit_ctx {
     struct jit_slot slot[];
 };
 #define CTX_BLK 8               // offsetof(struct jit_ctx, slot)
-#define CTX_SLOT 16             // sizeof(struct jit_slot)
+#define CTX_SLOT_LOG2 5
+#define CTX_SLOT (1 << CTX_SLOT_LOG2)   // sizeof(struct jit_slot)
+#define CTX_CHAIN 16            // offsetof(struct jit_slot, chain)
 #define CTX_FAR 24              // sizeof(struct jit_far)
+_Static_assert(sizeof(struct jit_slot) == CTX_SLOT && offsetof(struct jit_slot, chain) == CTX_CHAIN &&
+                   offsetof(struct jit_ctx, slot) == CTX_BLK && sizeof(struct jit_far) == CTX_FAR,
+               "the context's layout, as the emitted code has it");
 
 static inline struct jit_far *ctx_far(struct jit_ctx *ctx, unsigned idx) {
     return (struct jit_far *) ((char *) ctx - CTX_FAR * ((size_t) idx + 1));
@@ -992,12 +1000,14 @@ static void ldr_far(struct em *e, int rd, unsigned off) {
 }
 static unsigned far_off(unsigned idx, unsigned field) { return CTX_FAR * (idx + 1) - field; }
 
-// xd = [xn + off] (off a multiple of 8, < 2^24)
+// xd = [xn + off] (off a multiple of 8, at most 2^24: a context slot's last
+// field at CTX_MAX - 1)
 static void ldr_off(struct em *e, int rd, int rn, unsigned off) {
     if (off >> 15) {
-        put(e, 0x91400000u | (off >> 12) << 10 | ((uint32_t) rn << 5) | (uint32_t) rd);   // add xd, xn, #off>>12, lsl #12
+        unsigned hi = off >> 12 < 4095 ? off >> 12 : 4095;
+        put(e, 0x91400000u | hi << 10 | ((uint32_t) rn << 5) | (uint32_t) rd);   // add xd, xn, #hi, lsl #12
         rn = rd;
-        off &= 0xfff;
+        off -= hi << 12;
     }
     put(e, 0xF9400000u | (off / 8) << 10 | ((uint32_t) rn << 5) | (uint32_t) rd);      // ldr xd, [xn, #off]
 }
@@ -1005,6 +1015,12 @@ static void ldr_off(struct em *e, int rd, int rn, unsigned off) {
 // PIC: xd = the block (ctx->slot[idx].blk)
 static void ldr_ctx_block(struct em *e, int rd) {
     ldr_off(e, rd, FP, CTX_BLK + CTX_SLOT * e->idx);
+}
+
+// PIC: xd = the block's jump_ip[link] slot, as its copy in the context slot has
+// it (ctx->slot[idx].chain[link])
+static void ldr_ctx_chain(struct em *e, int rd, int link) {
+    ldr_off(e, rd, FP, CTX_BLK + CTX_SLOT * e->idx + CTX_CHAIN + 8 * (unsigned) link);
 }
 
 // xd = (uintptr_t) b + off
@@ -2379,7 +2395,18 @@ bool jit_chain_refused(struct fiber_block *from, int i, struct fiber_block *to) 
         return false;
     __atomic_store_n(&ctx_far(ctx, from->jit_idx)->alt[i], (uintptr_t) to->code, __ATOMIC_RELEASE);
     __atomic_store_n(from->jump_ip[i], *from->jump_ip[i] | 1UL << 62, __ATOMIC_RELEASE);
+    jit_chain_written(from, i);
     return true;
+}
+
+void jit_chain_written(struct fiber_block *from, int i) {
+    // from keeps its slot meanwhile: it is not jetsam (asbestos lock held),
+    // and only a jetsam block's slot goes to another block
+    struct jit_ctx *ctx = from->jit_ctx;
+    if (!pic_on || !ctx || !from->jump_ip[i] ||
+        __atomic_load_n(&ctx->slot[from->jit_idx].blk, __ATOMIC_ACQUIRE) != from)
+        return;
+    __atomic_store_n(&ctx->slot[from->jit_idx].chain[i], *from->jump_ip[i], __ATOMIC_RELEASE);
 }
 
 void jit_link(struct fiber_block *from, int i, struct fiber_block *to) {
@@ -2560,7 +2587,7 @@ static void make_stubs(unsigned k) {
             patch_here(e, plain1); patch_here(e, plain2); patch_here(e, plain3);
             // the run loop chains the slot on its way back (set_last_block())
             put(e, 0x53027D4Cu);                                                         // lsr w12, w10, #2
-            put(e, 0x8B0C13ACu);                                                         // add x12, x29, x12, lsl #4
+            put(e, 0x8B0C03ACu | CTX_SLOT_LOG2 << 10);                                   // add x12, x29, x12, lsl #5
             put(e, 0xF9400000u | ((CTX_BLK / 8) << 10) | (12u << 5) | 8);                // ldr x8, [x12, #CTX_BLK]
             put(e, 0xF9000000u | ((LOCAL_last_block / 8) << 10) | (1u << 5) | 8);        // str x8, [x1, #last_block]
             put(e, 0x9240BC00u | (9u << 5) | 11);                                        // and x11, x9, #0xffffffffffff
@@ -2575,13 +2602,22 @@ static void make_stubs(unsigned k) {
     free(e);
 }
 
+// x9 = block b's chain slot `slot`, its jump_ip[link]. PIC: the copy in the
+// context slot, one load from x29 (jit_chain_written() keeps it the slot's).
+static void ldr_chain_slot(struct em *e, struct fiber_block *b, unsigned long *slot, int link) {
+    if (pic_on && link >= 0 && link < 2 && slot == b->jump_ip[link])
+        ldr_ctx_chain(e, 9, link);
+    else
+        ldr_block(e, 9, (unsigned) ((char *) slot - (char *) b));
+}
+
 // PIC block end, outlined (stubs made): only what the common case runs stays
 // inline. Chained slot -> count the cycle -> the direct link, or, not linked
 // yet, STUB_GENERIC; the cycle count wrapping and an unchained slot go to
 // their stubs. The slot is loaded before the count, so the stubs all start
 // from it in x9.
 static void emit_chain_outlined(struct em *e, struct fiber_block *b, unsigned long *slot, int link) {
-    ldr_block(e, 9, (unsigned) ((char *) slot - (char *) b));
+    ldr_chain_slot(e, b, slot, link);
     unsigned to_unch = e->n; put(e, 0xB7F80009u);                     // tbnz x9, #63, unchained
     unsigned to_poke = ~0u;
     if (!e->chain_fwd) {   // forward edges do not count (see emit_chain_ex)
@@ -2615,7 +2651,6 @@ static void emit_chain_ex(struct em *e, struct fiber_block *b, unsigned long *sl
     }
     bool reg_cycle = n_pinned > 0;
     unsigned generic = 0;   // PIC: chained successor in x9, entered natively or through its gadgets
-    unsigned slot_off = (unsigned) ((char *) slot - (char *) b);
     int boff = FIBER_BLOCK_addr - FIBER_BLOCK_code;
     unsigned to_poke1, to_poke2 = 0;
     if (reg_cycle) {
@@ -2639,15 +2674,15 @@ static void emit_chain_ex(struct em *e, struct fiber_block *b, unsigned long *sl
         } else if (self_loop) {
             // Still chained to itself (an invalidation restores the slot):
             // straight back to the loop head, promoted registers in place.
+            ldr_chain_slot(e, b, slot, link);
             ldr_ctx_block(e, 10);
-            ldr_off(e, 9, 10, slot_off);
             put(e, 0x91000000u | (FIBER_BLOCK_code << 10) | (10u << 5) | 10);  // add x10, x10, #code
             put(e, 0xEB0A013Fu);                                                 // cmp x9, x10
             put(e, 0x54000000u | ((uint32_t) (e->loop_head - (int) e->n) & 0x7ffff) << 5);   // b.eq loop_head
         }
         if (self_loop) emit_canon(e);
     }
-    ldr_block(e, 9, slot_off);
+    ldr_chain_slot(e, b, slot, link);
     unsigned to_unch = e->n; put(e, 0xB7F80009u);                 // tbnz x9, #63, unchained
     if (pic_on && reg_cycle) {
         // Direct link: jit_link() turns this branch into `b <successor's hot
@@ -2696,7 +2731,7 @@ static void emit_chain_ex(struct em *e, struct fiber_block *b, unsigned long *sl
     // timer / poke: enter the successor through the run loop
     if (reg_cycle) {
         if (self_loop) emit_canon(e);
-        ldr_block(e, 9, slot_off);
+        ldr_chain_slot(e, b, slot, link);
         unsigned unch2 = e->n; put(e, 0xB7F80009u);                              // tbnz x9, #63, unchained
         put(e, 0xF8400000u | ((uint32_t) (boff & 0x1ff) << 12) | (9u << 5) | 11);   // ldur x11, [x9, #addr-code]
         put(e, 0xF9000000u | ((CPU_pc / 8) << 10) | (1u << 5) | 11);             // str x11, [x1, #pc]
@@ -3401,6 +3436,8 @@ static void slot_set(struct jit_ctx *ctx, unsigned idx, struct fiber_block *b, u
     ctx_far(ctx, idx)->alt[0] = ctx_far(ctx, idx)->alt[1] = 0;
     ctx_far(ctx, idx)->dbase = dbase;
     ctx->slot[idx].base = base;
+    for (int i = 0; i < 2; i++)
+        ctx->slot[idx].chain[i] = b->jump_ip[i] ? *b->jump_ip[i] : 1UL << 63;
     __atomic_store_n(&ctx->slot[idx].blk, b, __ATOMIC_RELEASE);
     slot_note(ctx, idx, b, SLOT_CLAIMED);
 }
@@ -3483,7 +3520,7 @@ void ish_aot_register(const struct aot_module *m) {
 
 // Bump whenever the code emitted for some guest instruction, stub or exit
 // changes: images made before would still pass every other check.
-#define JIT_CODE_VERSION 18
+#define JIT_CODE_VERSION 19
 
 // Everything the emitted code bakes in besides the gadgets it names: the
 // conventions, the struct layouts it loads from and the TLB / block cache
@@ -3492,7 +3529,8 @@ void ish_aot_register(const struct aot_module *m) {
 // check carry 0 there).
 uint32_t jit_abi(void) {
     const uint64_t v[] = {
-        JIT_CODE_VERSION, (uint64_t) prologue_words, entry_off(), (uint64_t) n_pinned, CTX_BLK, CTX_SLOT, CTX_FAR,
+        JIT_CODE_VERSION, (uint64_t) prologue_words, entry_off(), (uint64_t) n_pinned, CTX_BLK, CTX_SLOT, CTX_CHAIN,
+        CTX_FAR,
         FIBER_BLOCK_code, FIBER_BLOCK_addr, offsetof(struct fiber_block, native_entry),
         offsetof(struct fiber_block, jit_ctx), offsetof(struct fiber_block, is_jetsam),
         CPU_pc, CPU_cycle, CPU_poked_ptr, CPU_tls_ptr, offsetof(struct cpu_state, sp),
@@ -4317,7 +4355,7 @@ static long fault_slot_read(void) {
     } else if (k >= 2 && (ldr & 0xFFC00000u) == 0xF9400000u &&
                (unknown_fault.words[k - 2] & 0xFFC003E0u) == (0x91400000u | 29u << 5) &&
                ((ldr >> 5) & 31) == (unknown_fault.words[k - 2] & 31)) {
-        off = ((unknown_fault.words[k - 2] >> 10) & 0xfff) << 12 | ((ldr >> 10) & 0xfff) * 8;
+        off = (((unknown_fault.words[k - 2] >> 10) & 0xfff) << 12) + ((ldr >> 10) & 0xfff) * 8;
     } else {
         return -1;
     }
