@@ -431,7 +431,9 @@ static NSString *SymbolForProgram(NSString *_Nullable program) {
         item.exited = session.state == TerminalSessionStateExited;
         item.activity = session.activity;
         item.agent = item.exited ? TerminalSessionAgentNone : session.agent;
-        item.agentStopped = !item.exited && session.agentStoppedUnseen;
+        // Not on the tab shown, as its other marks are not: its agent stopped
+        // in sight (2026-11-27: a check on the tab in front till it was left)
+        item.agentStopped = !item.exited && !item.tabSelected && session.agentStoppedUnseen;
         NSString *title = session.displayTitle;
         item.label.text = title;
         [self updateIconOfItem:item program:session.foregroundProgram];
