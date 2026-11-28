@@ -19,8 +19,9 @@ import Foundation
 
     // What it shows: the activity told of it, or started if there is none
     // and a tab works (one stopped may be told of, others working)
-    @objc public static func show(title: String, since: Date, stopped: Date?, workingCount: Int, stoppedCount: Int) {
-        let state = AgentActivityAttributes.ContentState(title: title, since: since, stopped: stopped,
+    @objc public static func show(title: String, agent: String, since: Date, stopped: Date?, workingCount: Int,
+                                  stoppedCount: Int) {
+        let state = AgentActivityAttributes.ContentState(title: title, agent: agent, since: since, stopped: stopped,
                                                          workingCount: workingCount, stoppedCount: stoppedCount)
         if let activity = current {
             if state == shown {

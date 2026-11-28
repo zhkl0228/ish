@@ -2,7 +2,7 @@
 //  AgentActivityTracker.m
 //  iSH
 //
-//  The Live Activity (Dynamic Island, Lock Screen) of the tabs' Claude Code:
+//  The Live Activity (Dynamic Island, Lock Screen) of the tabs' agents:
 //  started as one starts working, with the app in front, as ActivityKit
 //  requires; told of the one that stopped last unseen, how long it worked,
 //  and how many stopped and work, while one did, for it may be asking to be
@@ -21,6 +21,9 @@
 // stopped unseen (agentStoppedUnseen), from when it worked till it stopped
 static NSMutableDictionary<NSUUID *, NSDate *> *workingSince;
 static NSMutableDictionary<NSUUID *, NSDateInterval *> *stoppedWork;
+// Their agents' names, as they worked: one that stopped by exiting has none
+// left to say (TerminalSession's agentName)
+static NSMutableDictionary<NSUUID *, NSString *> *agentNames;
 
 static void Publish(void) {
     BOOL inFront = UIApplication.sharedApplication.applicationState == UIApplicationStateActive;
@@ -49,6 +52,7 @@ static void Publish(void) {
             told = session;
     }
     [AgentActivity showWithTitle:told.displayTitle
+                           agent:agentNames[latest]
                            since:since
                          stopped:stopped
                     workingCount:(NSInteger) workingSince.count
@@ -61,6 +65,7 @@ static void Changed(TerminalSession *session) {
     if (running && session.agent == TerminalSessionAgentWorking) {
         if (workingSince[uuid] == nil)
             workingSince[uuid] = NSDate.date;
+        agentNames[uuid] = session.agentName;
         [stoppedWork removeObjectForKey:uuid];
     } else {
         // Set as it stops: agentStoppedUnseen is, as the change that it
@@ -72,6 +77,7 @@ static void Changed(TerminalSession *session) {
                 stoppedWork[uuid] = [[NSDateInterval alloc] initWithStartDate:began endDate:NSDate.date];
         } else {
             [stoppedWork removeObjectForKey:uuid];
+            [agentNames removeObjectForKey:uuid];
         }
     }
     Publish();
@@ -80,6 +86,7 @@ static void Changed(TerminalSession *session) {
 void AgentActivityTrackerStart(void) {
     workingSince = [NSMutableDictionary new];
     stoppedWork = [NSMutableDictionary new];
+    agentNames = [NSMutableDictionary new];
     // One of a run before this one, its tabs gone
     [AgentActivity endAll];
     NSNotificationCenter *center = NSNotificationCenter.defaultCenter;

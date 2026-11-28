@@ -2,9 +2,10 @@
 //  AgentLiveActivity.swift
 //  iSH
 //
-//  The Live Activity extension: the tabs' Claude Code on the Dynamic Island
-//  and the Lock Screen (AgentActivityAttributes.swift). At work, sparkles and
-//  the time it has worked; stopped, a green check and the time it worked.
+//  The Live Activity extension: the tabs' agents (Claude Code, Kimi Code) on
+//  the Dynamic Island and the Lock Screen (AgentActivityAttributes.swift). At
+//  work, sparkles and the time it has worked; stopped, a green check and the
+//  time it worked.
 //
 
 import ActivityKit
@@ -19,13 +20,24 @@ struct AgentWidgets: WidgetBundle {
 }
 
 extension AgentActivityAttributes.ContentState {
-    // The one stopped, told of before those working, with how many work
+    // The one told of, by its agent's name (tabs may run different agents),
+    // then how many more stopped, and how many work: "Kimi stopped · 1 more
+    // stopped · 2 working", "Claude is working · 1 more working"
     var status: String {
+        var parts = [working ? "\(agent) is working" : "\(agent) stopped"]
         if working {
-            return workingCount > 1 ? "Claude is working in \(workingCount) tabs" : "Claude is working"
+            if workingCount > 1 {
+                parts.append("\(workingCount - 1) more working")
+            }
+        } else {
+            if stoppedCount > 1 {
+                parts.append("\(stoppedCount - 1) more stopped")
+            }
+            if workingCount > 0 {
+                parts.append("\(workingCount) working")
+            }
         }
-        let stopped = stoppedCount > 1 ? "Claude stopped in \(stoppedCount) tabs" : "Claude stopped"
-        return workingCount > 0 ? "\(stopped) · \(workingCount) working" : stopped
+        return parts.joined(separator: " · ")
     }
 }
 
