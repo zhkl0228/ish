@@ -538,7 +538,14 @@ unsigned long realfs_telldir(struct fd *fd) {
 void realfs_seekdir(struct fd *fd, unsigned long ptr) {
     realfs_opendir(fd);
     if (fd->dir == NULL) return;
-    seekdir(fd->dir, ptr);
+    // 0, the guest's start (rewinddir is lseek to 0): Darwin's telldir there
+    // is 1, and its seekdir(0) goes elsewhere (from the 100th entry of 202 it
+    // stayed there; a guest's rewinddir lost "." or ".."). rewinddir() is the
+    // start everywhere.
+    if (ptr == 0)
+        rewinddir(fd->dir);
+    else
+        seekdir(fd->dir, ptr);
 }
 
 off_t realfs_lseek(struct fd *fd, off_t offset, int whence) {
