@@ -824,6 +824,11 @@ static NSURL *SavedTabsDirectory(void) {
             return;
         }
     }
+    // Its agent stopped in sight, the tab shown in front: not to be told of
+    // as unseen (the Live Activity's, once the app is away)
+    if (session == self.selectedSession && session.agentStoppedUnseen &&
+        self.view.window.windowScene.activationState == UISceneActivationStateForegroundActive)
+        [session markSeen];
     [self tabsDidChange];
 }
 
@@ -1077,6 +1082,10 @@ static NSURL *SavedTabsDirectory(void) {
     // the tab bar, where it covered them once back. traitCollectionDidChange:
     // set them again for any trait; the registrations are for some only.
     [self updateMonitorColumn];
+    // What the tab shown did while the app was away is in sight now: its
+    // agent's stop too
+    if (self.selectedSession.agentStoppedUnseen)
+        [self.selectedSession markSeen];
     // A paste button was reported to stay disabled after the app had been in
     // the background, another app having copied meanwhile, and to come back
     // given its target again (Apple's developer forums, thread 756627).

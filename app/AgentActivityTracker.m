@@ -4,10 +4,12 @@
 //
 //  The Live Activity (Dynamic Island, Lock Screen) of the tabs' Claude Code:
 //  started as one starts working, with the app in front, as ActivityKit
-//  requires; told which works, since when, and how many; once none works,
-//  told of the one that stopped last and how long it worked, which shows
-//  while the app is away; and
-//  ended once none works and the app is in front, where the tabs show it.
+//  requires; told of the one that stopped last unseen, how long it worked,
+//  and how many stopped and work, while one did, for it may be asking to be
+//  allowed a tool, which matters more than the others' working (2026-11-28:
+//  one asking showed as nothing while another worked); else of the one that
+//  began working last, since when, and how many work; and ended once none
+//  works and the app is in front, where the tabs show it.
 //
 
 #import <UIKit/UIKit.h>
@@ -26,20 +28,20 @@ static void Publish(void) {
         [AgentActivity end];
         return;
     }
-    // The one told of: the one that began working last, else the one that
-    // stopped last
+    // The one told of: the one that stopped last, else the one that began
+    // working last
     NSUUID *latest;
     NSDate *since;
     NSDate *stopped;
-    if (workingSince.count > 0) {
-        latest = [workingSince keysSortedByValueUsingSelector:@selector(compare:)].lastObject;
-        since = workingSince[latest];
-    } else {
+    if (stoppedWork.count > 0) {
         latest = [stoppedWork keysSortedByValueUsingComparator:^NSComparisonResult(NSDateInterval *a, NSDateInterval *b) {
             return [a.endDate compare:b.endDate];
         }].lastObject;
         since = stoppedWork[latest].startDate;
         stopped = stoppedWork[latest].endDate;
+    } else {
+        latest = [workingSince keysSortedByValueUsingSelector:@selector(compare:)].lastObject;
+        since = workingSince[latest];
     }
     TerminalSession *told;
     for (TerminalSession *session in TerminalSessionStore.shared.sessions) {

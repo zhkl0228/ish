@@ -13,8 +13,8 @@ import Foundation
 
 struct AgentActivityAttributes: ActivityAttributes {
     struct ContentState: Codable, Hashable {
-        // The tab told of: the one that began working last, else the one
-        // that stopped last
+        // The tab told of: the one that stopped last unseen, else the one
+        // that began working last
         var title: String
         // When it began working, and when it stopped (done, or asking to be
         // allowed a tool), nil while it works

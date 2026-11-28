@@ -19,11 +19,13 @@ struct AgentWidgets: WidgetBundle {
 }
 
 extension AgentActivityAttributes.ContentState {
+    // The one stopped, told of before those working, with how many work
     var status: String {
         if working {
             return workingCount > 1 ? "Claude is working in \(workingCount) tabs" : "Claude is working"
         }
-        return stoppedCount > 1 ? "Claude stopped in \(stoppedCount) tabs" : "Claude stopped"
+        let stopped = stoppedCount > 1 ? "Claude stopped in \(stoppedCount) tabs" : "Claude stopped"
+        return workingCount > 0 ? "\(stopped) · \(workingCount) working" : stopped
     }
 }
 
