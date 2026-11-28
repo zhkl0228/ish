@@ -389,13 +389,13 @@ static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, stru
     // declare elf aux now so we can know how big it is
     struct aux_ent aux[] = {
         {AX_SYSINFO_EHDR, current->mm->vdso},
-        // FP|ASIMD|EVTSTRM|AES|PMULL|SHA2|CRC32|ATOMICS. AES+PMULL enables ring's
-        // gcm_ghash_clmul (64-bit CLMUL) path. SHA2: OpenSSL's SHA-256 runs
-        // sha256h and the rest natively (the JIT translates them), 6.5 times as
-        // fast as its software path on an M2. Not SHA1: its instructions go
-        // through the JIT's V registers in cpu->fp, slower than OpenSSL's
-        // software SHA-1.
-        {AX_HWCAP, 0x1df},
+        // FP|ASIMD|EVTSTRM|AES|PMULL|SHA1|SHA2|CRC32|ATOMICS. AES+PMULL enables
+        // ring's gcm_ghash_clmul (64-bit CLMUL) path. SHA1, SHA2: OpenSSL's
+        // SHA-1 and SHA-256 run sha1c, sha256h and the rest natively (the JIT
+        // translates them, its V registers held in host registers), on an M2
+        // 2.3 and 22 times as fast as their software paths; SHA-1 with the
+        // gadgets alone 10 times.
+        {AX_HWCAP, 0x1ff},
         {AX_PAGESZ, PAGE_SIZE},
         {AX_CLKTCK, 0x64},
         {AX_PHDR, load_addr + header.prghead_off},
