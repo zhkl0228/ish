@@ -510,16 +510,32 @@ static int c_latency_eventfd_timerfd(void) {
         if (r != 1) us = 999999;
         if (us > worst) worst = us;
     }
+    // The ticks are those of the time from the setting to the last read, not
+    // of 500ms: a late host stretches the last poll and read past it, and they
+    // are owed (GitHub's macOS VM, 2026-11-27: 32 ticks, the reads ending
+    // more than 500ms on, where eventfd's wake was 124ms late). At most as
+    // many as 20ms go into that time, the expirations the host's timer
+    // thread counts on the clock the guest reads; at least four fifths of
+    // those till the read began (the thread may be late to count); and the
+    // last read 400ms on at least, which a timer that never fires has not.
     int tf = timerfd_create(CLOCK_MONOTONIC, 0);
     struct itimerspec its = { { 0, 20000000 }, { 0, 20000000 } };
+    int64_t set0 = now_us();
     timerfd_settime(tf, 0, &its, NULL);
-    int64_t t0 = now_us(); int ticks = 0;
-    while (now_us() - t0 < 500000) {
+    int64_t set1 = now_us(); int ticks = 0;
+    int64_t read0 = set1, read1 = set1;
+    while (now_us() - set1 < 500000) {
         struct pollfd q = { tf, POLLIN, 0 };
-        if (poll(&q, 1, 1000) == 1) { uint64_t n; read(tf, &n, 8); ticks += (int)n; }
+        if (poll(&q, 1, 1000) == 1) {
+            uint64_t n;
+            read0 = now_us(); read(tf, &n, 8); read1 = now_us();
+            ticks += (int)n;
+        }
     }
-    printf("    NOTE eventfd worst latency %ldus; timerfd 20ms ticks in 500ms: %d (want ~25)\n", worst, ticks);
-    return (worst < latency_bound_us() && ticks >= 20 && ticks <= 30) ? 0 : 1;
+    int least = (int)((read0 - set1) / 20000) * 4 / 5, most = (int)((read1 - set0) / 20000);
+    printf("    NOTE eventfd worst latency %ldus; timerfd 20ms ticks: %d in the %ldms to the last read"
+           " (want %d to %d)\n", worst, ticks, (long)((read1 - set0) / 1000), least, most);
+    return (worst < latency_bound_us() && read0 - set1 >= 400000 && ticks >= least && ticks <= most) ? 0 : 1;
 }
 
 // --- cost -------------------------------------------------------------------------
