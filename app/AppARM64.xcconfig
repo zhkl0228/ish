@@ -14,7 +14,7 @@ MARKETING_VERSION = 2.3.5
 // Build number must increase across the whole app regardless of marketing
 // version. CI (.github/workflows/aot-images.yml) raises it by one, and each
 // extension's *ARM64.xcconfig with it, with each set of AOT images it commits.
-CURRENT_PROJECT_VERSION = 852
+CURRENT_PROJECT_VERSION = 853
 
 // Link meson-built libraries directly from the arm64 meson build dir.
 // These are NOT in the Frameworks build phase to prevent Xcode from

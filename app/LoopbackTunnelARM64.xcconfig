@@ -17,4 +17,4 @@ PRODUCT_BUNDLE_IDENTIFIER = $(ROOT_BUNDLE_IDENTIFIER).arm64.LoopbackTunnel
 // Must match the host app (AppARM64.xcconfig): iOS rejects an extension
 // whose version differs from its containing app.
 MARKETING_VERSION = 2.3.5
-CURRENT_PROJECT_VERSION = 852
+CURRENT_PROJECT_VERSION = 853
