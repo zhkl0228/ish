@@ -70,14 +70,27 @@ static NSDictionary<NSString *, NSNumber *> *ClaudeTitleGlyphs(void) {
     return glyphs;
 }
 
-// The title the job owning the terminal set, nil if none: the agent's state
-// told by its glyph, which *rest leaves off. Claude Code's begins with a
-// glyph of those recorded; one it begins otherwise is said in the kernel log
-// (the first of each), and is shown as it is, telling no state.
+// Kimi Code's state, as it reports it (Terminal's programStatus: recorded
+// working, idle, and done, which is idle till it thinks it was seen), while
+// the job that reported it owns the terminal
+- (TerminalSessionAgent)kimiAgent {
+    NSString *status = self.terminal.programStatus;
+    if (status == nil || self.terminal.programStatusGroup != self.terminal.foregroundProcessGroup)
+        return TerminalSessionAgentNone;
+    return [status isEqualToString:@"working"] ? TerminalSessionAgentWorking : TerminalSessionAgentWaiting;
+}
+
+// The title the job owning the terminal set, nil if none, and the agent's
+// state: Claude Code's told by its title's glyph, which the title returned
+// leaves off, Kimi Code's by its reports (kimiAgent). Claude Code's begins
+// with a glyph of those recorded; one it begins otherwise is said in the
+// kernel log (the first of each), and is shown as it is, telling no state.
 - (nullable NSString *)jobTitleWithAgent:(TerminalSessionAgent *)agent {
     *agent = TerminalSessionAgentNone;
     if (self.state != TerminalSessionStateRunning)
         return nil;
+    if ([self.foregroundProgram isEqualToString:@"kimi-code"])
+        *agent = [self kimiAgent];
     int fg_group = self.terminal.foregroundProcessGroup;
     NSString *title = self.terminal.windowTitle;
     if (title.length == 0 || self.terminal.windowTitleGroup != fg_group)
@@ -110,6 +123,12 @@ static NSDictionary<NSString *, NSNumber *> *ClaudeTitleGlyphs(void) {
     TerminalSessionAgent agent;
     [self jobTitleWithAgent:&agent];
     return agent;
+}
+
+- (nullable NSString *)agentName {
+    if (self.agent == TerminalSessionAgentNone)
+        return nil;
+    return [self.foregroundProgram isEqualToString:@"kimi-code"] ? @"Kimi" : @"Claude";
 }
 
 // What runs in the terminal, and where: the title the job owning it set,
@@ -350,6 +369,11 @@ static NSDictionary<NSString *, NSNumber *> *ClaudeTitleGlyphs(void) {
         [NSNotificationCenter.defaultCenter addObserver:self
                                                selector:@selector(terminalAskedAttention:)
                                                    name:TerminalAttentionNotification
+                                                 object:nil];
+        // and an agent's state, as it reports it
+        [NSNotificationCenter.defaultCenter addObserver:self
+                                               selector:@selector(terminalTitleChanged:)
+                                                   name:TerminalProgramStatusDidChangeNotification
                                                  object:nil];
         __weak typeof(self) weakSelf = self;
         NSTimer *titles = [NSTimer timerWithTimeInterval:1 repeats:YES block:^(NSTimer *_) {

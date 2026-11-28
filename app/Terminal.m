@@ -11,6 +11,7 @@
 #include "fs/devices.h"
 #include "fs/tty.h"
 #include "kernel/signal.h"
+#include "debug.h"
 
 extern struct tty_driver ios_pty_driver;
 
@@ -99,10 +100,11 @@ static NSMapTable<NSUUID *, Terminal *> *terminalsByUUID;
 }
 
 static NSString *const TERMINAL_HANDLERS[] = {@"load", @"log", @"sendInput", @"sendBinary", @"resize", @"propUpdate", @"setTitle", @"copyText",
-                                              @"notify"};
+                                              @"notify", @"programStatus"};
 
 NSNotificationName const TerminalTitleDidChangeNotification = @"TerminalTitleDidChangeNotification";
 NSNotificationName const TerminalAttentionNotification = @"TerminalAttentionNotification";
+NSNotificationName const TerminalProgramStatusDidChangeNotification = @"TerminalProgramStatusDidChangeNotification";
 
 - (WKWebView *)webView {
     if (_webView == nil) {
@@ -179,6 +181,8 @@ NSNotificationName const TerminalAttentionNotification = @"TerminalAttentionNoti
         _windowTitle = message.body;
         _windowTitleGroup = self.foregroundProcessGroup;
         [NSNotificationCenter.defaultCenter postNotificationName:TerminalTitleDidChangeNotification object:self];
+    } else if ([message.name isEqualToString:@"programStatus"]) {
+        [self programStatusReported:message.body];
     } else if ([message.name isEqualToString:@"notify"]) {
         // [title, text]: the bell's both empty; iTerm2's, no title. The tab
         // shows its own title for it, which says where it came from.
@@ -187,6 +191,44 @@ NSNotificationName const TerminalAttentionNotification = @"TerminalAttentionNoti
         _attentionCount++;
         [NSNotificationCenter.defaultCenter postNotificationName:TerminalAttentionNotification object:self];
     }
+}
+
+// A program status report (OSC 7501, its text after "7501;"), as Kimi Code's
+// were recorded (2026-11-28, PI_PROGRAM_STATUS=1): state=idle:app=kimi-code,
+// state=working:app=kimi-code:msg=<base64 of its session's title>, the same
+// with state=done, and state=clear (as it starts and as it exits). Pairs of
+// key=value by ':', the program as a whole's (no id=). One with a key, a
+// state or an app not recorded is said in the kernel log, whole, and taken
+// for nothing: what it would mean is not known.
+- (void)programStatusReported:(NSString *)report {
+    NSMutableDictionary<NSString *, NSString *> *pairs = [NSMutableDictionary new];
+    for (NSString *pair in [report componentsSeparatedByString:@":"]) {
+        // msg's base64 has '=' of its own
+        NSRange equals = [pair rangeOfString:@"="];
+        if (equals.location == NSNotFound) {
+            printk("program status (OSC 7501): a pair not key=value (%s), taken for nothing: %s\n",
+                   pair.UTF8String, report.UTF8String);
+            return;
+        }
+        pairs[[pair substringToIndex:equals.location]] = [pair substringFromIndex:NSMaxRange(equals)];
+    }
+    static NSSet<NSString *> *keys, *states;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        keys = [NSSet setWithArray:@[@"state", @"app", @"msg"]];
+        states = [NSSet setWithArray:@[@"idle", @"working", @"done", @"clear"]];
+    });
+    NSString *state = pairs[@"state"];
+    BOOL clear = [state isEqualToString:@"clear"];
+    if (![[NSSet setWithArray:pairs.allKeys] isSubsetOfSet:keys] || ![states containsObject:state] ||
+            (clear ? pairs.count != 1 : ![pairs[@"app"] isEqualToString:@"kimi-code"])) {
+        printk("program status (OSC 7501) of a key, a state or an app not recorded, taken for nothing: %s\n",
+               report.UTF8String);
+        return;
+    }
+    _programStatus = clear ? nil : state;
+    _programStatusGroup = self.foregroundProcessGroup;
+    [NSNotificationCenter.defaultCenter postNotificationName:TerminalProgramStatusDidChangeNotification object:self];
 }
 
 - (void)syncWindowSize {

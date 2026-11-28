@@ -60,6 +60,13 @@ struct tty;
 // Each change posts TerminalTitleDidChangeNotification.
 @property (readonly) NSString *windowTitle; // nil until a program sets one
 @property (readonly) int windowTitleGroup;
+// What the program owning the terminal says it does (Kimi Code's program
+// status, OSC 7501: term.js): working, idle, done (and not yet seen, which it
+// says itself, idle again once it thinks it was), nil before any report and
+// after clear; and the process group that owned the terminal then, as with
+// the title. Each change posts TerminalProgramStatusDidChangeNotification.
+@property (readonly) NSString *programStatus;
+@property (readonly) int programStatusGroup;
 // Output rendered so far, counted in the pieces it was rendered in: a tab
 // tells from it that something was written while it was not looked at.
 // Main thread.
@@ -79,5 +86,6 @@ struct tty;
 
 extern NSNotificationName const TerminalTitleDidChangeNotification;
 extern NSNotificationName const TerminalAttentionNotification;
+extern NSNotificationName const TerminalProgramStatusDidChangeNotification;
 
 extern struct tty_driver ios_console_driver;

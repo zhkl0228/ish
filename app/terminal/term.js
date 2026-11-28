@@ -179,6 +179,19 @@ term.parser.registerOscHandler(777, (data) => {
     native.notify([parts[1], parts.slice(2).join(';')]);
     return true;
 });
+// Kimi Code's program status (OSC 7501): it asks with "?" whether the
+// terminal takes it (\e]7501;?\e\\, then the device attributes' \e[c: from a
+// recording, 2026-11-28), and a terminal that does answers in kind before
+// its answer to \e[c, which onData sends after this; its reports of what it
+// does (state=working:app=kimi-code, ...) go to the app (Terminal.m)
+term.parser.registerOscHandler(7501, (data) => {
+    if (data == '?') {
+        native.sendInput('\x1b]7501;?\x1b\\');
+        return true;
+    }
+    native.programStatus(data);
+    return true;
+});
 
 // DEC mode 2031, as contour, kitty and ghostty have it: a program that sets it
 // is told as the terminal turns dark or light (CSI ? 997 ; 1 n dark, 2 light;

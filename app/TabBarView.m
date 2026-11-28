@@ -49,7 +49,8 @@ static NSString *SymbolForProgram(NSString *_Nullable program) {
                 map[name] = symbol;
         };
         kind(@"pencil", @[@"vi", @"vim", @"nvim", @"nano", @"emacs", @"micro", @"hx", @"ed"]);
-        kind(@"sparkles", @[@"claude", @"kimi", @"codex", @"aider", @"gemini", @"opencode"]);
+        // kimi-code: Kimi Code's process title as it runs
+        kind(@"sparkles", @[@"claude", @"kimi", @"kimi-code", @"codex", @"aider", @"gemini", @"opencode"]);
         kind(@"chevron.left.forwardslash.chevron.right",
              @[@"python", @"node", @"bun", @"deno", @"ruby", @"perl", @"php", @"lua", @"irb", @"java"]);
         kind(@"network", @[@"ssh", @"mosh", @"telnet", @"nc", @"curl", @"wget", @"ping", @"tcpdump", @"dig"]);

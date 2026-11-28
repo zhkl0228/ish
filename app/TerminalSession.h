@@ -24,15 +24,17 @@ typedef NS_ENUM(NSInteger, TerminalSessionActivity) {
     TerminalSessionActivityBell,     // a program rang the bell or sent a notification
 };
 
-// What an AI agent owning the terminal says of itself in the title it sets:
-// Claude Code's alone, as one recorded on a phone shows it (2026-11-27,
-// script(1) around claude): ✳ and a space before its title while it waits
-// for the person (for a prompt, or to be allowed a tool), ◐ or ◑ (in turn,
-// a turning glyph) while it works, and no title once it exits.
+// What an AI agent owning the terminal says of itself, as recorded on a
+// phone with script(1) around it. Claude Code in the title it sets
+// (2026-11-27): ✳ and a space before its title while it waits for the person
+// (for a prompt, or to be allowed a tool), ◐ or ◑ (in turn, a turning glyph)
+// while it works, and no title once it exits. Kimi Code in its program
+// status reports (2026-11-28, Terminal's programStatus): working, and idle or
+// done (finished, not yet seen) while it waits.
 typedef NS_ENUM(NSInteger, TerminalSessionAgent) {
     TerminalSessionAgentNone,    // no agent it can tell of owns the terminal
-    TerminalSessionAgentWaiting, // ✳
-    TerminalSessionAgentWorking, // ◐ ◑
+    TerminalSessionAgentWaiting, // ✳; idle, done
+    TerminalSessionAgentWorking, // ◐ ◑; working
 };
 
 typedef NS_ENUM(NSInteger, TerminalSessionState) {
@@ -77,6 +79,9 @@ typedef NS_ENUM(NSInteger, TerminalSessionState) {
 // waiting): done, or asking to be allowed a tool, which its title does not
 // tell apart. Over once it works again, and by markSeen.
 @property (readonly) BOOL agentStoppedUnseen;
+// The agent's name, as a person says it (Claude, Kimi), while one it can tell
+// of owns the terminal (agent not none)
+@property (readonly, nullable) NSString *agentName;
 // The program of the job that owns the terminal (top, claude), nil while the
 // shell does
 @property (readonly, nullable) NSString *foregroundProgram;
