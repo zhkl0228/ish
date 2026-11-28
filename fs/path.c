@@ -226,7 +226,20 @@ static int __path_normalize(const char *at_path, const char *path, char *out, in
             struct mount *mount = find_mount_and_trim_path(possible_symlink);
             assert(path_is_normalized(possible_symlink));
             int res = _EINVAL;
-            if (mount->fs->readlink)
+            // the stat below, if the file system gives it with the readlink
+            // (readlink_or_stat): its result, 1 if not
+            struct statbuf stat;
+            int stat_err = 1;
+            bool answered = false;
+            if (mount->fs->readlink_or_stat) {
+                res = mount->fs->readlink_or_stat(mount, possible_symlink, c, MAX_PATH - (c - out), &stat);
+                answered = res != _ENOSYS;
+                if (!answered)
+                    res = _EINVAL;
+                else if (res < 0)
+                    stat_err = res == _EINVAL ? 0 : res;
+            }
+            if (!answered && mount->fs->readlink)
                 res = mount->fs->readlink(mount, possible_symlink, c, MAX_PATH - (c - out));
             if (res >= 0) {
                 if (mount->fs == &procfs)
@@ -251,8 +264,7 @@ static int __path_normalize(const char *at_path, const char *path, char *out, in
             // if there's a slash after this component, ensure that if it
             // exists, it's a directory and that we have execute perms on it
             if (*(p - 1) == '/') {
-                struct statbuf stat;
-                int err = mount->fs->stat(mount, possible_symlink, &stat);
+                int err = stat_err != 1 ? stat_err : mount->fs->stat(mount, possible_symlink, &stat);
                 mount_release(mount);
                 if (err >= 0) {
                     if (!S_ISDIR(stat.mode))

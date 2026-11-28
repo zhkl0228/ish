@@ -151,6 +151,13 @@ struct fs_ops {
 
     struct fd *(*open)(struct mount *mount, const char *path, int flags, int mode); // required
     ssize_t (*readlink)(struct mount *mount, const char *path, char *buf, size_t bufsize);
+    // Optional, for the path walk (path_normalize()), readlink and stat in
+    // one: a symlink's target as readlink gives it; for anything else
+    // _EINVAL with stat's mode, uid, gid and inode, all the walk looks at;
+    // a missing path's error. _ENOSYS: not for this path (the walk calls
+    // readlink, then stat).
+    ssize_t (*readlink_or_stat)(struct mount *mount, const char *path, char *buf, size_t bufsize,
+                                struct statbuf *stat);
 
     // These return _EPERM if not present
     int (*link)(struct mount *mount, const char *src, const char *dst);

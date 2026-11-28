@@ -1116,6 +1116,42 @@ static ssize_t fakefs_readlink(struct mount *mount, const char *path, char *buf,
     return err;
 }
 
+// For the path walk, a component's readlink and stat in one transaction, of
+// one query, and no host call: the walk's stat looks at the mode, uid and
+// gid only, meta.db's. Its readlink then its stat were two transactions and
+// a host fstatat, for each directory of each path (ls -lR's stat did ten
+// transactions, most of them these). The paths fakefs_stat takes elsewhere
+// (a hook's, a bind mount's) go the walk's way.
+static ssize_t fakefs_readlink_or_stat(struct mount *mount, const char *path, char *buf, size_t bufsize,
+                                       struct statbuf *stat) {
+    char host_path[PATH_MAX];
+    if (bind_mount_translate_path(path, host_path, sizeof(host_path)) || is_under_bind_mount(path))
+        return _ENOSYS;
+    struct fakefs_db *fs = &mount->fakefs;
+    db_begin_read(fs);
+    struct ish_stat ishstat;
+    ino_t inode;
+    if (!path_read_stat(fs, path, &ishstat, &inode)) {
+        db_rollback(fs);
+        return _ENOENT;
+    }
+    if (S_ISLNK(ishstat.mode)) {
+        ssize_t err = realfs.readlink(mount, path, buf, bufsize);
+        if (err == _EINVAL)
+            err = file_readlink(mount, path, buf, bufsize);
+        db_commit(fs);
+        return err;
+    }
+    db_commit(fs);
+    memset(stat, 0, sizeof(*stat));
+    stat->inode = inode;
+    stat->mode = ishstat.mode;
+    stat->uid = ishstat.uid;
+    stat->gid = ishstat.gid;
+    stat->rdev = ishstat.rdev;
+    return _EINVAL;
+}
+
 static int fakefs_readdir(struct fd *fd, struct dir_entry *entry) {
     assert(fd->ops == &fakefs_fdops);
     int res;
@@ -1584,6 +1620,7 @@ const struct fs_ops fakefs = {
     .statfs = realfs_statfs,
     .open = fakefs_open,
     .readlink = fakefs_readlink,
+    .readlink_or_stat = fakefs_readlink_or_stat,
     .link = fakefs_link,
     .unlink = fakefs_unlink,
     .rename = fakefs_rename,

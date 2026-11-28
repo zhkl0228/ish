@@ -1143,6 +1143,18 @@ EOF
         status=1
     fi
     echo
+    section "the path walk on a fakefs root: symlinks, ENOTDIR, ELOOP, EACCES (fakefs root)"
+    walkdir=$(mktemp -d "$(cd "$(dirname "$ROOTFS")" && pwd)/regress-fakefs_walk.XXXXXX")
+    if fakefs_init "$walkdir" tests/regress/regress_fakefs_walk.c; then
+        out=$(timeout 60 "$ISH" -f "$walkdir/fs" /init 2>&1)
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+    else
+        echo "failed to set up regress_fakefs_walk (needs $FAKEFSIFY and python3)" >&2
+        status=1
+    fi
+    rm -rf "$walkdir"
+    echo
     section "tcdrain, tcsendbreak, tcflow on a pseudo-terminal (ENOTTY) (fakefs root)"
     # a pseudo-terminal needs /dev/ptmx
     ttyflowdir=$(mktemp -d "$(cd "$(dirname "$ROOTFS")" && pwd)/regress-tty_flow.XXXXXX")
