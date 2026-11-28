@@ -27,6 +27,10 @@ struct fakefs_db {
         sqlite3_stmt *orphan_clear;
     } stmt;
     sqlite3_mutex *lock;
+    // path_read_stat_cached(): sqlite's mapping of the -shm file's header
+    // (NULL: no cache), and what was read
+    const volatile uint32_t *wal_index;
+    struct fakefs_cache *cache;
 };
 
 // The tables of a fakefs made new (fakefsify, a fresh mount), at
@@ -64,6 +68,11 @@ typedef uint64_t inode_t;
 
 inode_t path_get_inode(struct fakefs_db *fs, const char *path);
 bool path_read_stat(struct fakefs_db *fs, const char *path, struct ish_stat *stat, uint64_t *inode);
+// path_read_stat() in a read transaction of its own, or with none when no
+// connection (this process's or another's: the file provider) has committed
+// since the same path was read: from the cache then. The database must be in
+// WAL mode for it (fake_db_init).
+bool path_read_stat_cached(struct fakefs_db *fs, const char *path, struct ish_stat *stat, uint64_t *inode);
 inode_t path_create(struct fakefs_db *fs, const char *path, struct ish_stat *stat);
 
 bool inode_read_stat_if_exist(struct fakefs_db *fs, inode_t inode, struct ish_stat *stat);

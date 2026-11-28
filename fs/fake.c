@@ -802,7 +802,30 @@ static int fakefs_stat(struct mount *mount, const char *path, struct statbuf *fa
      * against the host file; synthesize mode bits from host's. */
     char host_abs[PATH_MAX];
     bool via_hook = false;
-    if (bind_mount_translate_path_ex(path, host_abs, sizeof(host_abs), &via_hook) && via_hook) {
+    bool translated = bind_mount_translate_path_ex(path, host_abs, sizeof(host_abs), &via_hook);
+    if (!translated && !is_under_bind_mount(path)) {
+        // the fakefs's own path: its meta.db row from the cache, or a read
+        // transaction of its own, then the host's stat of the file
+        struct ish_stat ishstat;
+        ino_t inode;
+        if (!path_read_stat_cached(fs, path, &ishstat, &inode)) {
+            ISH_SIGNPOST_SCOPE_END(fs, "fakefs_stat", _fs_spid);
+            return _ENOENT;
+        }
+        int err = realfs.stat(mount, path, fake_stat);
+        if (err < 0) {
+            ISH_SIGNPOST_SCOPE_END(fs, "fakefs_stat", _fs_spid);
+            return err;
+        }
+        fake_stat->inode = inode;
+        fake_stat->mode = ishstat.mode;
+        fake_stat->uid = ishstat.uid;
+        fake_stat->gid = ishstat.gid;
+        fake_stat->rdev = ishstat.rdev;
+        ISH_SIGNPOST_SCOPE_END(fs, "fakefs_stat", _fs_spid);
+        return 0;
+    }
+    if (translated && via_hook) {
         struct stat host_stat;
         if (stat(host_abs, &host_stat) < 0) {
             ISH_SIGNPOST_SCOPE_END(fs, "fakefs_stat", _fs_spid);
@@ -1116,33 +1139,28 @@ static ssize_t fakefs_readlink(struct mount *mount, const char *path, char *buf,
     return err;
 }
 
-// For the path walk, a component's readlink and stat in one transaction, of
-// one query, and no host call: the walk's stat looks at the mode, uid and
-// gid only, meta.db's. Its readlink then its stat were two transactions and
-// a host fstatat, for each directory of each path (ls -lR's stat did ten
-// transactions, most of them these). The paths fakefs_stat takes elsewhere
-// (a hook's, a bind mount's) go the walk's way.
+// For the path walk, a component's readlink and stat in one lookup, from the
+// cache or in one transaction (path_read_stat_cached()), and no host call:
+// the walk's stat looks at the mode, uid and gid only, meta.db's. Its
+// readlink then its stat were two transactions and a host fstatat, for each
+// directory of each path (ls -lR's stat did ten transactions, most of them
+// these). The paths fakefs_stat takes elsewhere (a hook's, a bind mount's)
+// go the walk's way.
 static ssize_t fakefs_readlink_or_stat(struct mount *mount, const char *path, char *buf, size_t bufsize,
                                        struct statbuf *stat) {
     char host_path[PATH_MAX];
     if (bind_mount_translate_path(path, host_path, sizeof(host_path)) || is_under_bind_mount(path))
         return _ENOSYS;
-    struct fakefs_db *fs = &mount->fakefs;
-    db_begin_read(fs);
     struct ish_stat ishstat;
     ino_t inode;
-    if (!path_read_stat(fs, path, &ishstat, &inode)) {
-        db_rollback(fs);
+    if (!path_read_stat_cached(&mount->fakefs, path, &ishstat, &inode))
         return _ENOENT;
-    }
     if (S_ISLNK(ishstat.mode)) {
         ssize_t err = realfs.readlink(mount, path, buf, bufsize);
         if (err == _EINVAL)
             err = file_readlink(mount, path, buf, bufsize);
-        db_commit(fs);
         return err;
     }
-    db_commit(fs);
     memset(stat, 0, sizeof(*stat));
     stat->inode = inode;
     stat->mode = ishstat.mode;

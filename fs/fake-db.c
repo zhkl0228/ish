@@ -1,6 +1,7 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <stdarg.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -190,6 +191,127 @@ bool path_read_stat(struct fakefs_db *fs, const char *path, struct ish_stat *sta
     db_reset(fs, fs->stmt.path_read_stat);
     return exists;
 }
+// ---- the cache of path_read_stat()
+//
+// Each guest file operation took transactions of its own, a read one for
+// each lookup of a path (a stat, each directory of a walk): every one a lock
+// and an unlock of the database file and of a -shm slot (fcntl), BEGIN and
+// COMMIT, for one query. What a lookup found is kept, with the version of the
+// database it was read in: the WAL index header's checksum (the -shm file's
+// first 48 bytes, mapped: sqlite's format, deps/sqlite's, which covers its
+// count of committed transactions, its frame count and salts). Any commit,
+// of any connection, this process's or the file provider's, changes it, and
+// takes every entry out with it; a lookup of the version an entry was read
+// in finds it with no transaction. The version is read before the lookup
+// that is kept, so one that a commit raced is never found.
+#define CACHE_SLOTS 4096
+#define CACHE_PATH 108
+struct cache_slot {
+    uint64_t version;       // 0: empty
+    inode_t inode;
+    struct ish_stat stat;
+    uint16_t len;
+    bool exists;
+    char path[CACHE_PATH];
+};
+struct fakefs_cache {
+    struct cache_slot slot[CACHE_SLOTS];
+};
+
+// The WAL index header's version: its two copies read as sqlite's readers
+// do (the first, then the second: a writer writes the second first), equal
+// and initialized; 0 if not, or no -shm is mapped
+static uint64_t wal_version(struct fakefs_db *fs) {
+    const volatile uint32_t *h = fs->wal_index;
+    if (h == NULL)
+        return 0;
+    uint32_t a[12], b[12];
+    for (int i = 0; i < 12; i++)
+        a[i] = h[i];
+    __atomic_thread_fence(__ATOMIC_ACQUIRE);
+    for (int i = 0; i < 12; i++)
+        b[i] = h[12 + i];
+    // iVersion 3007000, isInit (byte 12)
+    if (memcmp(a, b, sizeof(a)) != 0 || a[0] != 3007000 || (a[3] & 0xff) == 0)
+        return 0;
+    uint64_t v = (uint64_t) a[10] << 32 | a[11];   // aCksum: of bytes 0..39
+    return v != 0 ? v : 1;
+}
+
+static struct cache_slot *cache_slot(struct fakefs_db *fs, const char *path, size_t len) {
+    uint32_t hash = 2166136261u;
+    for (size_t i = 0; i < len; i++)
+        hash = (hash ^ (uint8_t) path[i]) * 16777619u;
+    return &fs->cache->slot[hash % CACHE_SLOTS];
+}
+
+bool path_read_stat_cached(struct fakefs_db *fs, const char *path, struct ish_stat *stat, inode_t *inode) {
+    size_t len = strlen(path);
+    uint64_t version = len <= CACHE_PATH ? wal_version(fs) : 0;
+    if (version != 0) {
+        sqlite3_mutex_enter(fs->lock);
+        // made as it is first used: the file provider's connection has none
+        if (fs->cache == NULL)
+            fs->cache = calloc(1, sizeof(struct fakefs_cache));
+        struct cache_slot *slot = fs->cache != NULL ? cache_slot(fs, path, len) : NULL;
+        if (slot == NULL)
+            version = 0;
+        else if (slot->version == version && slot->len == len && memcmp(slot->path, path, len) == 0) {
+            bool exists = slot->exists;
+            if (stat)
+                *stat = slot->stat;
+            if (inode)
+                *inode = slot->inode;
+            sqlite3_mutex_leave(fs->lock);
+            return exists;
+        }
+        sqlite3_mutex_leave(fs->lock);
+    }
+    struct ish_stat s = {0};
+    inode_t i = 0;
+    db_begin_read(fs);
+    bool exists = path_read_stat(fs, path, &s, &i);
+    if (version != 0 && fs->cache != NULL) {
+        struct cache_slot *slot = cache_slot(fs, path, len);
+        slot->version = version;
+        slot->len = (uint16_t) len;
+        memcpy(slot->path, path, len);
+        slot->exists = exists;
+        slot->stat = s;
+        slot->inode = i;
+    }
+    db_commit(fs);
+    if (exists && stat)
+        *stat = s;
+    if (exists && inode)
+        *inode = i;
+    return exists;
+}
+
+// The -shm file's header for path_read_stat_cached(): sqlite's own mapping
+// of it, the region the connection has (xShmMap, not extending it), mapped
+// till the connection closes; none if the database is not in WAL mode or
+// anything fails. Not a mapping of our own: opening the -shm and closing the
+// descriptor would drop this process's every fcntl lock on it (POSIX), the
+// dead-man switch's share among them, and another process's connection would
+// then take the -shm for its own and truncate it under this one (SIGBUS).
+static void cache_init(struct fakefs_db *fs) {
+    sqlite3_file *file = NULL;
+    if (sqlite3_file_control(fs->db, "main", SQLITE_FCNTL_FILE_POINTER, &file) != SQLITE_OK || file == NULL ||
+        file->pMethods == NULL || file->pMethods->iVersion < 2 || file->pMethods->xShmMap == NULL)
+        return;
+    void volatile *region = NULL;
+    if (file->pMethods->xShmMap(file, 0, 32768, 0, &region) != SQLITE_OK || region == NULL)
+        return;
+    fs->wal_index = (const volatile uint32_t *) region;
+}
+
+static void cache_deinit(struct fakefs_db *fs) {
+    fs->wal_index = NULL;   // sqlite's, unmapped as it closes
+    free(fs->cache);
+    fs->cache = NULL;
+}
+
 inode_t path_create(struct fakefs_db *fs, const char *path, struct ish_stat *stat) {
     // insert into stats (stat) values (?)
     sqlite3_bind_blob(fs->stmt.path_create_stat, 1, stat, sizeof(*stat), SQLITE_TRANSIENT);
@@ -324,6 +446,8 @@ static void barrier_syncs(void) {
 #endif
 
 int fake_db_init(struct fakefs_db *fs, const char *db_path, int root_fd) {
+    fs->wal_index = NULL;
+    fs->cache = NULL;
 #if defined(__APPLE__) && defined(F_BARRIERFSYNC)
     static pthread_once_t barrier_once = PTHREAD_ONCE_INIT;
     pthread_once(&barrier_once, barrier_syncs);
@@ -452,6 +576,8 @@ int fake_db_init(struct fakefs_db *fs, const char *db_path, int root_fd) {
     PREPARE_OR_FAIL(orphan_note, "insert or ignore into orphans (inode) values (?)");
     PREPARE_OR_FAIL(orphan_clear, "delete from orphans where inode = ?");
 #undef PREPARE_OR_FAIL
+    // the statements above have read the database: its -shm is mapped
+    cache_init(fs);
     return 0;
 
 init_fail:
@@ -467,6 +593,7 @@ init_fail:
 }
 
 int fake_db_deinit(struct fakefs_db *fs) {
+    cache_deinit(fs);
     if (fs->db) {
         sqlite3_finalize(fs->stmt.begin_deferred);
         sqlite3_finalize(fs->stmt.begin_immediate);

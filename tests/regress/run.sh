@@ -1155,6 +1155,26 @@ EOF
     fi
     rm -rf "$walkdir"
     echo
+    section "fakefs's lookup cache: another process's chmod seen (two ish on one fakefs root)"
+    shareddir=$(mktemp -d "$(cd "$(dirname "$ROOTFS")" && pwd)/regress-fakefs_shared.XXXXXX")
+    if fakefs_init "$shareddir" tests/regress/regress_fakefs_shared.c; then
+        timeout 60 "$ISH" -f "$shareddir/fs" /init watch > "$shareddir/watch.out" 2>&1 &
+        watcher=$!
+        for _ in $(seq 100); do
+            [ -e "$shareddir/fs/data/tmp/shared/ready" ] && break
+            sleep 0.1
+        done
+        timeout 60 "$ISH" -f "$shareddir/fs" /init change 2>&1
+        wait "$watcher"
+        out=$(cat "$shareddir/watch.out")
+        echo "$out"
+        echo "$out" | grep -Eq '^[0-9]+ passed, 0 failed$' || status=1
+    else
+        echo "failed to set up regress_fakefs_shared (needs $FAKEFSIFY and python3)" >&2
+        status=1
+    fi
+    rm -rf "$shareddir"
+    echo
     section "tcdrain, tcsendbreak, tcflow on a pseudo-terminal (ENOTTY) (fakefs root)"
     # a pseudo-terminal needs /dev/ptmx
     ttyflowdir=$(mktemp -d "$(cd "$(dirname "$ROOTFS")" && pwd)/regress-tty_flow.XXXXXX")
