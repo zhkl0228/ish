@@ -4,7 +4,7 @@
 //
 //  The Live Activity extension: the tabs' Claude Code on the Dynamic Island
 //  and the Lock Screen (AgentActivityAttributes.swift). At work, sparkles and
-//  the time it has worked; stopped, a green check.
+//  the time it has worked; stopped, a green check and the time it worked.
 //
 
 import ActivityKit
@@ -39,6 +39,22 @@ struct StateIcon: View {
     }
 }
 
+// The time it has worked, running; once it stopped, the time it worked, as
+// it was then (2026-11-28: on a foldable's upright island the check alone
+// left the trailing half empty)
+struct WorkedTime: View {
+    let state: AgentActivityAttributes.ContentState
+
+    var body: some View {
+        if let stopped = state.stopped {
+            Text(timerInterval: state.since...stopped, pauseTime: stopped, countsDown: false)
+                .foregroundStyle(.secondary)
+        } else {
+            Text(state.since, style: .timer)
+        }
+    }
+}
+
 struct AgentLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: AgentActivityAttributes.self) { context in
@@ -49,13 +65,11 @@ struct AgentLiveActivity: Widget {
                     Text(context.state.status).font(.subheadline).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 8)
-                if context.state.working {
-                    Text(context.state.since, style: .timer)
-                        .font(.headline)
-                        .monospacedDigit()
-                        .multilineTextAlignment(.trailing)
-                        .frame(width: 72, alignment: .trailing)
-                }
+                WorkedTime(state: context.state)
+                    .font(.headline)
+                    .monospacedDigit()
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 72, alignment: .trailing)
             }
             .padding(16)
         } dynamicIsland: { context in
@@ -64,12 +78,10 @@ struct AgentLiveActivity: Widget {
                     StateIcon(state: context.state).font(.title2)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    if context.state.working {
-                        Text(context.state.since, style: .timer)
-                            .monospacedDigit()
-                            .multilineTextAlignment(.trailing)
-                            .frame(width: 64, alignment: .trailing)
-                    }
+                    WorkedTime(state: context.state)
+                        .monospacedDigit()
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 64, alignment: .trailing)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(alignment: .leading, spacing: 2) {
@@ -81,12 +93,16 @@ struct AgentLiveActivity: Widget {
             } compactLeading: {
                 StateIcon(state: context.state)
             } compactTrailing: {
-                if context.state.working {
-                    Text(context.state.since, style: .timer)
-                        .monospacedDigit()
-                        .multilineTextAlignment(.trailing)
-                        .frame(width: 44, alignment: .trailing)
-                }
+                // At most as wide as the region, which on a foldable's
+                // island, upright at the screen's side, is narrower than the
+                // 44 points it was given: 2026-11-27, folded, "0:5" and the
+                // rest cut off. Small, to fit there.
+                WorkedTime(state: context.state)
+                    .font(.caption.monospacedDigit())
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 44)
             } minimal: {
                 StateIcon(state: context.state)
             }

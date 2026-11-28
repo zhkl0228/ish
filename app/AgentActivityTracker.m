@@ -5,7 +5,8 @@
 //  The Live Activity (Dynamic Island, Lock Screen) of the tabs' Claude Code:
 //  started as one starts working, with the app in front, as ActivityKit
 //  requires; told which works, since when, and how many; once none works,
-//  told of the one that stopped last, which shows while the app is away; and
+//  told of the one that stopped last and how long it worked, which shows
+//  while the app is away; and
 //  ended once none works and the app is in front, where the tabs show it.
 //
 
@@ -15,30 +16,41 @@
 #import "iSH-Swift.h"
 
 // The sessions whose agent works, since when it does; and those whose agent
-// stopped unseen (agentStoppedUnseen), when it did
+// stopped unseen (agentStoppedUnseen), from when it worked till it stopped
 static NSMutableDictionary<NSUUID *, NSDate *> *workingSince;
-static NSMutableDictionary<NSUUID *, NSDate *> *stoppedAt;
+static NSMutableDictionary<NSUUID *, NSDateInterval *> *stoppedWork;
 
 static void Publish(void) {
     BOOL inFront = UIApplication.sharedApplication.applicationState == UIApplicationStateActive;
-    if (workingSince.count == 0 && (stoppedAt.count == 0 || inFront)) {
+    if (workingSince.count == 0 && (stoppedWork.count == 0 || inFront)) {
         [AgentActivity end];
         return;
     }
     // The one told of: the one that began working last, else the one that
     // stopped last
-    NSDictionary<NSUUID *, NSDate *> *times = workingSince.count > 0 ? workingSince : stoppedAt;
-    NSUUID *latest = [times keysSortedByValueUsingSelector:@selector(compare:)].lastObject;
+    NSUUID *latest;
+    NSDate *since;
+    NSDate *stopped;
+    if (workingSince.count > 0) {
+        latest = [workingSince keysSortedByValueUsingSelector:@selector(compare:)].lastObject;
+        since = workingSince[latest];
+    } else {
+        latest = [stoppedWork keysSortedByValueUsingComparator:^NSComparisonResult(NSDateInterval *a, NSDateInterval *b) {
+            return [a.endDate compare:b.endDate];
+        }].lastObject;
+        since = stoppedWork[latest].startDate;
+        stopped = stoppedWork[latest].endDate;
+    }
     TerminalSession *told;
     for (TerminalSession *session in TerminalSessionStore.shared.sessions) {
         if ([session.uuid isEqual:latest])
             told = session;
     }
     [AgentActivity showWithTitle:told.displayTitle
-                         working:workingSince.count > 0
-                           since:times[latest]
+                           since:since
+                         stopped:stopped
                     workingCount:(NSInteger) workingSince.count
-                    stoppedCount:(NSInteger) stoppedAt.count];
+                    stoppedCount:(NSInteger) stoppedWork.count];
 }
 
 static void Changed(TerminalSession *session) {
@@ -47,14 +59,17 @@ static void Changed(TerminalSession *session) {
     if (running && session.agent == TerminalSessionAgentWorking) {
         if (workingSince[uuid] == nil)
             workingSince[uuid] = NSDate.date;
-        [stoppedAt removeObjectForKey:uuid];
+        [stoppedWork removeObjectForKey:uuid];
     } else {
+        // Set as it stops: agentStoppedUnseen is, as the change that it
+        // worked no longer is announced
+        NSDate *began = workingSince[uuid];
         [workingSince removeObjectForKey:uuid];
         if (running && session.agentStoppedUnseen) {
-            if (stoppedAt[uuid] == nil)
-                stoppedAt[uuid] = NSDate.date;
+            if (stoppedWork[uuid] == nil)
+                stoppedWork[uuid] = [[NSDateInterval alloc] initWithStartDate:began endDate:NSDate.date];
         } else {
-            [stoppedAt removeObjectForKey:uuid];
+            [stoppedWork removeObjectForKey:uuid];
         }
     }
     Publish();
@@ -62,7 +77,7 @@ static void Changed(TerminalSession *session) {
 
 void AgentActivityTrackerStart(void) {
     workingSince = [NSMutableDictionary new];
-    stoppedAt = [NSMutableDictionary new];
+    stoppedWork = [NSMutableDictionary new];
     // One of a run before this one, its tabs gone
     [AgentActivity endAll];
     NSNotificationCenter *center = NSNotificationCenter.defaultCenter;

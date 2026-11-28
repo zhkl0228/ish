@@ -16,12 +16,16 @@ struct AgentActivityAttributes: ActivityAttributes {
         // The tab told of: the one that began working last, else the one
         // that stopped last
         var title: String
-        // Whether it works (else it stopped, done or asking to be allowed a
-        // tool), and since when
-        var working: Bool
+        // When it began working, and when it stopped (done, or asking to be
+        // allowed a tool), nil while it works
         var since: Date
+        var stopped: Date?
         // How many tabs' agents work, and how many stopped unseen
         var workingCount: Int
         var stoppedCount: Int
+
+        var working: Bool {
+            stopped == nil
+        }
     }
 }

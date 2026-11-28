@@ -18,9 +18,9 @@ import Foundation
     private static var shown: AgentActivityAttributes.ContentState?
 
     // What it shows: the activity told of it, or started if there is none
-    // and the tab told of works
-    @objc public static func show(title: String, working: Bool, since: Date, workingCount: Int, stoppedCount: Int) {
-        let state = AgentActivityAttributes.ContentState(title: title, working: working, since: since,
+    // and the tab told of works (stopped nil)
+    @objc public static func show(title: String, since: Date, stopped: Date?, workingCount: Int, stoppedCount: Int) {
+        let state = AgentActivityAttributes.ContentState(title: title, since: since, stopped: stopped,
                                                          workingCount: workingCount, stoppedCount: stoppedCount)
         if let activity = current {
             if state == shown {
@@ -32,7 +32,7 @@ import Foundation
             }
             return
         }
-        if !working {
+        if !state.working {
             return
         }
         do {
