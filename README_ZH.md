@@ -37,6 +37,8 @@
 > - **智能体集成**：`ISHShellExecutor`（Obj-C shell API）、`DebugServer`（基于 HTTP 的
 >   JSON-RPC）、`Native Offload`（指定程序绕过仿真）、宿主与客体共享文件的绑定挂载
 >
+> **安装：** CI 发布的 ipa 不签名，各个 bundle 要开哪些能力见[签名](README_arm64_zh.md#签名)。
+>
 > **完整文档：** [README_arm64_zh.md](README_arm64_zh.md) · [English](README_arm64.md) ·
 > [性能报告](benchmark/BENCHMARK_PERF.md) · [兼容性报告](benchmark/BENCHMARK_COMPAT.md)
 
@@ -57,7 +59,7 @@ iSH 是一个运行在 iOS 上的 Linux shell。本项目使用了 AArch64（ARM
 请查看 issue 和提交记录以了解本项目当前的状态。
 
 - [App Store 页面](https://apps.apple.com/us/app/ish-shell/id1436902243)
-- [Testflight 测试](https://testflight.apple.com/join/97i7KM8O)
+- [Testflight 测试（ARM64 分支）](https://testflight.apple.com/join/ZtGfhNkH)
 - [Discord 服务器](https://discord.gg/HFAXj44)
 - [维基帮助与教程](https://github.com/ish-app/ish/wiki)
 

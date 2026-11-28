@@ -290,13 +290,52 @@ its ipa (`app/package-ipa.py`), and on an arm64 Linux runner runs `tests/regress
 CLI built as a release with no warning, then the regression tests on an Alpine aarch64
 minirootfs. A push to master publishes the ipa and its dSYMs as a release,
 `ipa-<version>-<build>`, when that version is not published yet (`MARKETING_VERSION` and
-`CURRENT_PROJECT_VERSION` in `app/AppARM64.xcconfig`, which `app/FileProviderARM64.xcconfig`
-must match), or again, replacing it, when a commit of the push has `[ipa]` in its message
-(or the workflow is run by hand with `force`). A set of AOT images CI commits
+`CURRENT_PROJECT_VERSION` in `app/AppARM64.xcconfig`, which each extension's
+`app/*ARM64.xcconfig` must match), or again, replacing it, when a commit of the push has `[ipa]`
+in its message (or the workflow is run by hand with `force`). A set of AOT images CI commits
 (`.github/workflows/aot-images.yml`) raises the build by one, so its app is published as a new
 build. The newest five are kept, and the newest is at
 `releases/latest/download/iSH-ARM64-unsigned.ipa`. It is unsigned: sign it with your own
-developer account to install it.
+developer account to install it ([Signing](#signing)).
+
+### Signing
+
+Sign the ipa with a development profile: the built-in JIT needs `get-task-allow`, which a
+distribution or ad hoc profile does not give. The app and each of its extensions is a bundle of
+its own, with an App ID of its own, and each needs the capabilities below on its App ID. A signing
+tool that registers the App IDs for you has to give each of them these too: one it misses is
+signed without them, and the ipa installs all the same.
+
+| Bundle | Bundle ID | Capabilities |
+|---|---|---|
+| iSH | `app.ish.iSH.arm64` | App Groups, Network Extensions (Packet Tunnel), Increased Memory Limit, Extended Virtual Addressing, Fonts (app usage) |
+| File Provider | `app.ish.iSH.arm64.FileProvider` | App Groups |
+| Loopback tunnel | `app.ish.iSH.arm64.LoopbackTunnel` | Network Extensions (Packet Tunnel) |
+| Share → iSH | `app.ish.iSH.arm64.Share` | App Groups |
+| JIT helper | `app.ish.iSH.arm64.JITHelper` | none |
+| Live Activity | `app.ish.iSH.arm64.LiveActivity` | none |
+
+The app, its File Provider and its Share extension must have **the same** app group (the
+project's is `group.app.ish.iSH.arm64`; a tool that renames the IDs for your team may name it
+otherwise, which is fine as long as the three have the same one): the root filesystem lives in
+the group's container, and the extensions reach it there. The IDs can be other than the
+project's (a team has its own); what matters is the capabilities on them.
+
+What goes without one:
+
+- **App Groups** (the app): the root filesystem lives in the app's own container, which no
+  extension reaches: Files shows no iSH, and sharing to iSH saves nothing.
+- **App Groups** (File Provider): Files shows no iSH.
+- **App Groups** (Share → iSH): sharing to iSH fails, and the share sheet says why.
+- **Network Extensions** (the app or the loopback tunnel): no tunnel, so no built-in JIT. AOT
+  images and Asbestos still run everything.
+- **Increased Memory Limit**: iOS stops the app at a lower limit; Claude Code and Kimi Code take
+  0.8 GB and more each.
+- **Extended Virtual Addressing**: the app's address space is small and soon fragmented; node
+  finds no free 256 MB for its code range.
+- **Fonts (app usage)**: Appearance's font picker lists no font installed by another app.
+
+The Live Activity needs no capability, only to be allowed in iOS's Settings → iSH.
 
 `uname -v` (and `/proc/version`) says which build runs: `#1 SMP iSH 2.1.0 (806) <commit>
 <commit date>` (`iSH cli` in the command line tool, `-dirty` after a commit built with

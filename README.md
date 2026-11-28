@@ -41,6 +41,9 @@
 > `int_arith_2M` **12x faster**, Python `fib(30)` **9.2x faster**, `sum(1M)` **10.2x faster**,
 > shell `seq+awk 100K` **7.2x faster**.
 >
+> **Installing:** the ipa CI publishes is unsigned: what to sign each of its bundles with is
+> under [Signing](README_arm64.md#signing).
+>
 > **Full docs:** [README_arm64.md](README_arm64.md) · [中文版](README_arm64_zh.md) ·
 > [Performance report](benchmark/BENCHMARK_PERF.md) · [Compatibility report](benchmark/BENCHMARK_COMPAT.md)
 >
@@ -77,7 +80,7 @@ For the current status of the project, check the issues tab, and the commit logs
 - [TestFlight beta (ARM64 fork)](https://testflight.apple.com/join/ZtGfhNkH)
 - [Discord server](https://discord.gg/HFAXj44)
 - [Wiki with help and tutorials](https://github.com/ish-app/ish/wiki)
-- [README中文](https://github.com/ish-app/ish/blob/master/README_ZH.md) (如若未能保持最新，请提交PR以更新)
+- [README中文](README_ZH.md)
 
 # Hacking
 

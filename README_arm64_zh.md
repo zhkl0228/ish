@@ -270,11 +270,46 @@ CI（`.github/workflows/ci.yml`）在 macOS 上 archive 给手机用的 App（�
 （`app/package-ipa.py`），在 arm64 Linux runner 上运行 `tests/regress/ci.sh`：以 release 编译
 CLI（不许有警告），再在 Alpine aarch64 minirootfs 上跑回归测试。推送 master 时，如果当前版本
 （`app/AppARM64.xcconfig` 的 `MARKETING_VERSION`、`CURRENT_PROJECT_VERSION`，
-`app/FileProviderARM64.xcconfig` 要与之一致）还没发布过，就把 ipa 和 dSYM 发布成 Release
+各扩展的 `app/*ARM64.xcconfig` 要与之一致）还没发布过，就把 ipa 和 dSYM 发布成 Release
 `ipa-<版本>-<build>`；这次推送里有提交信息带 `[ipa]`（或手动运行 workflow 并勾选 `force`）时，
 用当前代码重新发布这个版本。CI 提交一组新的 AOT 镜像（`.github/workflows/aot-images.yml`）
 时把 build 加 1，链接这组镜像的 App 就作为新 build 发布。只保留最新 5 个，最新的固定在
-`releases/latest/download/iSH-ARM64-unsigned.ipa`。ipa 不签名，用自己的开发者账号签名后安装。
+`releases/latest/download/iSH-ARM64-unsigned.ipa`。ipa 不签名，用自己的开发者账号签名后安装
+（见[签名](#签名)）。
+
+### 签名
+
+用开发描述文件签名：内置 JIT 需要 `get-task-allow`，发布或 Ad Hoc 描述文件没有它。App 和每个
+扩展都是单独的 bundle，有各自的 App ID，每个 App ID 都要开下表里的能力。用签名工具自动注册
+App ID 时，也要让它给每个 App ID 都开上；漏掉的那个会在没有这些权限的情况下签名，ipa 照样能装上。
+
+| Bundle | Bundle ID | 能力（Capabilities） |
+|---|---|---|
+| iSH | `app.ish.iSH.arm64` | App Groups、Network Extensions（Packet Tunnel）、Increased Memory Limit、Extended Virtual Addressing、Fonts（app usage） |
+| 文件提供者 | `app.ish.iSH.arm64.FileProvider` | App Groups |
+| 回环隧道 | `app.ish.iSH.arm64.LoopbackTunnel` | Network Extensions（Packet Tunnel） |
+| 分享到 iSH | `app.ish.iSH.arm64.Share` | App Groups |
+| JIT 助手 | `app.ish.iSH.arm64.JITHelper` | 无 |
+| 实时活动 | `app.ish.iSH.arm64.LiveActivity` | 无 |
+
+App、文件提供者和分享扩展必须在**同一个** App Group 里（本项目用的是 `group.app.ish.iSH.arm64`；
+签名工具按你的团队改名时可能叫别的，只要三者相同就行）：根文件系统放在这个组的容器里，扩展要从
+那里访问它。App ID 也可以和本项目的不同（每个团队有自己的），要紧的是上面开的能力。
+
+缺了会怎样：
+
+- **App Groups**（App）：根文件系统放在 App 自己的容器里，扩展都访问不到：「文件」App 里没有
+  iSH，分享到 iSH 也存不进去。
+- **App Groups**（文件提供者）：「文件」App 里没有 iSH。
+- **App Groups**（分享到 iSH）：分享失败，分享面板上会说明原因。
+- **Network Extensions**（App 或回环隧道）：没有隧道，内置 JIT 开不了；AOT 镜像和 Asbestos
+  照样能跑所有程序。
+- **Increased Memory Limit**：iOS 更早结束 App；Claude Code、Kimi Code 每个都要占 0.8 GB 以上。
+- **Extended Virtual Addressing**：App 的地址空间小，很快就碎了；node 找不到 256 MB 的连续空间放
+  代码区。
+- **Fonts（app usage）**：外观设置的字体选择器里没有其他 App 安装的字体。
+
+实时活动不需要能力，只要在 iOS 的「设置」→ iSH 里允许。
 
 `uname -v`（以及 `/proc/version`）说明运行的是哪个构建：`#1 SMP iSH 2.1.0 (806) <commit>
 <commit 日期>`（命令行工具里是 `iSH cli`；构建时工作区有改动则 commit 后带 `-dirty`）；
