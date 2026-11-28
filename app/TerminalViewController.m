@@ -2433,7 +2433,10 @@ static NSString *ShellQuoted(NSString *string) {
                 BOOL columnTop = CGRectGetMaxX(frame) > columnLeft && CGRectGetMinY(frame) < size.height / 2;
                 if (columnTop)
                     top = MAX(top, CGRectGetMaxY(frame));
-                [by addObject:[NSString stringWithFormat:@"occlusion %@ %@, its margins %@%@%@", region.identifier,
+                // Not its identifier: that says only where it is in memory, a
+                // new one each time asked, which made each second's check of
+                // the layout a new one to log (2026-11-28, 851)
+                [by addObject:[NSString stringWithFormat:@"occlusion %@, its margins %@%@%@",
                                NSStringFromCGRect(frame), NSStringFromUIEdgeInsets(region.margins),
                                region.active ? @"" : @" (inactive)", columnTop ? @"" : @" (not at the column's top)"]];
             }
