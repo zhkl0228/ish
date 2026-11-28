@@ -182,10 +182,10 @@ extern NSNotificationName const ClipboardPauseDidChangeNotification;
 // Apps on: for the clipboard being opened, where iOS asking is for something
 // asked for.
 - (void)readPasteboard;
-// What the paste key pasted (iOS's paste button over it, which iOS hands the
-// clipboard to without asking): another app's copy goes into the history as
-// that app's, with Collect from Other Apps on, unless it is already there
-// (iSH's own copy, or one read or pasted before).
+// What the paste key pasted (TerminalViewController's pasteKey:, the
+// clipboard's text): another app's copy goes into the history as that app's,
+// with Collect from Other Apps on, unless it is already there (iSH's own copy,
+// or one read or pasted before).
 - (void)notePastedItemProviders:(NSArray<NSItemProvider *> *)providers;
 
 #pragma mark Using items

@@ -14,22 +14,6 @@ extern UIAccessibilityTraits UIAccessibilityTraitToggle;
     UIColor *_textColor;
 }
 
-// A control laid over the key (the paste key's iOS paste button:
-// TerminalViewController's updatePasteControl) has the touches while it is
-// enabled; disabled, the key has them, for its own action. A disabled control
-// is still hit, and took the tap doing nothing (2026-11-28: the paste key,
-// text copied from a terminal, did nothing at a tap, and its action, which
-// says the button's state in the kernel log, had not run).
-- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
-    UIView *hit = [super hitTest:point withEvent:event];
-    // the control or a view of its own in it
-    for (UIView *view = hit; view != nil && view != self; view = view.superview) {
-        if ([view isKindOfClass:UIControl.class] && !((UIControl *) view).enabled)
-            return self;
-    }
-    return hit;
-}
-
 // A key of the storyboard's, or one made in code (the symbol key)
 - (void)awakeFromNib {
     [super awakeFromNib];
