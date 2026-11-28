@@ -39,6 +39,16 @@ enum OverrideAppearance {
 // still scrolls, a long press still selects). Set with marginView.
 @property (copy, nullable) void (^marginTapped)(void);
 
+// A tap brings the keyboard up in the input only, not on what was written
+// above it (2026-11-28: asked for; a tap on Claude Code's conversation, or on
+// a shell's output, brought it up): the cursor's logical line, the one above
+// it (Claude Code's box's top edge) and those under it. So on the normal
+// screen, whatever runs (a shell, a REPL), and on the alternate screen where
+// an AI agent owns the terminal (agentInput: Claude Code draws its input
+// there, and puts the cursor in it); a full-screen program's taps (vi, less)
+// are its input anywhere.
+@property BOOL agentInput;
+
 @property (weak) IBOutlet UIInputView *inputAccessoryView;
 @property (weak) IBOutlet UIButton *controlKey;
 

@@ -473,6 +473,12 @@ static const int kMaxFontSize = 72;
     if ([message.name isEqualToString:@"syncFocus"]) {
         self.terminalFocused = self.terminalFocused;
     } else if ([message.name isEqualToString:@"focus"]) {
+        // {line, input, alternate} (term.js): the line tapped, the input's
+        // first, in the buffer's lines
+        NSDictionary *tap = message.body;
+        BOOL inputOnly = self.agentInput || ![tap[@"alternate"] boolValue];
+        if (inputOnly && [tap[@"line"] integerValue] < [tap[@"input"] integerValue] - 1)
+            return;
         if (!self.isFirstResponder) {
             [self becomeFirstResponder];
         }

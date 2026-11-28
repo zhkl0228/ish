@@ -1823,7 +1823,14 @@ static NSString *ArrowGlyph(char direction) {
 // by their names as they run: claude's own, and kimi's process title (node,
 // then MainThread as it starts, then kimi-code).
 - (ColumnKeyProfile)columnProfileForSession:(TerminalSession *)session {
-    if (session == nil || !UserPreferences.shared.columnKeysFollowProgram)
+    if (!UserPreferences.shared.columnKeysFollowProgram)
+        return ColumnKeyProfileDefault;
+    return [self programProfileForSession:session];
+}
+
+// The profile of what runs, whether the keys follow it or not
+- (ColumnKeyProfile)programProfileForSession:(TerminalSession *)session {
+    if (session == nil)
         return ColumnKeyProfileDefault;
     static NSSet<NSString *> *pagers, *editors, *agents;
     static dispatch_once_t once;
@@ -1846,6 +1853,11 @@ static NSString *ArrowGlyph(char direction) {
 }
 
 - (void)updateColumnProfile {
+    // A tap on an agent's conversation is not for the keyboard; on its
+    // editor's (its prompt in vi), as on any full-screen program's, it is
+    BOOL agentInput = [self programProfileForSession:self.selectedSession] == ColumnKeyProfileAgent;
+    if (self.termView.agentInput != agentInput)
+        self.termView.agentInput = agentInput;
     if (self.columnKeys.hidden)
         return;
     ColumnKeyProfile profile = [self columnProfileForSession:self.selectedSession];

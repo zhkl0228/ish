@@ -215,17 +215,28 @@ term.parser.registerEscHandler({final: 'c'}, () => {
     return false;
 });
 
-// focus: the app's. A tap on the terminal gives it the keyboard; one while
+// focus: the app's. A tap on the terminal asks it for the keyboard; one while
 // there is a selection is the selection's. Whether there was one is taken as
 // the press goes down (capture), before xterm.js's own mousedown, on this
 // element too and added first, has made the press a new selection: none.
+// The app is told where the tap was, for it to give the keyboard to a tap in
+// the input only where it knows one (TerminalView's inputTapsOnly): the line
+// tapped, the first of the input's (the cursor's logical line, a command that
+// wraps from the lines above it), both in the buffer's lines, and whether the
+// alternate screen shows (a full-screen program's, whose input is anywhere).
 let pressedOnSelection = false;
 term.element.addEventListener('mousedown', () => {
     pressedOnSelection = term.hasSelection();
 }, {capture: true});
-term.element.addEventListener('mousedown', () => {
-    if (!pressedOnSelection)
-        native.focus();
+term.element.addEventListener('mousedown', (e) => {
+    if (pressedOnSelection)
+        return;
+    const buffer = term.buffer.active;
+    const tapped = cellAt(e.clientX, e.clientY);
+    let input = buffer.baseY + buffer.cursorY;
+    while (input > 0 && buffer.getLine(input).isWrapped)
+        input--;
+    native.focus({line: tapped === null ? input : tapped.y, input, alternate: buffer.type === 'alternate'});
 });
 // Focused or not, as xterm.js takes it from its text field's events, which
 // the field itself never has
